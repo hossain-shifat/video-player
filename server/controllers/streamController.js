@@ -1,0 +1,157 @@
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const mime = require("mime-types");
+const { readFolders } = require("./libraryController");
+const { scanFolder } = require("../utils/scanner");
+const { sanitizePath, isSubtitleFile } = require("../utils/fileHelpers");
+
+// Streams a video file by its ID, supporting HTTP range requests (206 Partial Content)
+async function streamVideo(req, res) {
+    try {
+        const { id } = req.params;
+        const folders = await readFolders();
+
+        let targetFile = null;
+        for (const folder of folders) {
+            const files = await scanFolder(folder.path);
+            const found = files.find((f) => f.id === id);
+            if (found) {
+                targetFile = found;
+                break;
+            }
+        }
+
+        if (!targetFile) {
+            return res.status(404).json({ error: "Media not found" });
+        }
+
+        const filePath = targetFile.path;
+        let stat;
+        try {
+            stat = await fs.promises.stat(filePath);
+        } catch {
+            return res.status(404).json({ error: "File not found on disk" });
+        }
+
+        const fileSize = stat.size;
+        const contentType = mime.lookup(filePath) || "video/mp4";
+        const rangeHeader = req.headers["range"];
+
+        // HEAD request — return headers only, no body
+        if (req.method === "HEAD") {
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Accept-Ranges", "bytes");
+            res.setHeader("Content-Length", fileSize);
+            return res.status(200).end();
+        }
+
+        if (rangeHeader) {
+            // Partial content (Range request)
+            const parts = rangeHeader.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+            if (start >= fileSize || end >= fileSize) {
+                res.setHeader("Content-Range", `bytes */${fileSize}`);
+                return res.status(416).json({ error: "Range Not Satisfiable" });
+            }
+
+            const chunkSize = end - start + 1;
+
+            res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+            res.setHeader("Accept-Ranges", "bytes");
+            res.setHeader("Content-Length", chunkSize);
+            res.setHeader("Content-Type", contentType);
+            res.status(206);
+
+            const stream = fs.createReadStream(filePath, { start, end });
+            stream.on("error", (err) => {
+                console.error("[Stream] Stream error:", err);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: "Stream error" });
+                } else {
+                    stream.destroy();
+                }
+            });
+            stream.pipe(res);
+        } else {
+            // Full file response
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Accept-Ranges", "bytes");
+            res.setHeader("Content-Length", fileSize);
+            res.status(200);
+
+            const stream = fs.createReadStream(filePath);
+            stream.on("error", (err) => {
+                console.error("[Stream] Stream error:", err);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: "Stream error" });
+                } else {
+                    stream.destroy();
+                }
+            });
+            stream.pipe(res);
+        }
+    } catch (err) {
+        console.error("[Stream] streamVideo error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to stream video" });
+        }
+    }
+}
+
+// Serves a subtitle file by its base64url-encoded path, converting .srt to WebVTT on the fly
+async function streamSubtitle(req, res) {
+    try {
+        const { encodedPath } = req.params;
+
+        let decodedPath;
+        try {
+            decodedPath = Buffer.from(encodedPath, "base64url").toString();
+        } catch {
+            return res.status(400).json({ error: "Invalid encoded path" });
+        }
+
+        const safePath = sanitizePath(decodedPath);
+
+        if (!isSubtitleFile(safePath)) {
+            return res.status(400).json({ error: "Not a subtitle file" });
+        }
+
+        if (!fs.existsSync(safePath)) {
+            return res.status(404).json({ error: "Subtitle file not found" });
+        }
+
+        const ext = path.extname(safePath).toLowerCase();
+
+        if (ext === ".srt") {
+            // Convert SRT to WebVTT on the fly
+            const content = await fs.promises.readFile(safePath, "utf-8");
+            const vttContent = "WEBVTT\n\n" + content.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+            res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+            return res.send(vttContent);
+        }
+
+        if (ext === ".vtt") {
+            res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+        } else {
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        }
+
+        const stream = fs.createReadStream(safePath);
+        stream.on("error", (err) => {
+            console.error("[Stream] Subtitle stream error:", err);
+            if (!res.headersSent) res.status(500).json({ error: "Subtitle stream error" });
+        });
+        stream.pipe(res);
+    } catch (err) {
+        console.error("[Stream] streamSubtitle error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to serve subtitle" });
+        }
+    }
+}
+
+module.exports = { streamVideo, streamSubtitle };
