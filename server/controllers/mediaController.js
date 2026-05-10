@@ -1,12 +1,12 @@
 "use strict";
 
-const fs = require("fs");
+const fs   = require("fs");
 const path = require("path");
-const { readFolders } = require("./libraryController");
+const { readFolders }   = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
 const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
-const { getMetadata } = require("../utils/metadataStore");
-const { groupMedia } = require("../utils/grouper");
+const { getMetadata }   = require("../utils/metadataStore");
+const { groupMedia }    = require("../utils/grouper");
 
 // Attaches TMDB metadata to a single file object
 async function enrich(file) {
@@ -14,20 +14,83 @@ async function enrich(file) {
     return { ...file, metadata };
 }
 
-// Returns all media with TMDB metadata attached
+/**
+ * GET /api/media
+ * Returns everything in one response, separated by type.
+ *
+ * Query params:
+ *   type=movies|series|anime     — filter to one category only
+ *   q=<string>                   — search by title (applies to movies + series name)
+ *   title=<string>               — exact series/anime title filter (for season query)
+ *   season=<number>              — return only that season's episodes (requires title)
+ */
 async function getAllMedia(req, res) {
     try {
+        const { type, q, title, season } = req.query;
+
         const folders = await readFolders();
         const { allMedia, folderStats } = await getAllCached(folders);
-        const media = await Promise.all(allMedia.map(enrich));
-        return res.json({ total: media.length, media, folders: folderStats });
+        const grouped = await groupMedia(allMedia);
+
+        // ── Search filter ─────────────────────────────────────────────────────
+        if (q) {
+            const term = q.toLowerCase();
+            grouped.movies = grouped.movies.filter(f =>
+                f.name.toLowerCase().includes(term) ||
+                f.metadata?.title?.toLowerCase().includes(term)
+            );
+            grouped.series = grouped.series.filter(s =>
+                s.title.toLowerCase().includes(term)
+            );
+            grouped.anime = grouped.anime.filter(a =>
+                a.title.toLowerCase().includes(term)
+            );
+        }
+
+        // ── Series/anime title + season filter ────────────────────────────────
+        if (title) {
+            const titleLower = title.toLowerCase();
+            const filterByTitle = (arr) =>
+                arr.filter(s => s.title.toLowerCase().includes(titleLower));
+            grouped.series = filterByTitle(grouped.series);
+            grouped.anime  = filterByTitle(grouped.anime);
+
+            // Narrow to one season if requested
+            if (season !== undefined) {
+                const seasonNum = parseInt(season, 10);
+                const narrowSeasons = (arr) => arr.map(s => ({
+                    ...s,
+                    seasons: Object.fromEntries(
+                        Object.entries(s.seasons).filter(([n]) => parseInt(n) === seasonNum)
+                    ),
+                }));
+                grouped.series = narrowSeasons(grouped.series);
+                grouped.anime  = narrowSeasons(grouped.anime);
+            }
+        }
+
+        // ── Build response ────────────────────────────────────────────────────
+        const response = {
+            folders: folderStats,
+            movies:  { total: grouped.movies.length,  items: grouped.movies  },
+            series:  { total: grouped.series.length,  items: grouped.series  },
+            anime:   { total: grouped.anime.length,   items: grouped.anime   },
+            unknown: { total: grouped.unknown.length, items: grouped.unknown },
+        };
+
+        // If type filter specified, return only that section
+        if (type && response[type]) {
+            return res.json(response[type]);
+        }
+
+        return res.json(response);
     } catch (err) {
         console.error("[Media] getAllMedia error:", err);
         return res.status(500).json({ error: "Failed to get media" });
     }
 }
 
-// Finds a single media file by ID with TMDB metadata attached
+// GET /api/media/:id — single file with metadata
 async function getMediaById(req, res) {
     try {
         const folders = await readFolders();
@@ -40,10 +103,10 @@ async function getMediaById(req, res) {
     }
 }
 
-// Searches cached media by name/folder, returns results with TMDB metadata
+// GET /api/media/search?q=&type=
 async function searchMedia(req, res) {
     try {
-        const { q, folder: folderId, sort = "name" } = req.query;
+        const { q, folder: folderId } = req.query;
 
         const folders = await readFolders();
         const { allMedia } = await getAllCached(folders);
@@ -51,15 +114,13 @@ async function searchMedia(req, res) {
 
         if (q) {
             const term = q.toLowerCase();
-            results = results.filter((f) => f.name.toLowerCase().includes(term));
+            results = results.filter(f => f.name.toLowerCase().includes(term));
         }
-
         if (folderId) {
-            results = results.filter((f) => f.folderId === folderId);
+            results = results.filter(f => f.folderId === folderId);
         }
 
         results.sort((a, b) => a.name.localeCompare(b.name));
-
         const enriched = await Promise.all(results.map(enrich));
         return res.json({ total: enriched.length, results: enriched });
     } catch (err) {
@@ -68,12 +129,10 @@ async function searchMedia(req, res) {
     }
 }
 
-// Finds subtitle files for a media item by decoding its ID back to an absolute path
+// GET /api/media/:id/subtitles
 async function getMediaSubtitles(req, res) {
     try {
         const { id } = req.params;
-
-        // The file ID is base64url(absolutePath) — decode directly, no scan needed
         let filePath;
         try {
             filePath = decodeFileId(id);
@@ -85,8 +144,8 @@ async function getMediaSubtitles(req, res) {
             return res.status(404).json({ error: "Media file not found on disk" });
         }
 
-        const dir = path.dirname(filePath);
-        const ext = path.extname(filePath);
+        const dir      = path.dirname(filePath);
+        const ext      = path.extname(filePath);
         const baseName = path.basename(filePath, ext);
         const subtitles = [];
 
@@ -109,22 +168,4 @@ async function getMediaSubtitles(req, res) {
     }
 }
 
-// Returns all media grouped into movies / series / anime with season+episode structure
-async function getGrouped(req, res) {
-    try {
-        const folders = await readFolders();
-        const { allMedia } = await getAllCached(folders);
-        const grouped = await groupMedia(allMedia);
-        return res.json({
-            movies: { total: grouped.movies.length, items: grouped.movies },
-            series: { total: grouped.series.length, items: grouped.series },
-            anime: { total: grouped.anime.length, items: grouped.anime },
-            unknown: { total: grouped.unknown.length, items: grouped.unknown },
-        });
-    } catch (err) {
-        console.error("[Media] getGrouped error:", err);
-        return res.status(500).json({ error: "Failed to group media" });
-    }
-}
-
-module.exports = { getAllMedia, getMediaById, searchMedia, getMediaSubtitles, getGrouped };
+module.exports = { getAllMedia, getMediaById, searchMedia, getMediaSubtitles };
