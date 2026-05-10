@@ -1,7 +1,7 @@
 "use strict";
 
 // Tags that indicate quality/source — strip these from titles
-const NOISE_TAGS = [/\b(4k|2160p|1080p|720p|480p|360p)\b/gi, /\b(imax|hmax|imax\.enhanced)\b/gi, /\b(bluray|blu-ray|bdrip|brrip|dvdrip|dvdscr|hdtv|webrip|web-dl|webdl|hdrip|hdcam|pre-hd|prehd|hdts|hd-ts|camrip|cam)\b/gi, /\b(x264|x265|h264|h265|hevc|avc|xvid|divx)\b/gi, /\b(aac|ac3|dts|mp3|dd5\.?1|truehd|atmos|flac)\b/gi, /\b(10bit|10-bit|hdr|hdr10|dovi|dolby)\b/gi, /\b(extended|theatrical|remastered|unrated|directors\.cut|proper|rerip|readnfo)\b/gi, /\b(hindi|english|tamil|telugu|dubbed|dual\.audio|multi|hin|eng)\b/gi, /\b(yts|yify|rarbg|ettv|eztv|mkvcage|tigole|psarips|tgx|flux)\b/gi, /\[.*?\]/g, /\((?!\d{4}\))\(.*?\)/g];
+const NOISE_TAGS = [/\b(4k|2160p|1080p|720p|480p|360p)\b/gi, /\b(imax|hmax|imax\.enhanced)\b/gi, /\b(bluray|blu-ray|bdrip|brrip|dvdrip|dvdscr|hdtv|webrip|web-dl|webdl|hdrip|hdcam|pre-hd|prehd|hdts|hd-ts|camrip|cam)\b/gi, /\b(x264|x265|h264|h265|hevc|avc|xvid|divx)\b/gi, /\b(aac|ac3|dts|mp3|dd5\.?1|truehd|atmos|flac)\b/gi, /\b(10bit|10-bit|hdr|hdr10|dovi|dolby)\b/gi, /\b(extended|theatrical|remastered|unrated|directors\.cut|proper|rerip|readnfo)\b/gi, /\b(hindi|english|tamil|telugu|dubbed|dual\.audio|multi|hin|eng)\b/gi, /\b(yts|yify|rarbg|ettv|eztv|mkvcage|tigole|psarips|tgx|flux)\b/gi, /\[.*?\]/g, /\((?!\d{4}\))[^)]*\)/g];
 
 // Detects S01E01 or S01 patterns
 const SEASON_EPISODE_RE = /[Ss](\d{1,2})[Ee](\d{1,3})/;

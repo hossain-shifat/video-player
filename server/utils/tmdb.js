@@ -12,19 +12,28 @@ const RATE_WINDOW = 10_000; // ms
 let requestsInWindow = 0;
 let windowStart = Date.now();
 
-async function rateLimit() {
-    const now = Date.now();
-    if (now - windowStart > RATE_WINDOW) {
-        requestsInWindow = 0;
-        windowStart = now;
-    }
-    if (requestsInWindow >= RATE_LIMIT) {
-        const wait = RATE_WINDOW - (now - windowStart) + 50;
-        await new Promise((r) => setTimeout(r, wait));
-        requestsInWindow = 0;
-        windowStart = Date.now();
-    }
-    requestsInWindow++;
+// Mutex: a promise chain that serializes all callers so the check/sleep/increment
+// is atomic — no two concurrent awaiters can both pass the quota check.
+let _rateMutex = Promise.resolve();
+
+function rateLimit() {
+    // Each caller appends to the chain; the previous work completes before
+    // the next one enters, making check+sleep+increment non-concurrent.
+    _rateMutex = _rateMutex.then(async () => {
+        const now = Date.now();
+        if (now - windowStart > RATE_WINDOW) {
+            requestsInWindow = 0;
+            windowStart = now;
+        }
+        if (requestsInWindow >= RATE_LIMIT) {
+            const wait = RATE_WINDOW - (Date.now() - windowStart) + 50;
+            await new Promise((r) => setTimeout(r, wait));
+            requestsInWindow = 0;
+            windowStart = Date.now();
+        }
+        requestsInWindow++;
+    });
+    return _rateMutex;
 }
 
 // Core fetch wrapper — uses TMDB_API_KEY from env
@@ -41,7 +50,17 @@ async function tmdbFetch(endpoint, params = {}) {
         if (v !== undefined && v !== null) url.searchParams.set(k, v);
     }
 
-    const res = await fetch(url.toString());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    let res;
+    try {
+        res = await fetch(url.toString(), { signal: controller.signal });
+    } catch (err) {
+        if (err.name === "AbortError") throw new Error("TMDB request timed out");
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
     if (!res.ok) {
         const body = await res.text().catch(() => "");
         throw new Error(`TMDB ${res.status}: ${body.slice(0, 120)}`);
@@ -202,7 +221,7 @@ async function lookupMetadata(parsed) {
             }
             const details = await getTVDetails(hit.id);
             const result = { ...details, type: "anime" };
-            if (season !== null) result.seasonDetails = await getSeasonDetails(hit.id, season);
+            if (Number.isInteger(season) && season > 0) result.seasonDetails = await getSeasonDetails(hit.id, season);
             return result;
         }
 
@@ -210,7 +229,7 @@ async function lookupMetadata(parsed) {
             const hit = (await searchTV(title, year)) || (year ? await searchTV(title) : null);
             if (!hit) return null;
             const details = await getTVDetails(hit.id);
-            if (season !== null) details.seasonDetails = await getSeasonDetails(hit.id, season);
+            if (Number.isInteger(season) && season > 0) details.seasonDetails = await getSeasonDetails(hit.id, season);
             return details;
         }
 
