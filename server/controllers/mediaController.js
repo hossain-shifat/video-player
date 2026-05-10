@@ -26,7 +26,13 @@ async function enrich(file) {
  */
 async function getAllMedia(req, res) {
     try {
-        const { type, q, title, season } = req.query;
+        // Normalize query params — coerce arrays to single string, guard toLowerCase
+        const q      = String(Array.isArray(req.query.q)      ? req.query.q[0]      : req.query.q      ?? "").trim().toLowerCase();
+        const title  = String(Array.isArray(req.query.title)  ? req.query.title[0]  : req.query.title  ?? "").trim().toLowerCase();
+        const type   = String(Array.isArray(req.query.type)   ? req.query.type[0]   : req.query.type   ?? "").trim().toLowerCase();
+        const rawSeason = Array.isArray(req.query.season) ? req.query.season[0] : req.query.season;
+        const season = rawSeason !== undefined ? parseInt(rawSeason, 10) : NaN;
+        const hasSeason = !Number.isNaN(season);
 
         const folders = await readFolders();
         const { allMedia, folderStats } = await getAllCached(folders);
@@ -34,34 +40,31 @@ async function getAllMedia(req, res) {
 
         // ── Search filter ─────────────────────────────────────────────────────
         if (q) {
-            const term = q.toLowerCase();
             grouped.movies = grouped.movies.filter(f =>
-                f.name.toLowerCase().includes(term) ||
-                f.metadata?.title?.toLowerCase().includes(term)
+                f.name.toLowerCase().includes(q) ||
+                f.metadata?.title?.toLowerCase().includes(q)
             );
             grouped.series = grouped.series.filter(s =>
-                s.title.toLowerCase().includes(term)
+                s.title.toLowerCase().includes(q)
             );
             grouped.anime = grouped.anime.filter(a =>
-                a.title.toLowerCase().includes(term)
+                a.title.toLowerCase().includes(q)
             );
         }
 
         // ── Series/anime title + season filter ────────────────────────────────
         if (title) {
-            const titleLower = title.toLowerCase();
             const filterByTitle = (arr) =>
-                arr.filter(s => s.title.toLowerCase().includes(titleLower));
+                arr.filter(s => s.title.toLowerCase().includes(title));
             grouped.series = filterByTitle(grouped.series);
             grouped.anime  = filterByTitle(grouped.anime);
 
             // Narrow to one season if requested
-            if (season !== undefined) {
-                const seasonNum = parseInt(season, 10);
+            if (hasSeason) {
                 const narrowSeasons = (arr) => arr.map(s => ({
                     ...s,
                     seasons: Object.fromEntries(
-                        Object.entries(s.seasons).filter(([n]) => parseInt(n) === seasonNum)
+                        Object.entries(s.seasons).filter(([n]) => parseInt(n) === season)
                     ),
                 }));
                 grouped.series = narrowSeasons(grouped.series);
@@ -106,15 +109,15 @@ async function getMediaById(req, res) {
 // GET /api/media/search?q=&type=
 async function searchMedia(req, res) {
     try {
-        const { q, folder: folderId } = req.query;
+        const q        = String(Array.isArray(req.query.q)      ? req.query.q[0]      : req.query.q      ?? "").trim().toLowerCase();
+        const folderId = String(Array.isArray(req.query.folder) ? req.query.folder[0] : req.query.folder ?? "").trim();
 
         const folders = await readFolders();
         const { allMedia } = await getAllCached(folders);
         let results = allMedia;
 
         if (q) {
-            const term = q.toLowerCase();
-            results = results.filter(f => f.name.toLowerCase().includes(term));
+            results = results.filter(f => f.name.toLowerCase().includes(q));
         }
         if (folderId) {
             results = results.filter(f => f.folderId === folderId);

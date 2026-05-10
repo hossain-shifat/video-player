@@ -18,6 +18,9 @@ const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/fileHelpers")
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Load package.json once at startup — avoids blocking readFileSync on request paths
+const { version: APP_VERSION } = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
+
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173").split(",").map((o) => o.trim());
 
@@ -28,7 +31,8 @@ app.use(
             if (!origin || allowedOrigins.includes(origin)) {
                 callback(null, true);
             } else {
-                callback(new Error(`CORS: origin ${origin} not allowed`));
+                // Deny without throwing — throwing causes a 500; null,false gives a proper CORS denial
+                callback(null, false);
             }
         },
         methods: ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"],
@@ -61,19 +65,18 @@ app.use("/stream", streamRouter);
 
 // ─── HEALTH ENDPOINT ──────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
-    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
     res.json({
         status: "ok",
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: packageJson.version || "1.0.0",
+        version: APP_VERSION || "1.0.0",
     });
 });
 
 // ─── INFO ENDPOINT ────────────────────────────────────────────────────────────
 app.get("/api/info", async (req, res) => {
     try {
-        const foldersRaw = fs.readFileSync(path.join(__dirname, "data", "folders.json"), "utf-8");
+        const foldersRaw = await fs.promises.readFile(path.join(__dirname, "data", "folders.json"), "utf-8");
         const folders = JSON.parse(foldersRaw);
         res.json({
             videoExtensions: VIDEO_EXTENSIONS,
