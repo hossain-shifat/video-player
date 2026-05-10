@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
+const { invalidateFolder, invalidateAll } = require("../utils/mediaCache");
 
 // Returns true only if resolvedPath exists and is a directory; false on any stat error
 function isDirectory(resolvedPath) {
@@ -20,8 +21,10 @@ async function readFolders() {
     try {
         const raw = await fs.promises.readFile(FOLDERS_FILE, "utf-8");
         return JSON.parse(raw);
-    } catch {
-        return [];
+    } catch (err) {
+        if (err && err.code === "ENOENT") return [];
+        console.error("[Library] readFolders error:", err);
+        throw err;
     }
 }
 
@@ -30,7 +33,7 @@ let writeQueue = Promise.resolve();
 
 // Writes the given array to folders.json atomically (temp file → fsync → rename)
 function writeFolders(folders) {
-    writeQueue = writeQueue.then(() => _atomicWrite(folders));
+    writeQueue = writeQueue.catch(() => {}).then(() => _atomicWrite(folders));
     return writeQueue;
 }
 
@@ -88,6 +91,7 @@ async function addFolder(req, res) {
 
         folders.push(newFolder);
         await writeFolders(folders);
+        invalidateFolder(newFolder.id);
 
         return res.status(201).json({ folder: newFolder });
     } catch (err) {
@@ -109,6 +113,7 @@ async function removeFolder(req, res) {
 
         folders.splice(index, 1);
         await writeFolders(folders);
+        invalidateFolder(id);
 
         return res.json({ message: "Folder removed", id });
     } catch (err) {
@@ -147,6 +152,7 @@ async function updateFolder(req, res) {
         }
 
         await writeFolders(folders);
+        invalidateFolder(id);
 
         return res.json({ folder });
     } catch (err) {

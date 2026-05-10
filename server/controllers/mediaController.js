@@ -5,33 +5,42 @@ const path = require("path");
 const { readFolders } = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
 const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
+const { getMetadata } = require("../utils/metadataStore");
+const { groupMedia } = require("../utils/grouper");
 
-// Returns all media from the cache, rescanning stale/missing folders automatically
+// Attaches TMDB metadata to a single file object
+async function enrich(file) {
+    const metadata = await getMetadata(file);
+    return { ...file, metadata };
+}
+
+// Returns all media with TMDB metadata attached
 async function getAllMedia(req, res) {
     try {
         const folders = await readFolders();
         const { allMedia, folderStats } = await getAllCached(folders);
-        return res.json({ total: allMedia.length, media: allMedia, folders: folderStats });
+        const media = await Promise.all(allMedia.map(enrich));
+        return res.json({ total: media.length, media, folders: folderStats });
     } catch (err) {
         console.error("[Media] getAllMedia error:", err);
         return res.status(500).json({ error: "Failed to get media" });
     }
 }
 
-// Finds a single media file by ID using the cache
+// Finds a single media file by ID with TMDB metadata attached
 async function getMediaById(req, res) {
     try {
         const folders = await readFolders();
         const file = await findById(folders, req.params.id);
         if (!file) return res.status(404).json({ error: "Media not found" });
-        return res.json({ file });
+        return res.json({ file: await enrich(file) });
     } catch (err) {
         console.error("[Media] getMediaById error:", err);
         return res.status(500).json({ error: "Failed to get media" });
     }
 }
 
-// Searches and filters cached media by name, folder, and sort order
+// Searches cached media by name/folder, returns results with TMDB metadata
 async function searchMedia(req, res) {
     try {
         const { q, folder: folderId, sort = "name" } = req.query;
@@ -49,12 +58,10 @@ async function searchMedia(req, res) {
             results = results.filter((f) => f.folderId === folderId);
         }
 
-        const sortMap = {
-            name: (a, b) => a.name.localeCompare(b.name),
-        };
-        results.sort(sortMap[sort] || sortMap.name);
+        results.sort((a, b) => a.name.localeCompare(b.name));
 
-        return res.json({ total: results.length, results });
+        const enriched = await Promise.all(results.map(enrich));
+        return res.json({ total: enriched.length, results: enriched });
     } catch (err) {
         console.error("[Media] searchMedia error:", err);
         return res.status(500).json({ error: "Search failed" });
@@ -102,4 +109,22 @@ async function getMediaSubtitles(req, res) {
     }
 }
 
-module.exports = { getAllMedia, getMediaById, searchMedia, getMediaSubtitles };
+// Returns all media grouped into movies / series / anime with season+episode structure
+async function getGrouped(req, res) {
+    try {
+        const folders = await readFolders();
+        const { allMedia } = await getAllCached(folders);
+        const grouped = await groupMedia(allMedia);
+        return res.json({
+            movies: { total: grouped.movies.length, items: grouped.movies },
+            series: { total: grouped.series.length, items: grouped.series },
+            anime: { total: grouped.anime.length, items: grouped.anime },
+            unknown: { total: grouped.unknown.length, items: grouped.unknown },
+        });
+    } catch (err) {
+        console.error("[Media] getGrouped error:", err);
+        return res.status(500).json({ error: "Failed to group media" });
+    }
+}
+
+module.exports = { getAllMedia, getMediaById, searchMedia, getMediaSubtitles, getGrouped };

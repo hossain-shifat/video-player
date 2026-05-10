@@ -1,8 +1,14 @@
 [
     {
-        "id": "5aca28a0-fd42-4c49-96ab-765b14867310",
+        "id": "1",
         "path": "D:\\Media\\Movies",
         "label": "Test Movies",
+        "addedAt": "2026-05-09T09:14:54.334Z"
+    },
+    {
+        "id": "2",
+        "path": "D:\\Media\\Series",
+        "label": "Test Series",
         "addedAt": "2026-05-09T09:14:54.334Z"
     }
 ]

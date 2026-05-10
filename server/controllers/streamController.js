@@ -6,22 +6,55 @@ const mime = require("mime-types");
 const { readFolders } = require("./libraryController");
 const { scanFolder } = require("../utils/scanner");
 const { sanitizePath, isSubtitleFile } = require("../utils/fileHelpers");
+const mediaCache = require("../utils/mediaCache");
 
+/**
+ * Resolve a file object for the given id.
+ *
+ * Strategy (cache-first):
+ *  1. Return immediately if the id is already in the in-memory cache.
+ *  2. On a cache miss, scan each library folder one at a time, update the
+ *     cache after every scan, and stop as soon as the id is found.
+ *     This avoids scanning every folder on every request while still
+ *     handling files that were added after the process started.
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>}
+ */
+async function resolveFileById(id) {
+    // 1. Fast path — cache hit
+    const cached = mediaCache.getFileById(id);
+    if (cached) return cached;
+
+    // 2. Slow path — targeted scan, folder by folder, stop early
+    const folders = await readFolders();
+    for (const folder of folders) {
+        let files;
+        try {
+            files = await scanFolder(folder.path);
+        } catch (err) {
+            console.error(`[resolveFileById] Failed to scan folder "${folder.path}":`, err.message);
+            continue;
+        }
+
+        // Populate cache with everything found in this folder
+        mediaCache.updateFromFiles(files);
+
+        const found = files.find((f) => f.id === id);
+        if (found) return found;
+    }
+
+    return null;
+}
+
+// ---------------------------------------------------------------------------
 // Streams a video file by its ID, supporting HTTP range requests (206 Partial Content)
+// ---------------------------------------------------------------------------
 async function streamVideo(req, res) {
     try {
         const { id } = req.params;
-        const folders = await readFolders();
 
-        let targetFile = null;
-        for (const folder of folders) {
-            const files = await scanFolder(folder.path);
-            const found = files.find((f) => f.id === id);
-            if (found) {
-                targetFile = found;
-                break;
-            }
-        }
+        const targetFile = await resolveFileById(id);
 
         if (!targetFile) {
             return res.status(404).json({ error: "Media not found" });
@@ -50,13 +83,23 @@ async function streamVideo(req, res) {
         if (rangeHeader) {
             // Partial content (Range request)
             const parts = rangeHeader.replace(/bytes=/, "").split("-");
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
 
-            if (start >= fileSize || end >= fileSize) {
+            const send416 = () => {
                 res.setHeader("Content-Range", `bytes */${fileSize}`);
                 return res.status(416).json({ error: "Range Not Satisfiable" });
-            }
+            };
+
+            // parts[0] must be a non-empty string that parses to a finite integer
+            const start = parseInt(parts[0], 10);
+            if (!Number.isFinite(start) || start < 0) return send416();
+
+            // parts[1]: absent/empty → last byte of file; otherwise must be a finite integer
+            const endRaw = parts.length > 1 ? parts[1] : "";
+            const end = endRaw !== "" ? parseInt(endRaw, 10) : fileSize - 1;
+            if (!Number.isFinite(end)) return send416();
+
+            // Logical ordering and file-bounds checks
+            if (start > end || start >= fileSize || end >= fileSize) return send416();
 
             const chunkSize = end - start + 1;
 
@@ -102,7 +145,10 @@ async function streamVideo(req, res) {
     }
 }
 
-// Serves a subtitle file by its base64url-encoded path, converting .srt to WebVTT on the fly
+// ---------------------------------------------------------------------------
+// Serves a subtitle file by its base64url-encoded path,
+// converting .srt to WebVTT on the fly
+// ---------------------------------------------------------------------------
 async function streamSubtitle(req, res) {
     try {
         const { encodedPath } = req.params;

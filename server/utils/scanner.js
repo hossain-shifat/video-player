@@ -46,6 +46,7 @@ async function scanFolder(folderPath, currentDepth = 0) {
 
             results.push({
                 id,
+                path: fullPath,
                 name: nameWithoutExt,
                 size: formatFileSize(stat.size),
                 streamUrl: `/stream/video/${id}`,
