@@ -1,8 +1,8 @@
 import React from "react";
 import { Outlet } from "react-router";
-import Navbar from "../components/navbar";
+import Navbar from "../Components/Navbar";
 
-const root = () => {
+const Root = () => {
     return (
         <div>
             <Navbar />
@@ -13,4 +13,4 @@ const root = () => {
     );
 };
 
-export default root;
+export default Root;
