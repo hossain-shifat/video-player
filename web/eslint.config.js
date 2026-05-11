@@ -13,6 +13,8 @@ export default defineConfig([
             globals: globals.browser,
             parserOptions: { ecmaFeatures: { jsx: true } },
         },
-
+        rules: {
+            "react/prop-types": "off",
+        },
     },
 ]);

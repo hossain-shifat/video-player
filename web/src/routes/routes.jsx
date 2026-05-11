@@ -11,6 +11,54 @@ export const router = createBrowserRouter([
                 index: true,
                 Component: Home,
             },
+            // {
+            //     path: "live",
+            //     Component: LiveTV,
+            // },
+            // {
+            //     path: "movies",
+            //     Component: Movies,
+            // },
+            // {
+            //     path: "series",
+            //     Component: Series,
+            // },
+            // {
+            //     path: "library",
+            //     Component: Library,
+            // },
+            // {
+            //     path: "profile",
+            //     Component: Profile,
+            // },
+            // {
+            //     path: "friends",
+            //     Component: Friends,
+            // },
+            // {
+            //     path: "watchlist",
+            //     Component: Watchlist,
+            // },
+            // {
+            //     path: "media",
+            //     Component: Media,
+            // },
+            // {
+            //     path: "folders",
+            //     Component: Folders,
+            // },
+            // {
+            //     path: "services",
+            //     Component: Services,
+            // },
+            // {
+            //     path: "privacy",
+            //     Component: Privacy,
+            // },
+            // {
+            //     path: "settings",
+            //     Component: SettingsPage,
+            // },
         ],
     },
 ]);
