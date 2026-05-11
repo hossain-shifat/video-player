@@ -154,3 +154,7 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
 }
+
+.overflow-x-auto::-webkit-scrollbar {
+    display: none;
+}

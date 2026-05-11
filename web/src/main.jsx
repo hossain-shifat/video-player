@@ -5,11 +5,14 @@ import App from "./App.jsx";
 import { RouterProvider } from "react-router";
 import { router } from "./Routes/Routes.jsx";
 import { ThemeProvider } from "./Context/themeContext.jsx";
+import { ApiProvider } from "./Context/apiContext.jsx";
 
 createRoot(document.getElementById("root")).render(
     <StrictMode>
         <ThemeProvider>
-            <RouterProvider router={router} />
+            <ApiProvider>
+                <RouterProvider router={router} />
+            </ApiProvider>
         </ThemeProvider>
     </StrictMode>,
 );

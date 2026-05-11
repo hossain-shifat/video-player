@@ -1,11 +1,18 @@
-import React from "react";
+import React, { useEffect } from "react";
+import { useApi } from "../../Context/apiContext";
+import CategoryBar from "../../Components/CategoryBar";
 
-const home = () => {
+const Home = () => {
+    const { media, categories, fetchMedia, loading, errors } = useApi();
+    console.log(categories);
+    if (loading.media) return <div>Loading...</div>;
+    if (loading.categories) return <div>Loading...</div>;
+
     return (
         <div>
-            <h1></h1>
+            <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
         </div>
     );
 };
 
-export default home;
+export default Home;
