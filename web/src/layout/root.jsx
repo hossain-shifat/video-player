@@ -1,12 +1,16 @@
 import React from "react";
 import { Outlet } from "react-router";
+import Navbar from "../Components/Navbar";
 
-const root = () => {
+const Root = () => {
     return (
-        <div className="bg-red-500">
-            <Outlet />
+        <div>
+            <Navbar />
+            <div className="w-full h-screen bg-base-200">
+                <Outlet />
+            </div>
         </div>
     );
 };
 
-export default root;
+export default Root;
