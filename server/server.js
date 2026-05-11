@@ -7,12 +7,13 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 
-const libraryRouter = require("./routes/library");
-const mediaRouter = require("./routes/media");
-const streamRouter = require("./routes/stream");
-const metadataRouter = require("./routes/metadata");
-const historyRouter = require("./routes/history");
-const userRouter = require("./routes/user");
+const libraryRouter   = require("./routes/library");
+const mediaRouter     = require("./routes/media");
+const streamRouter    = require("./routes/stream");
+const metadataRouter  = require("./routes/metadata");
+const historyRouter   = require("./routes/history");
+const userRouter      = require("./routes/user");
+const categoriesRouter = require("./routes/categories");
 const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/fileHelpers");
 
 const app = express();
@@ -56,12 +57,13 @@ app.use((req, res, next) => {
 });
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
-app.use("/api/library", libraryRouter);
-app.use("/api/media", mediaRouter);
-app.use("/api/metadata", metadataRouter);
-app.use("/api/history", historyRouter);
-app.use("/api/user", userRouter);
-app.use("/stream", streamRouter);
+app.use("/api/library",    libraryRouter);
+app.use("/api/media",     mediaRouter);
+app.use("/api/metadata",  metadataRouter);
+app.use("/api/history",   historyRouter);
+app.use("/api/user",      userRouter);
+app.use("/api/categories", categoriesRouter);
+app.use("/stream",        streamRouter);
 
 // ─── HEALTH ENDPOINT ──────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {

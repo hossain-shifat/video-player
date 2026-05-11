@@ -27,9 +27,10 @@ async function enrich(file) {
 async function getAllMedia(req, res) {
     try {
         // Normalize query params — coerce arrays to single string, guard toLowerCase
-        const q      = String(Array.isArray(req.query.q)      ? req.query.q[0]      : req.query.q      ?? "").trim().toLowerCase();
-        const title  = String(Array.isArray(req.query.title)  ? req.query.title[0]  : req.query.title  ?? "").trim().toLowerCase();
-        const type   = String(Array.isArray(req.query.type)   ? req.query.type[0]   : req.query.type   ?? "").trim().toLowerCase();
+        const q        = String(Array.isArray(req.query.q)        ? req.query.q[0]        : req.query.q        ?? "").trim().toLowerCase();
+        const title    = String(Array.isArray(req.query.title)    ? req.query.title[0]    : req.query.title    ?? "").trim().toLowerCase();
+        const type     = String(Array.isArray(req.query.type)     ? req.query.type[0]     : req.query.type     ?? "").trim().toLowerCase();
+        const category = String(Array.isArray(req.query.category) ? req.query.category[0] : req.query.category ?? "").trim().toLowerCase();
         const rawSeason = Array.isArray(req.query.season) ? req.query.season[0] : req.query.season;
         const season = rawSeason !== undefined ? parseInt(rawSeason, 10) : NaN;
         const hasSeason = !Number.isNaN(season);
@@ -37,6 +38,22 @@ async function getAllMedia(req, res) {
         const folders = await readFolders();
         const { allMedia, folderStats } = await getAllCached(folders);
         const grouped = await groupMedia(allMedia);
+
+        // ── Category (genre) filter ───────────────────────────────────────────
+        if (category) {
+            const matchesCategory = (genres) =>
+                (genres || []).some((g) => g.toLowerCase() === category);
+
+            grouped.movies = grouped.movies.filter((f) =>
+                matchesCategory(f.metadata?.genres)
+            );
+            grouped.series = grouped.series.filter((s) =>
+                matchesCategory(s.metadata?.genres)
+            );
+            grouped.anime = grouped.anime.filter((a) =>
+                matchesCategory(a.metadata?.genres)
+            );
+        }
 
         // ── Search filter ─────────────────────────────────────────────────────
         if (q) {
