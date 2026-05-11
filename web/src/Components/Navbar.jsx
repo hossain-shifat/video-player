@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router";
-import { Search, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, Settings, List, Library, X } from "lucide-react";
+import { Search, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut } from "lucide-react";
+import Logo from "./Logo";
+import ThemeDropdown from "./ThemeDropdown";
 
 const navLinks = [
     { to: "/live", label: "Live TV" },
@@ -12,11 +14,12 @@ const navLinks = [
 const profileMenuItems = [
     { icon: User, label: "Profile", to: "/profile" },
     { icon: Users, label: "Friends", to: "/friends" },
-    { icon: Layers, label: "Services", to: "/services" },
-    { icon: ShieldCheck, label: "Privacy Settings", to: "/privacy" },
-    { icon: Settings, label: "Account Settings", to: "/settings" },
     { icon: List, label: "My Watchlist", to: "/watchlist" },
     { icon: Library, label: "My Media", to: "/media" },
+    { icon: FolderTree, label: "Folders", to: "/folders" },
+    { icon: Layers, label: "Services", to: "/services" },
+    { icon: ShieldCheck, label: "Privacy Settings", to: "/privacy" },
+    { icon: Settings, label: "Settings", to: "/settings" },
 ];
 
 const Navbar = () => {
@@ -35,23 +38,19 @@ const Navbar = () => {
     }, []);
 
     return (
-        <nav className="w-full bg-[#1a1a1a] border-b border-white/5 px-6 h-14 flex items-center gap-4 relative z-50">
+        <nav className="w-full bg-[#1a1a1a] border-b border-white/5 px-2 md:px-6 h-14 flex items-center gap-4 relative z-50">
             {/* Logo */}
-            <NavLink to="/" className="shrink-0 mr-2">
-                <span className="text-primary font-black text-2xl tracking-tight select-none">
-                    <span className="text-primary">PLAY</span>
-                </span>
-            </NavLink>
+            <Logo />
 
             {/* Search bar */}
             <div className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 transition-all duration-200 ${searchFocused ? "ring-1 ring-white/30 bg-white/15 w-80" : "w-64"}`}>
-                <Search size={15} className="text-white/40 shrink-0" />
+                <Search size={20} className="text-white/40 shrink-0" />
                 <input
                     type="text"
                     placeholder="Search..."
                     onFocus={() => setSearchFocused(true)}
                     onBlur={() => setSearchFocused(false)}
-                    className="bg-transparent outline-none text-sm text-white placeholder-white/30 w-full"
+                    className="bg-transparent outline-none text-sm text-white placeholder-white/30 placeholder:text-md w-full"
                 />
             </div>
 
@@ -91,40 +90,64 @@ const Navbar = () => {
                     <span>Watchlist</span>
                 </NavLink>
 
+                <NavLink to="/watchlist">
+                    <Bookmark size={25} />
+                </NavLink>
+
                 {/* Profile button + floating menu */}
                 <div className="relative ml-1" ref={menuRef}>
                     <button
                         onClick={() => setProfileOpen((prev) => !prev)}
-                        className="w-8 h-8 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        className="w-8.5 h-8.5 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
                         aria-label="Open profile menu">
-                        <User size={16} className="font-extrabold" />
+                        <User size={20} strokeWidth={2} />
                     </button>
 
                     {/* Floating profile dropdown */}
                     {profileOpen && (
-                        <div className="absolute right-0 top-11 w-52 bg-[#252525] rounded-xl shadow-2xl border border-white/10 overflow-hidden">
-                            <div className="flex items-center justify-between px-4 pt-3 pb-1">
-                                <span className="text-[11px] font-semibold text-white/40 uppercase tracking-widest">Manage</span>
-                                <button onClick={() => setProfileOpen(false)} className="text-white/40 hover:text-white transition-colors rounded p-0.5 hover:bg-white/10" aria-label="Close menu">
-                                    <X size={14} />
+                        <div className="absolute right-1 top-14 w-52 bg-[#252525] rounded-xl shadow-2xl border border-white/10 overflow-hidden space-y-2">
+                            <div className="flex items-center justify-end px-4 pt-3 pb-1">
+                                {/* <span className="text-[11px] font-semibold text-white/40 uppercase tracking-widest">Manage</span> */}
+                                <button
+                                    onClick={() => setProfileOpen(false)}
+                                    className="text-white/40 hover:text-white transition-colors rounded p-0.5 hover:bg-white/10 cursor-pointer"
+                                    aria-label="Close menu">
+                                    <X size={20} strokeWidth={3} color="white" />
                                 </button>
                             </div>
 
-                            <ul className="py-1.5">
-                                {profileMenuItems.map(({ icon: Icon, label, to }) => (
-                                    <li key={to}>
-                                        <NavLink
-                                            to={to}
-                                            onClick={() => setProfileOpen(false)}
-                                            className={({ isActive }) =>
-                                                `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${isActive ? "text-[#e5a00d] bg-white/5" : "text-white/70 hover:text-white hover:bg-white/5"}`
-                                            }>
-                                            <Icon size={15} className="shrink-0 text-white/40" />
-                                            {label}
-                                        </NavLink>
-                                    </li>
-                                ))}
-                            </ul>
+                            {/* Profile inside floating menu */}
+                            <NavLink to="/profile">
+                                <div className="flex flex-col justify-center items-center gap-4">
+                                    <h1 className="bg-primary w-20 h-20 flex justify-center items-center rounded-full">
+                                        <User size={50} />
+                                    </h1>
+                                    <h1>Shifat-Hossain</h1>
+                                </div>
+                            </NavLink>
+                            {/* profile floating navigations */}
+                            <div>
+                                <ul className="py-1.5">
+                                    {profileMenuItems.map(({ icon: Icon, label, to }) => (
+                                        <li key={to}>
+                                            <NavLink
+                                                to={to}
+                                                onClick={() => setProfileOpen(false)}
+                                                className={({ isActive }) =>
+                                                    `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${isActive ? "text-[#e5a00d] bg-white/5" : "text-white/70 hover:text-white hover:bg-white/5"}`
+                                                }>
+                                                <Icon size={15} strokeWidth={3} className="shrink-0 text-white/40" />
+                                                {label}
+                                            </NavLink>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                            <div className="border-t border-error">
+                                <button className="btn btn-error btn-wide btn-outline hover:bg-none border-0 w-full rounded-none">
+                                    <p className="text-md">Logout</p> <LogOut size={16} strokeWidth={3} />
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>
