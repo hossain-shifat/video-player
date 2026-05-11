@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
     getMedia,
     searchMedia,
@@ -38,21 +38,29 @@ export function ApiProvider({ children }) {
         setErrorMap((p) => ({ ...p, [key]: err?.message ?? null }));
     }
 
-    async function run(key, fn) {
+    // FIX 1 (partial): run() now accepts an optional AbortSignal so callers
+    // can cancel in-flight requests before they update state.
+    async function run(key, fn, signal) {
         setLoading(key, true);
         setError(key, null);
         try {
-            return await fn();
+            const result = await fn(signal);
+            // If the request was aborted after resolution, discard the result
+            // silently so we don't update state with stale data.
+            if (signal?.aborted) return;
+            return result;
         } catch (err) {
+            // DOMException name "AbortError" means we cancelled intentionally —
+            // swallow it so no error state is written for a clean unmount/remount.
+            if (err?.name === "AbortError" || signal?.aborted) return;
             setError(key, err);
             throw err;
         } finally {
-            setLoading(key, false);
+            if (!signal?.aborted) setLoading(key, false);
         }
     }
 
     // ─── Media ────────────────────────────────────────────────────────────────
-    // media = { movies: [], series: [], anime: [] }   (whatever backend returns)
     const [media, setMedia] = useState([]);
     const [movies, setMovies] = useState([]);
     const [series, setSeries] = useState([]);
@@ -60,16 +68,20 @@ export function ApiProvider({ children }) {
     const [searchResults, setSearchResults] = useState([]);
 
     const fetchMedia = useCallback(
-        (params) =>
-            run("media", async () => {
-                const data = await getMedia(params);
-                // backend returns grouped object — flatten or keep based on your API shape
-                setMedia(data);
-                setMovies(data?.movies ?? []);
-                setSeries(data?.series ?? []);
-                setAnime(data?.anime ?? []);
-                return data;
-            }),
+        (params, signal) =>
+            run(
+                "media",
+                async (sig) => {
+                    const data = await getMedia(params, sig);
+                    setMedia(data);
+                    setMovies(data?.movies ?? []);
+                    setSeries(data?.series ?? []);
+                    setAnime(data?.anime ?? []);
+                    return data;
+                },
+                signal,
+            ),
+        // run/setters are stable (defined in render scope) — no deps needed
         [],
     );
 
@@ -87,11 +99,15 @@ export function ApiProvider({ children }) {
     const [folders, setFolders] = useState([]);
 
     const fetchFolders = useCallback(
-        () =>
-            run("folders", async () => {
-                const data = await getFolders();
-                setFolders(data?.folders ?? []);
-            }),
+        (signal) =>
+            run(
+                "folders",
+                async (sig) => {
+                    const data = await getFolders(sig);
+                    setFolders(data?.folders ?? []);
+                },
+                signal,
+            ),
         [],
     );
 
@@ -128,11 +144,15 @@ export function ApiProvider({ children }) {
     const [activeCategory, setActiveCategory] = useState(null);
 
     const fetchCategories = useCallback(
-        () =>
-            run("categories", async () => {
-                const data = await getCategories();
-                setCategories(data?.categories ?? []);
-            }),
+        (signal) =>
+            run(
+                "categories",
+                async (sig) => {
+                    const data = await getCategories(sig);
+                    setCategories(data?.categories ?? []);
+                },
+                signal,
+            ),
         [],
     );
 
@@ -150,15 +170,18 @@ export function ApiProvider({ children }) {
     const [history, setHistory] = useState([]);
 
     const fetchHistory = useCallback(
-        () =>
-            run("history", async () => {
-                const data = await getHistory();
-                setHistory(data?.history ?? []);
-            }),
+        (signal) =>
+            run(
+                "history",
+                async (sig) => {
+                    const data = await getHistory(sig);
+                    setHistory(data?.history ?? []);
+                },
+                signal,
+            ),
         [],
     );
 
-    // fires silently while video is playing — no loading state needed
     const logProgress = useCallback((id, progressData) => saveProgress(id, progressData).catch(() => {}), []);
 
     const getResume = useCallback((id) => getResumePoint(id), []);
@@ -185,11 +208,15 @@ export function ApiProvider({ children }) {
     const [watchlist, setWatchlist] = useState([]);
 
     const fetchWatchlist = useCallback(
-        () =>
-            run("watchlist", async () => {
-                const data = await getWatchlist();
-                setWatchlist(data?.watchlist ?? []);
-            }),
+        (signal) =>
+            run(
+                "watchlist",
+                async (sig) => {
+                    const data = await getWatchlist(sig);
+                    setWatchlist(data?.watchlist ?? []);
+                },
+                signal,
+            ),
         [],
     );
 
@@ -215,11 +242,15 @@ export function ApiProvider({ children }) {
     const [favourites, setFavourites] = useState([]);
 
     const fetchFavourites = useCallback(
-        () =>
-            run("favourites", async () => {
-                const data = await getFavourites();
-                setFavourites(data?.favourites ?? []);
-            }),
+        (signal) =>
+            run(
+                "favourites",
+                async (sig) => {
+                    const data = await getFavourites(sig);
+                    setFavourites(data?.favourites ?? []);
+                },
+                signal,
+            ),
         [],
     );
 
@@ -246,89 +277,150 @@ export function ApiProvider({ children }) {
 
     const refreshAll = useCallback(() => run("refreshAllMetadata", () => refreshAllMetadata()), []);
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
-    const isInWatchlist = (id) => watchlist.some((w) => w.id === id);
-    const isFavourite = (id) => favourites.some((f) => f.id === id);
-    const getStreamUrl = (id) => api.streamUrl(id);
-    const getSubtitleUrl = (encoded) => api.subtitleUrl(encoded);
+    // ─── Stable helpers (FIX 1: useCallback so identity is stable) ───────────
+    const isInWatchlist = useCallback((id) => watchlist.some((w) => w.id === id), [watchlist]);
 
-    const toggleWatchlist = (id, data) => (isInWatchlist(id) ? removeWatchlistItem(id) : addWatchlistItem(id, data));
+    const isFavourite = useCallback((id) => favourites.some((f) => f.id === id), [favourites]);
 
-    const toggleFavourite = (id, data) => (isFavourite(id) ? removeFavouriteItem(id) : addFavouriteItem(id, data));
+    const getStreamUrl = useCallback((id) => api.streamUrl(id), []);
 
-    // ─── Auto-fetch on mount ──────────────────────────────────────────────────
+    const getSubtitleUrl = useCallback((encoded) => api.subtitleUrl(encoded), []);
+
+    const toggleWatchlist = useCallback((id, data) => (isInWatchlist(id) ? removeWatchlistItem(id) : addWatchlistItem(id, data)), [isInWatchlist, removeWatchlistItem, addWatchlistItem]);
+
+    const toggleFavourite = useCallback((id, data) => (isFavourite(id) ? removeFavouriteItem(id) : addFavouriteItem(id, data)), [isFavourite, removeFavouriteItem, addFavouriteItem]);
+
+    // ─── FIX 2: Auto-fetch with AbortController cleanup ──────────────────────
+    // Each fetch function is stable (useCallback + [] deps), so listing them
+    // here satisfies the exhaustive-deps rule without causing extra re-runs.
     useEffect(() => {
-        fetchMedia();
-        fetchFolders();
-        fetchCategories();
-        fetchHistory();
-        fetchWatchlist();
-        fetchFavourites();
-    }, []);
+        const controller = new AbortController();
+        const { signal } = controller;
 
-    // ─── Context value ────────────────────────────────────────────────────────
-    const value = {
-        // ── data — use these directly, e.g. movies.map(...)
-        media, // full grouped response from backend
-        movies, // data.movies array
-        series, // data.series array
-        anime, // data.anime array
-        searchResults, // flat array
-        folders, // array of library folders
-        categories, // array of category objects
-        categoryMedia, // array — result of fetchByCategory()
-        activeCategory, // string — currently selected category name
-        history, // watch history array
-        watchlist, // watchlist array
-        favourites, // favourites array
+        fetchMedia(undefined, signal);
+        fetchFolders(signal);
+        fetchCategories(signal);
+        fetchHistory(signal);
+        fetchWatchlist(signal);
+        fetchFavourites(signal);
 
-        // ── status
-        loading, // { media: bool, folders: bool, ... }
-        errors, // { media: "msg" | null, ... }
+        // Abort all in-flight requests when the component unmounts or when
+        // React StrictMode double-invokes the effect in development.
+        return () => controller.abort();
+    }, [fetchMedia, fetchFolders, fetchCategories, fetchHistory, fetchWatchlist, fetchFavourites]);
 
-        // ── media actions
-        fetchMedia,
-        search,
+    // ─── FIX 1: Memoised context value ───────────────────────────────────────
+    // Recreated only when the listed state slices or stable action refs change.
+    const value = useMemo(
+        () => ({
+            // ── data
+            media,
+            movies,
+            series,
+            anime,
+            searchResults,
+            folders,
+            categories,
+            categoryMedia,
+            activeCategory,
+            history,
+            watchlist,
+            favourites,
 
-        // ── library actions
-        fetchFolders,
-        addLibraryFolder,
-        updateLibraryFolder,
-        removeLibraryFolder,
+            // ── status
+            loading,
+            errors,
 
-        // ── category actions
-        fetchCategories,
-        fetchByCategory,
+            // ── media actions
+            fetchMedia,
+            search,
 
-        // ── history actions
-        fetchHistory,
-        logProgress,
-        getResume,
-        removeHistoryItem,
-        clearAllHistory,
+            // ── library actions
+            fetchFolders,
+            addLibraryFolder,
+            updateLibraryFolder,
+            removeLibraryFolder,
 
-        // ── watchlist actions
-        fetchWatchlist,
-        addWatchlistItem,
-        removeWatchlistItem,
+            // ── category actions
+            fetchCategories,
+            fetchByCategory,
 
-        // ── favourite actions
-        fetchFavourites,
-        addFavouriteItem,
-        removeFavouriteItem,
+            // ── history actions
+            fetchHistory,
+            logProgress,
+            getResume,
+            removeHistoryItem,
+            clearAllHistory,
 
-        // ── helpers
-        isInWatchlist,
-        isFavourite,
-        toggleWatchlist,
-        toggleFavourite,
-        getStreamUrl,
-        getSubtitleUrl,
+            // ── watchlist actions
+            fetchWatchlist,
+            addWatchlistItem,
+            removeWatchlistItem,
 
-        // ── metadata actions
-        refreshOneMetadata,
-        refreshAll,
-    };
+            // ── favourite actions
+            fetchFavourites,
+            addFavouriteItem,
+            removeFavouriteItem,
+
+            // ── helpers
+            isInWatchlist,
+            isFavourite,
+            toggleWatchlist,
+            toggleFavourite,
+            getStreamUrl,
+            getSubtitleUrl,
+
+            // ── metadata actions
+            refreshOneMetadata,
+            refreshAll,
+        }),
+        [
+            // state
+            media,
+            movies,
+            series,
+            anime,
+            searchResults,
+            folders,
+            categories,
+            categoryMedia,
+            activeCategory,
+            history,
+            watchlist,
+            favourites,
+            loading,
+            errors,
+            // stable action refs (useCallback [] — only listed so ESLint is happy;
+            // their identities never change after mount)
+            fetchMedia,
+            search,
+            fetchFolders,
+            addLibraryFolder,
+            updateLibraryFolder,
+            removeLibraryFolder,
+            fetchCategories,
+            fetchByCategory,
+            fetchHistory,
+            logProgress,
+            getResume,
+            removeHistoryItem,
+            clearAllHistory,
+            fetchWatchlist,
+            addWatchlistItem,
+            removeWatchlistItem,
+            fetchFavourites,
+            addFavouriteItem,
+            removeFavouriteItem,
+            isInWatchlist,
+            isFavourite,
+            toggleWatchlist,
+            toggleFavourite,
+            getStreamUrl,
+            getSubtitleUrl,
+            refreshOneMetadata,
+            refreshAll,
+        ],
+    );
 
     return <ApiContext.Provider value={value}>{children}</ApiContext.Provider>;
 }

@@ -13,7 +13,7 @@ export const router = createBrowserRouter([
                 Component: Home,
             },
             {
-                path: "/Category/All",
+                path: "/category/all",
                 Component: AllCategory,
             },
             // {

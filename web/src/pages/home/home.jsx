@@ -3,8 +3,8 @@ import { useApi } from "../../Context/apiContext";
 import CategoryBar from "../../Components/CategoryBar";
 
 const Home = () => {
-    const { media, categories, fetchMedia, loading, errors } = useApi();
-    console.log(categories);
+    const { media, categories, fetchMedia, fetchByCategory, loading, errors } = useApi();
+
     if (loading.media) return <div>Loading...</div>;
     if (loading.categories) return <div>Loading...</div>;
 
