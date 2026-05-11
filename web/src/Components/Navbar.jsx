@@ -37,19 +37,19 @@ const Navbar = () => {
     }, []);
 
     return (
-        <nav className="w-full bg-[#1a1a1a] border-b border-white/5 px-2 md:px-6 h-14 flex items-center gap-4 relative z-50">
+        <nav className="sticky top-0 w-full bg-base-300 px-4 md:px-6 h-14 flex items-center gap-4 z-50">
             {/* Logo */}
             <Logo />
 
             {/* Search bar */}
             <div className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 transition-all duration-200 ${searchFocused ? "ring-1 ring-white/30 bg-white/15 w-80" : "w-64"}`}>
-                <Search size={20} className="text-white/40 shrink-0" />
+                <Search size={20} className="text-base-content shrink-0" />
                 <input
                     type="text"
                     placeholder="Search..."
                     onFocus={() => setSearchFocused(true)}
                     onBlur={() => setSearchFocused(false)}
-                    className="bg-transparent outline-none text-sm text-white placeholder-white/30 placeholder:text-md w-full"
+                    className="bg-transparent outline-none text-md text-white placeholder-base-content placeholder:text-md w-full"
                 />
             </div>
 
@@ -97,14 +97,12 @@ const Navbar = () => {
 
                 {/* Profile button + floating menu */}
                 <div className="relative ml-1" ref={menuRef}>
-                    <div className="tooltip tooltip-bottom" data-tip="Profile">
-                        <button
-                            onClick={() => setProfileOpen((prev) => !prev)}
-                            className="w-8.5 h-8.5 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
-                            aria-label="Open profile menu">
-                            <User size={20} strokeWidth={2} />
-                        </button>
-                    </div>
+                    <button
+                        onClick={() => setProfileOpen((prev) => !prev)}
+                        className="w-8.5 h-8.5 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
+                        aria-label="Open profile menu">
+                        <User size={20} strokeWidth={2} />
+                    </button>
 
                     {/* Floating profile dropdown */}
                     {profileOpen && (
@@ -124,7 +122,10 @@ const Navbar = () => {
                                     <h1 className="bg-primary w-20 h-20 flex justify-center items-center rounded-full">
                                         <User size={50} />
                                     </h1>
-                                    <h1>Shifat-Hossain</h1>
+                                    <div className="text-center">
+                                        <h1 className="text-primary font-semibold">Shifat-Hossain</h1>
+                                        <p className="text-white/70">hossain222</p>
+                                    </div>
                                 </div>
                             </NavLink>
                             {/* profile floating navigations */}
