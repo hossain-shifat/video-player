@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { NavLink } from "react-router";
 import { Search, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut } from "lucide-react";
 import Logo from "./Logo";
-import ThemeDropdown from "./ThemeDropdown";
 
 const navLinks = [
     { to: "/live", label: "Live TV" },
@@ -90,30 +89,33 @@ const Navbar = () => {
                     <span>Watchlist</span>
                 </NavLink>
 
-                <NavLink to="/watchlist">
-                    <Bookmark size={25} />
-                </NavLink>
+                <div className="tooltip tooltip-bottom" data-tip="Watchlist">
+                    <NavLink to="/watchlist" aria-label="Watchlist" className="lg:hidden inline-flex items-center justify-center p-2 rounded text-white/70 hover:text-white hover:bg-white/5">
+                        <Bookmark size={25} />
+                    </NavLink>
+                </div>
 
                 {/* Profile button + floating menu */}
                 <div className="relative ml-1" ref={menuRef}>
-                    <button
-                        onClick={() => setProfileOpen((prev) => !prev)}
-                        className="w-8.5 h-8.5 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
-                        aria-label="Open profile menu">
-                        <User size={20} strokeWidth={2} />
-                    </button>
+                    <div className="tooltip tooltip-bottom" data-tip="Profile">
+                        <button
+                            onClick={() => setProfileOpen((prev) => !prev)}
+                            className="w-8.5 h-8.5 rounded-full bg-primary flex items-center justify-center hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
+                            aria-label="Open profile menu">
+                            <User size={20} strokeWidth={2} />
+                        </button>
+                    </div>
 
                     {/* Floating profile dropdown */}
                     {profileOpen && (
-                        <div className="absolute right-1 top-14 w-52 bg-[#252525] rounded-xl shadow-2xl border border-white/10 overflow-hidden space-y-2">
+                        <div className="absolute right-1 top-14 w-62 bg-[#252525] rounded-xl shadow-2xl border border-white/10 overflow-hidden space-y-2">
                             <div className="flex items-center justify-end px-4 pt-3 pb-1">
                                 {/* <span className="text-[11px] font-semibold text-white/40 uppercase tracking-widest">Manage</span> */}
-                                <button
-                                    onClick={() => setProfileOpen(false)}
-                                    className="text-white/40 hover:text-white transition-colors rounded p-0.5 hover:bg-white/10 cursor-pointer"
-                                    aria-label="Close menu">
-                                    <X size={20} strokeWidth={3} color="white" />
-                                </button>
+                                <div className="tooltip tooltip-bottom" data-tip="Close">
+                                    <button onClick={() => setProfileOpen(false)} className="text-white/40 hover:text-white transition-colors rounded p-0.5 cursor-pointer" aria-label="Close menu">
+                                        <X size={20} strokeWidth={3} color="white" />
+                                    </button>
+                                </div>
                             </div>
 
                             {/* Profile inside floating menu */}
@@ -127,17 +129,17 @@ const Navbar = () => {
                             </NavLink>
                             {/* profile floating navigations */}
                             <div>
-                                <ul className="py-1.5">
+                                <ul className="py-2">
                                     {profileMenuItems.map(({ icon: Icon, label, to }) => (
                                         <li key={to}>
                                             <NavLink
                                                 to={to}
                                                 onClick={() => setProfileOpen(false)}
                                                 className={({ isActive }) =>
-                                                    `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${isActive ? "text-[#e5a00d] bg-white/5" : "text-white/70 hover:text-white hover:bg-white/5"}`
+                                                    `flex items-center gap-3 px-4 py-2.5 text-md md:text-sm transition-colors ${isActive ? "text-[#e5a00d] bg-white/5" : "text-white/70 hover:text-white hover:bg-white/5"}`
                                                 }>
-                                                <Icon size={15} strokeWidth={3} className="shrink-0 text-white/40" />
-                                                {label}
+                                                <Icon size={20} strokeWidth={2} className="shrink-0 text-base-content" />
+                                                <span className="text-base-content">{label}</span>
                                             </NavLink>
                                         </li>
                                     ))}
