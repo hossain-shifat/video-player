@@ -4,9 +4,9 @@ import Navbar from "../Components/Navbar";
 
 const Root = () => {
     return (
-        <div>
+        <div className="w-full overflow-x-hidden">
             <Navbar />
-            <div className="h-[200vh] bg-base-100">
+            <div className="w-full min-h-screen bg-base-100 p-4 sm:p-6 lg:p-8">
                 <Outlet />
             </div>
         </div>

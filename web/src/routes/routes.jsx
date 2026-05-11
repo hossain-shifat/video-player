@@ -1,6 +1,7 @@
 import { createBrowserRouter } from "react-router";
 import Root from "../Layout/Root";
 import Home from "../Pages/Home/Home";
+import AllCategory from "../Pages/Category/AllCategory";
 
 export const router = createBrowserRouter([
     {
@@ -10,6 +11,10 @@ export const router = createBrowserRouter([
             {
                 index: true,
                 Component: Home,
+            },
+            {
+                path: "/category/all",
+                Component: AllCategory,
             },
             // {
             //     path: "live",
