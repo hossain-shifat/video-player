@@ -4,11 +4,11 @@ import Navbar from "../Components/Navbar";
 
 const Root = () => {
     return (
-        <div className="w-full overflow-x-hidden">
+        <div className="min-h-screen flex flex-col">
             <Navbar />
-            <div className="w-full min-h-screen bg-base-100 p-4 sm:p-6 lg:p-8">
+            <main className="flex-1 w-full bg-base-100 p-4 sm:p-6 lg:p-8">
                 <Outlet />
-            </div>
+            </main>
         </div>
     );
 };

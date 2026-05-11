@@ -30,15 +30,15 @@ const CategoryBar = ({ onSelect }) => {
                           <Link
                               key={cat.name}
                               to={`/category/${encodeURIComponent(cat.name)}`}
-                              onClick={() => setActive(cat.name)}
                               className={[
                                   "shrink-0 grow-0",
                                   "whitespace-nowrap",
                                   "px-4 py-1.5 sm:px-5 sm:py-2",
                                   "rounded-full text-xs sm:text-sm",
-                                  "border transition-colors duration-150",
+                                  "border border-gray-700 text-gray-300",
+                                  "bg-gray-900/40 hover:bg-gray-800/60 hover:text-white",
+                                  "transition-colors duration-150",
                                   "select-none no-underline",
-                                  active === cat.name ? "bg-white text-black border-white" : "text-gray-300 border-gray-600 hover:border-gray-400 hover:text-white",
                               ].join(" ")}>
                               {cat.name}
                           </Link>

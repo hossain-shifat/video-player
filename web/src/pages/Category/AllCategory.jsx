@@ -3,7 +3,6 @@ import { useApi } from "../../Context/apiContext";
 import CategoryCard from "../../Components/CategoryCards";
 
 const AllCategory = () => {
-    const { categories, loading } = useApi();
     const { categories, loading, errors } = useApi();
 
     if (errors.categories) {
