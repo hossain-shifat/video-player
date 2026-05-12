@@ -110,13 +110,13 @@ app.use((err, req, res, next) => {
 });
 
 // Allow all origins for local testing
-app.use(
-    cors({
-        origin: "*",
-        methods: ["GET", "POST", "PUT", "DELETE"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-    }),
-);
+// app.use(
+//     cors({
+//         origin: "*",
+//         methods: ["GET", "POST", "PUT", "DELETE"],
+//         allowedHeaders: ["Content-Type", "Authorization"],
+//     }),
+// );
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, "0.0.0.0", () => {

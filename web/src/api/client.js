@@ -2,7 +2,7 @@
 // Set VITE_API_URL in web/.env to point at your server, e.g.:
 //   VITE_API_URL=http://192.168.1.100:5000
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://192.168.0.159:5000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 /**
  * Core fetch wrapper.
