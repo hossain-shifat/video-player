@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import {
     getMedia,
     searchMedia,
@@ -38,20 +38,14 @@ export function ApiProvider({ children }) {
         setErrorMap((p) => ({ ...p, [key]: err?.message ?? null }));
     }
 
-    // FIX 1 (partial): run() now accepts an optional AbortSignal so callers
-    // can cancel in-flight requests before they update state.
     async function run(key, fn, signal) {
         setLoading(key, true);
         setError(key, null);
         try {
             const result = await fn(signal);
-            // If the request was aborted after resolution, discard the result
-            // silently so we don't update state with stale data.
             if (signal?.aborted) return;
             return result;
         } catch (err) {
-            // DOMException name "AbortError" means we cancelled intentionally —
-            // swallow it so no error state is written for a clean unmount/remount.
             if (err?.name === "AbortError" || signal?.aborted) return;
             setError(key, err);
             throw err;
@@ -61,7 +55,8 @@ export function ApiProvider({ children }) {
     }
 
     // ─── Media ────────────────────────────────────────────────────────────────
-    const [media, setMedia] = useState([]);
+    // Server response shape:
+    // { folders, movies: { total, items }, series: { total, items }, anime: { total, items }, unknown: { total, items } }
     const [movies, setMovies] = useState([]);
     const [series, setSeries] = useState([]);
     const [anime, setAnime] = useState([]);
@@ -73,15 +68,13 @@ export function ApiProvider({ children }) {
                 "media",
                 async (sig) => {
                     const data = await getMedia(params, sig);
-                    setMedia(data);
-                    setMovies(data?.movies ?? []);
-                    setSeries(data?.series ?? []);
-                    setAnime(data?.anime ?? []);
+                    setMovies(data?.movies?.items ?? []);
+                    setSeries(data?.series?.items ?? []);
+                    setAnime(data?.anime?.items ?? []);
                     return data;
                 },
                 signal,
             ),
-        // run/setters are stable (defined in render scope) — no deps needed
         [],
     );
 
@@ -89,7 +82,8 @@ export function ApiProvider({ children }) {
         (q, folderId) =>
             run("search", async () => {
                 const data = await searchMedia(q, folderId);
-                setSearchResults(data?.results ?? data ?? []);
+                // server returns { total, results: [] }
+                setSearchResults(data?.results ?? []);
                 return data;
             }),
         [],
@@ -139,9 +133,22 @@ export function ApiProvider({ children }) {
     );
 
     // ─── Categories ───────────────────────────────────────────────────────────
+    // GET /api/categories
+    //   → { total, categories: [{ name, title, subtitle, total, movies, series, anime }] }
+    //
+    // GET /api/categories/:name
+    //   → { category, title, subtitle,
+    //       movies: { total, items: [] },
+    //       series: { total, items: [] },
+    //       anime:  { total, items: [] } }
     const [categories, setCategories] = useState([]);
-    const [categoryMedia, setCategoryMedia] = useState([]);
+    const [categoryData, setCategoryData] = useState(null);
     const [activeCategory, setActiveCategory] = useState(null);
+
+    // Derived flat arrays — recalculated whenever categoryData changes
+    const categoryMovies = categoryData?.movies?.items ?? [];
+    const categorySeries = categoryData?.series?.items ?? [];
+    const categoryAnime = categoryData?.anime?.items ?? [];
 
     const fetchCategories = useCallback(
         (signal) =>
@@ -156,12 +163,18 @@ export function ApiProvider({ children }) {
         [],
     );
 
+    /**
+     * fetchByCategory(name, type?)
+     * Loads all media for one genre into categoryData / categoryMovies / etc.
+     * The CategoryPage calls this with the :name param from the URL.
+     */
     const fetchByCategory = useCallback(
         (name, type) =>
             run("categoryMedia", async () => {
                 const data = await getByCategory(name, type);
-                setCategoryMedia(data?.results ?? data ?? []);
+                setCategoryData(data);
                 setActiveCategory(name);
+                return data;
             }),
         [],
     );
@@ -272,27 +285,22 @@ export function ApiProvider({ children }) {
         [],
     );
 
-    // ─── Metadata ────────────────────────────────────────────────────────────
+    // ─── Metadata ─────────────────────────────────────────────────────────────
     const refreshOneMetadata = useCallback((id) => run("refreshMetadata", () => refreshMetadata(id)), []);
 
     const refreshAll = useCallback(() => run("refreshAllMetadata", () => refreshAllMetadata()), []);
 
-    // ─── Stable helpers (FIX 1: useCallback so identity is stable) ───────────
+    // ─── Helpers ──────────────────────────────────────────────────────────────
     const isInWatchlist = useCallback((id) => watchlist.some((w) => w.id === id), [watchlist]);
-
     const isFavourite = useCallback((id) => favourites.some((f) => f.id === id), [favourites]);
-
     const getStreamUrl = useCallback((id) => api.streamUrl(id), []);
-
     const getSubtitleUrl = useCallback((encoded) => api.subtitleUrl(encoded), []);
 
     const toggleWatchlist = useCallback((id, data) => (isInWatchlist(id) ? removeWatchlistItem(id) : addWatchlistItem(id, data)), [isInWatchlist, removeWatchlistItem, addWatchlistItem]);
 
     const toggleFavourite = useCallback((id, data) => (isFavourite(id) ? removeFavouriteItem(id) : addFavouriteItem(id, data)), [isFavourite, removeFavouriteItem, addFavouriteItem]);
 
-    // ─── FIX 2: Auto-fetch with AbortController cleanup ──────────────────────
-    // Each fetch function is stable (useCallback + [] deps), so listing them
-    // here satisfies the exhaustive-deps rule without causing extra re-runs.
+    // ─── Auto-fetch on mount ──────────────────────────────────────────────────
     useEffect(() => {
         const controller = new AbortController();
         const { signal } = controller;
@@ -304,94 +312,87 @@ export function ApiProvider({ children }) {
         fetchWatchlist(signal);
         fetchFavourites(signal);
 
-        // Abort all in-flight requests when the component unmounts or when
-        // React StrictMode double-invokes the effect in development.
         return () => controller.abort();
     }, [fetchMedia, fetchFolders, fetchCategories, fetchHistory, fetchWatchlist, fetchFavourites]);
 
-    // ─── FIX 1: Memoised context value ───────────────────────────────────────
-    // Recreated only when the listed state slices or stable action refs change.
+    // ─── Memoised context value ───────────────────────────────────────────────
     const value = useMemo(
         () => ({
-            // ── data
-            media,
-            movies,
-            series,
-            anime,
-            searchResults,
+            // ── media — use directly: movies.map(...), series.map(...)
+            movies, // /api/media → movies.items
+            series, // /api/media → series.items
+            anime, // /api/media → anime.items
+            searchResults, // /api/media/search → results
+
+            // ── library
             folders,
+
+            // ── categories list (for AllCategory page & CategoryBar)
+            // each item: { name, title, subtitle, total, movies, series, anime }
             categories,
-            categoryMedia,
-            activeCategory,
+
+            // ── single category page (populated after fetchByCategory)
+            categoryData, // raw full response
+            categoryMovies, // categoryData.movies.items
+            categorySeries, // categoryData.series.items
+            categoryAnime, // categoryData.anime.items
+            activeCategory, // name string of current category
+
+            // ── user data
             history,
             watchlist,
             favourites,
 
-            // ── status
+            // ── status maps  e.g. loading.media, loading.categories, errors.media
             loading,
             errors,
 
-            // ── media actions
+            // ── actions
             fetchMedia,
             search,
-
-            // ── library actions
             fetchFolders,
             addLibraryFolder,
             updateLibraryFolder,
             removeLibraryFolder,
-
-            // ── category actions
             fetchCategories,
             fetchByCategory,
-
-            // ── history actions
             fetchHistory,
             logProgress,
             getResume,
             removeHistoryItem,
             clearAllHistory,
-
-            // ── watchlist actions
             fetchWatchlist,
             addWatchlistItem,
             removeWatchlistItem,
-
-            // ── favourite actions
             fetchFavourites,
             addFavouriteItem,
             removeFavouriteItem,
-
-            // ── helpers
             isInWatchlist,
             isFavourite,
             toggleWatchlist,
             toggleFavourite,
             getStreamUrl,
             getSubtitleUrl,
-
-            // ── metadata actions
             refreshOneMetadata,
             refreshAll,
         }),
         [
-            // state
-            media,
             movies,
             series,
             anime,
             searchResults,
             folders,
             categories,
-            categoryMedia,
+            categoryData,
+            categoryMovies,
+            categorySeries,
+            categoryAnime,
             activeCategory,
             history,
             watchlist,
             favourites,
             loading,
             errors,
-            // stable action refs (useCallback [] — only listed so ESLint is happy;
-            // their identities never change after mount)
             fetchMedia,
             search,
             fetchFolders,

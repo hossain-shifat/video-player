@@ -1,16 +1,33 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { useApi } from "../../Context/apiContext";
 import CategoryBar from "../../Components/CategoryBar";
+import MediaRow from "../../Components/MediaRow";
+import { HomeMediaSections } from "./HomeMediaSections";
 
 const Home = () => {
-    const { media, categories, fetchMedia, fetchByCategory, loading, errors } = useApi();
+    const { movies, series, anime, fetchByCategory } = useApi();
 
-    if (loading.media) return <div>Loading...</div>;
-    if (loading.categories) return <div>Loading...</div>;
+    const movieItems = movies?.items ?? movies ?? [];
+    const seriesItems = series?.items ?? series ?? [];
+    const animeItems = anime?.items ?? anime ?? [];
+
+    const handlePlay = (rawItem) => {
+        const base = import.meta.env.VITE_API_URL || "http://localhost:5000";
+        const url = rawItem.streamUrl ? `${base}${rawItem.streamUrl}` : null;
+        if (url) window.open(url, "_blank");
+    };
+
+    const handleTrailer = (normItem) => {
+        const key = normItem.raw?.metadata?.trailer;
+        if (key) window.open(`https://www.youtube.com/watch?v=${key}`, "_blank");
+    };
 
     return (
-        <div>
+        <div className="flex flex-col gap-8">
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
+            {/* TODO: Here Add History As Currently Watchig */}
+
+            <HomeMediaSections movieItems={movieItems} seriesItems={seriesItems} animeItems={animeItems} onPlay={handlePlay} onWatchTrailer={handleTrailer} />
         </div>
     );
 };

@@ -1,7 +1,7 @@
 {
     "name": "media-player-server",
     "version": "1.0.0",
-    "description": "Self-hosted media player backend — alternative to Plex/Jellyfin",
+    "description": "Self-hosted media player backend",
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
