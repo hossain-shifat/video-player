@@ -8,10 +8,14 @@ const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
 const { getMetadata }   = require("../utils/metadataStore");
 const { groupMedia }    = require("../utils/grouper");
 
-// Attaches TMDB metadata to a single file object
+// Attaches TMDB metadata and category (genres) to a single file object
 async function enrich(file) {
     const metadata = await getMetadata(file);
-    return { ...file, metadata };
+    return {
+        ...file,
+        metadata,
+        category: metadata?.genres || [],   // genres array for direct use by frontend
+    };
 }
 
 /**

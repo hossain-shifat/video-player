@@ -7,14 +7,14 @@ const { getSeasonDetails } = require("./tmdb");
 /**
  * Groups a flat enriched media list into:
  * {
- *   movies:  [ { ...file, metadata } ],
- *   series:  [ { title, type, seriesKey, metadata, seasons: { '1': { ...seasonMeta, episodes: [...] } } } ],
+ *   movies:  [ { ...file, parsed, metadata, category } ],
+ *   series:  [ { title, type, seriesKey, metadata, seasons, category } ],
  *   anime:   [ same shape as series ],
- *   unknown: [ files where metadata is null and type could not be determined ]
+ *   unknown: [ files where type could not be determined ]
  * }
  */
 async function groupMedia(flatFiles) {
-    const movies = [];
+    const movieFiles = [];
     const seriesMap = new Map(); // key → series group
     const animeMap = new Map();
     const unknown = [];
@@ -23,7 +23,7 @@ async function groupMedia(flatFiles) {
         const parsed = parseFilename(file.name);
 
         if (parsed.type === "movie") {
-            movies.push({ ...file, parsed });
+            movieFiles.push({ ...file, parsed });
             continue;
         }
 
@@ -61,7 +61,21 @@ async function groupMedia(flatFiles) {
         });
     }
 
-    // ── Enrich series with TMDB ───────────────────────────────────────────────
+    // ── Enrich movies with TMDB metadata ──────────────────────────────────────
+    // Mirrors exactly what categoryController.buildCategoryIndex() does so both
+    // endpoints return identical movie shapes (poster, rating, genres, etc.).
+    const movies = await Promise.all(
+        movieFiles.map(async (movie) => {
+            const metadata = await getMetadata(movie);
+            return {
+                ...movie,
+                metadata,
+                category: metadata?.genres ?? [],
+            };
+        }),
+    );
+
+    // ── Enrich series / anime with TMDB ───────────────────────────────────────
     await enrichGroups(seriesMap);
     await enrichGroups(animeMap);
 
@@ -88,11 +102,11 @@ async function groupMedia(flatFiles) {
                 episodes: seasonOut.episodes,
             };
         }
-        return { ...group, seasons: seasonsObj };
+        return { ...group, seasons: seasonsObj, category: group.metadata?.genres ?? [] };
     }
 
     return {
-        movies: movies,
+        movies,
         series: [...seriesMap.values()].map(sortGroup),
         anime: [...animeMap.values()].map(sortGroup),
         unknown,

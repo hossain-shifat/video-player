@@ -109,8 +109,17 @@ app.use((err, req, res, next) => {
     res.status(status).json({ error: err.message || "Internal server error" });
 });
 
+// Allow all origins for local testing
+// app.use(
+//     cors({
+//         origin: "*",
+//         methods: ["GET", "POST", "PUT", "DELETE"],
+//         allowedHeaders: ["Content-Type", "Authorization"],
+//     }),
+// );
+
 // ─── START ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`\n🎬 Media Server running at http://localhost:${PORT}`);
     console.log(`   Health:  http://localhost:${PORT}/health`);
     console.log(`   Library: http://localhost:${PORT}/api/library`);

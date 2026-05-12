@@ -4,8 +4,10 @@ import { api } from "./client";
 
 /**
  * GET /api/categories
- * Returns all unique genre categories with counts.
- * Response: { total, categories: [{ name, total, movies, series, anime }] }
+ * Response: {
+ *   total,
+ *   categories: [{ name, title, subtitle, total, movies, series, anime }]
+ * }
  */
 export function getCategories() {
     return api.get("/api/categories");
@@ -13,9 +15,16 @@ export function getCategories() {
 
 /**
  * GET /api/categories/:name
- * Returns all media belonging to a specific genre.
+ * Response (no type filter): {
+ *   category, title, subtitle,
+ *   movies: { total, items: [] },
+ *   series: { total, items: [] },
+ *   anime:  { total, items: [] },
+ * }
+ * Response (with ?type=movies|series|anime): { total, items: [] }
+ *
  * @param {string} name  — genre name e.g. "Action"
- * @param {string} type  — optional: "movies" | "series" | "anime"
+ * @param {string} [type] — optional: "movies" | "series" | "anime"
  */
 export function getByCategory(name, type) {
     const qs = type ? `?type=${encodeURIComponent(type)}` : "";

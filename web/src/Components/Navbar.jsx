@@ -37,7 +37,7 @@ const Navbar = () => {
     }, []);
 
     return (
-        <nav className="sticky top-0 w-full bg-base-300 px-4 md:px-6 h-14 flex items-center gap-4 z-50">
+        <nav className="sticky top-0 w-full bg-base-300 px-4 md:px-6 h-14 flex items-center gap-4 z-999999999999">
             {/* Logo */}
             <Logo />
 
@@ -106,7 +106,7 @@ const Navbar = () => {
 
                     {/* Floating profile dropdown */}
                     {profileOpen && (
-                        <div className="absolute right-1 top-14 w-62 bg-base-300 rounded-xl shadow-2xl border border-white/10 overflow-hidden space-y-2">
+                        <div className="absolute right-0 top-14 w-62 bg-base-100 rounded-xl shadow-2xl border border-white/10 overflow-hidden space-y-2">
                             <div className="flex items-center justify-end px-4 pt-3 pb-1">
                                 {/* <span className="text-[11px] font-semibold text-white/40 uppercase tracking-widest">Manage</span> */}
                                 <div className="tooltip tooltip-bottom" data-tip="Close">
