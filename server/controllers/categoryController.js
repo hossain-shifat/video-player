@@ -5,7 +5,6 @@ const { getAllCached } = require("../utils/mediaCache");
 const { getMetadata } = require("../utils/metadataStore");
 const { groupMedia } = require("../utils/grouper");
 
-
 const CATEGORY_META = {
     Action: {
         title: "Action Movies & TV Shows",
@@ -144,7 +143,6 @@ async function buildCategoryIndex(folders) {
 
     return { items, grouped };
 }
-
 
 async function getCategories(req, res) {
     try {

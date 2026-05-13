@@ -19,7 +19,7 @@
       {
         "name": "Aamir Khan",
         "character": "Gulshan Arora",
-        "photo": "https://image.tmdb.org/t/p/w185/ayE2Ot15rqWU3YhPI3Yg8xBzVx7.jpg"
+        "photo": "https://image.tmdb.org/t/p/w185/6uiZSwi2kvd1jZ7X7Xz9W9VGuV4.jpg"
       },
       {
         "name": "Genelia D'Souza",
@@ -79,7 +79,8 @@
       "episode": null,
       "part": null
     },
-    "_cachedAt": "2026-05-10T02:54:13.805Z"
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.116Z"
   },
   "RDpcTWVkaWFcTW92aWVzXDMgSWRpb3RzICgyMDA5KSAxMDgwcCBCbHVSYXkgSGluZGkgeDI2NC5ta3Y": {
     "tmdbId": 20453,
@@ -89,7 +90,7 @@
     "year": 2009,
     "overview": "Rascal. Joker. Dreamer. Genius... You've never met a college student quite like \"Rancho.\" From the moment he arrives at India's most prestigious university, Rancho's outlandish schemes turn the campus upside down—along with the lives of his two newfound best friends. Together, they make life miserable for \"Virus,\" the school’s uptight and heartless dean. But when Rancho catches the eye of the dean's daughter, Virus sets his sights on flunking out the \"3 idiots\" once and for all.",
     "rating": 8,
-    "votes": 2687,
+    "votes": 2688,
     "runtime": 171,
     "genres": [
       "Drama",
@@ -101,7 +102,7 @@
       {
         "name": "Aamir Khan",
         "character": "Ranchoddas \"Rancho\" Chanchad",
-        "photo": "https://image.tmdb.org/t/p/w185/ayE2Ot15rqWU3YhPI3Yg8xBzVx7.jpg"
+        "photo": "https://image.tmdb.org/t/p/w185/6uiZSwi2kvd1jZ7X7Xz9W9VGuV4.jpg"
       },
       {
         "name": "R. Madhavan",
@@ -161,90 +162,178 @@
       "episode": null,
       "part": null
     },
-    "_cachedAt": "2026-05-10T02:54:13.885Z"
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.127Z"
   },
-  "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
-    "tmdbId": 157336,
+  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLkNoYXB0ZXItMi4yMDIyLjcyMHAuSGluZGkuV0VCLURMLjUuMS5FU3ViLngyNjQtSERIdWI0dS5Udi5ta3Y": {
+    "tmdbId": 587412,
     "type": "movie",
-    "title": "Interstellar",
-    "originalTitle": "Interstellar",
-    "year": 2014,
-    "overview": "The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel and conquer the vast distances involved in an interstellar voyage.",
-    "rating": 8.5,
-    "votes": 39593,
-    "runtime": 169,
+    "title": "K.G.F: Chapter 2",
+    "originalTitle": "ಕೆ.ಜಿ.ಎಫ್: Chapter 2",
+    "year": 2022,
+    "overview": "The blood-soaked land of Kolar Gold Fields (KGF) has a new overlord now - Rocky, whose name strikes fear in the heart of his foes. His allies look up to Rocky as their Savior, the government sees him as a threat to law and order; enemies are clamoring for revenge and conspiring for his downfall. Bloodier battles and darker days await as Rocky continues on his quest for unchallenged supremacy.",
+    "rating": 7.4,
+    "votes": 203,
+    "runtime": 168,
     "genres": [
+      "Action",
+      "Thriller",
       "Adventure",
-      "Drama",
-      "Science Fiction"
+      "Crime"
     ],
-    "poster": "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
-    "backdrop": "https://image.tmdb.org/t/p/w1280/2ssWTSVklAEc98frZUQhgtGHx7s.jpg",
+    "poster": "https://image.tmdb.org/t/p/w500/khNVygolU0TxLIDWff5tQlAhZ23.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/nsV5Mfi9FAV4w8eDsdr7uqVswOk.jpg",
     "cast": [
       {
-        "name": "Matthew McConaughey",
-        "character": "Cooper",
-        "photo": "https://image.tmdb.org/t/p/w185/lCySuYjhXix3FzQdS4oceDDrXKI.jpg"
+        "name": "Yash",
+        "character": "Raja Krishnappa Bairya 'Rocky'",
+        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
       },
       {
-        "name": "Anne Hathaway",
-        "character": "Brand",
-        "photo": "https://image.tmdb.org/t/p/w185/s6tflSD20MGz04ZR2R1lZvhmC4Y.jpg"
+        "name": "Sanjay Dutt",
+        "character": "Adheera",
+        "photo": "https://image.tmdb.org/t/p/w185/oq4pnvWhl1HxKpp0KVlSfAr3Tiu.jpg"
       },
       {
-        "name": "Michael Caine",
-        "character": "Professor Brand",
-        "photo": "https://image.tmdb.org/t/p/w185/bVZRMlpjTAO2pJK6v90buFgVbSW.jpg"
+        "name": "Raveena Tandon",
+        "character": "Ramika Sen",
+        "photo": "https://image.tmdb.org/t/p/w185/3ifGMlHKKRFvK9Sg5y2bs5jWUlI.jpg"
       },
       {
-        "name": "Jessica Chastain",
-        "character": "Murph",
-        "photo": "https://image.tmdb.org/t/p/w185/lodMzLKSdrPcBry6TdoDsMN3Vge.jpg"
+        "name": "Srinidhi Shetty",
+        "character": "Reena",
+        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
       },
       {
-        "name": "Casey Affleck",
-        "character": "Tom",
-        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
+        "name": "Archana Jois",
+        "character": "Shanthamma",
+        "photo": "https://image.tmdb.org/t/p/w185/kRmgREIRxLxNKssJMT7YxzNXmFH.jpg"
       },
       {
-        "name": "Wes Bentley",
-        "character": "Doyle",
-        "photo": "https://image.tmdb.org/t/p/w185/voD93lzFZrr9xfAggwFcPRBi84i.jpg"
+        "name": "Achyuth Kumar",
+        "character": "Guru Pandyan",
+        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
       },
       {
-        "name": "Topher Grace",
-        "character": "Getty",
-        "photo": "https://image.tmdb.org/t/p/w185/oJQxl4DG0KSCtOGrpWNhYz9gUZA.jpg"
+        "name": "Rao Ramesh",
+        "character": "Kanneganti Raghavan",
+        "photo": "https://image.tmdb.org/t/p/w185/jzO0wN21tEcmz0haekvliQU91JM.jpg"
       },
       {
-        "name": "Mackenzie Foy",
-        "character": "Murph (10 Yrs.)",
-        "photo": "https://image.tmdb.org/t/p/w185/gW9BdiA9eooBWa5bzHWkV7rbTa8.jpg"
+        "name": "Ayyappa P. Sharma",
+        "character": "Vanaram",
+        "photo": null
       },
       {
-        "name": "Ellen Burstyn",
-        "character": "Murph (older)",
-        "photo": "https://image.tmdb.org/t/p/w185/uEHZoAtCnGCXvQDHe3s3DWW2G1c.jpg"
+        "name": "Easwari Rao",
+        "character": "Farmaan's mother",
+        "photo": "https://image.tmdb.org/t/p/w185/fjyvQ45YZcovy2Egj2eux8UiuHU.jpg"
       },
       {
-        "name": "John Lithgow",
-        "character": "Donald",
-        "photo": "https://image.tmdb.org/t/p/w185/ajfuBSm1HuVqFJlbTmAlza62Xxr.jpg"
+        "name": "Saran Shakthi",
+        "character": "Farmaan",
+        "photo": "https://image.tmdb.org/t/p/w185/wggtMYbkCfCsfZvUDKC6jXuweJ9.jpg"
       }
     ],
-    "trailer": "LY19rHKAaAg",
-    "tagline": "Mankind was born on Earth. It was never meant to die here.",
+    "trailer": null,
+    "tagline": "The World Is My Territory",
     "status": "Released",
-    "language": "en",
+    "language": "kn",
     "parsed": {
-      "title": "Interstellar",
+      "title": "K G F Chapter-2",
       "type": "movie",
-      "year": 2014,
+      "year": 2022,
       "season": null,
       "episode": null,
       "part": null
     },
-    "_cachedAt": "2026-05-10T02:54:14.076Z"
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.129Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLUNoYXB0ZXIuMS4yMDE4LkhpbmRpLjcyMHAuV0VCLURMLkRENS4xLkVTdWIueDI2NC1IREh1YjR1LlVuby5ta3Y": {
+    "tmdbId": 564147,
+    "type": "movie",
+    "title": "K.G.F: Chapter 1",
+    "originalTitle": "ಕೆಜಿಎಫ್ ಅಧ್ಯಾಯ ೧",
+    "year": 2018,
+    "overview": "A period drama set in the 1970s, KGF follows the story of a fierce rebel who rises against the brutal oppression in Kolar Gold Fields and becomes the symbol of hope to legions of downtrodden people.",
+    "rating": 7.5,
+    "votes": 273,
+    "runtime": 156,
+    "genres": [
+      "Action",
+      "Thriller",
+      "Adventure",
+      "Crime"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/ltHlJwvxKv7d0ooCiKSAvfwV9tX.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/4i1ofsSpfTuswHXcgPtXbZrSnoe.jpg",
+    "cast": [
+      {
+        "name": "Yash",
+        "character": "Rocky / Raja Krishnappa Bairya",
+        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
+      },
+      {
+        "name": "Srinidhi Shetty",
+        "character": "Reena",
+        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
+      },
+      {
+        "name": "Ramachandra Raju",
+        "character": "Garuda",
+        "photo": "https://image.tmdb.org/t/p/w185/kU1a4H8o1IQA25Lyq3cW70aufhT.jpg"
+      },
+      {
+        "name": "Archana Jois",
+        "character": "Shanthamma / Rocky's Mother",
+        "photo": "https://image.tmdb.org/t/p/w185/kRmgREIRxLxNKssJMT7YxzNXmFH.jpg"
+      },
+      {
+        "name": "Anant Nag",
+        "character": "Anand Ingalagi",
+        "photo": "https://image.tmdb.org/t/p/w185/4XeYuoZX15cks43HRavV75RjlmN.jpg"
+      },
+      {
+        "name": "Vasishta N. Simha",
+        "character": "Kamal",
+        "photo": "https://image.tmdb.org/t/p/w185/lHriwmzxVYLwU9pxfSfa9S4RzSp.jpg"
+      },
+      {
+        "name": "Achyuth Kumar",
+        "character": "Guru Pandian",
+        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
+      },
+      {
+        "name": "Ayyappa P. Sharma",
+        "character": "Vanaram",
+        "photo": null
+      },
+      {
+        "name": "Malavika Avinash",
+        "character": "Deepa Hegde",
+        "photo": "https://image.tmdb.org/t/p/w185/1D3J1HIRP4gm0bYzrOdF2AmreV5.jpg"
+      },
+      {
+        "name": "B. S. Avinash",
+        "character": "Andrews",
+        "photo": "https://image.tmdb.org/t/p/w185/dhAScRQuHfOuUCEBM38NFUoyP4C.jpg"
+      }
+    ],
+    "trailer": "3oxo-wacE50",
+    "tagline": "From The Streets Of Mumbai...To The Bloody Gold Mines Of Kolar",
+    "status": "Released",
+    "language": "kn",
+    "parsed": {
+      "title": "K G F-Chapter",
+      "type": "movie",
+      "year": 2018,
+      "season": null,
+      "episode": null,
+      "part": null
+    },
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.128Z"
   },
   "RDpcTWVkaWFcTW92aWVzXFByb2plY3QgSGFpbCBNYXJ5ICgyMDI2KSAxMDgwcCBQUkUtSEQgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
     "tmdbId": 687163,
@@ -253,20 +342,20 @@
     "originalTitle": "Project Hail Mary",
     "year": 2026,
     "overview": "Science teacher Ryland Grace wakes up on a spaceship light years from home with no recollection of who he is or how he got there. As his memory returns, he begins to uncover his mission: solve the riddle of the mysterious substance causing the sun to die out. He must call on his scientific knowledge and unorthodox ideas to save everything on Earth from extinction.",
-    "rating": 8.2,
-    "votes": 1989,
+    "rating": 8.4,
+    "votes": 2511,
     "runtime": 157,
     "genres": [
       "Science Fiction",
       "Adventure"
     ],
     "poster": "https://image.tmdb.org/t/p/w500/yihdXomYb5kTeSivtFndMy5iDmf.jpg",
-    "backdrop": "https://image.tmdb.org/t/p/w1280/8Tfys3mDZVp4tNoH2ktm06a0Tau.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/fFyLcR22R4ynrecqjMniKXm0UTp.jpg",
     "cast": [
       {
         "name": "Ryan Gosling",
         "character": "Ryland Grace",
-        "photo": "https://image.tmdb.org/t/p/w185/lyUyVARQKhGxaxy0FbPJCQRpiaW.jpg"
+        "photo": "https://image.tmdb.org/t/p/w185/k50021gkK92Lx6m99pBy6FUOvNf.jpg"
       },
       {
         "name": "Sandra Hüller",
@@ -326,7 +415,620 @@
       "episode": null,
       "part": null
     },
-    "_cachedAt": "2026-05-10T02:54:14.123Z"
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.163Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
+    "tmdbId": 157336,
+    "type": "movie",
+    "title": "Interstellar",
+    "originalTitle": "Interstellar",
+    "year": 2014,
+    "overview": "The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel and conquer the vast distances involved in an interstellar voyage.",
+    "rating": 8.5,
+    "votes": 39631,
+    "runtime": 169,
+    "genres": [
+      "Adventure",
+      "Drama",
+      "Science Fiction"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/2ssWTSVklAEc98frZUQhgtGHx7s.jpg",
+    "cast": [
+      {
+        "name": "Matthew McConaughey",
+        "character": "Cooper",
+        "photo": "https://image.tmdb.org/t/p/w185/lCySuYjhXix3FzQdS4oceDDrXKI.jpg"
+      },
+      {
+        "name": "Anne Hathaway",
+        "character": "Brand",
+        "photo": "https://image.tmdb.org/t/p/w185/s6tflSD20MGz04ZR2R1lZvhmC4Y.jpg"
+      },
+      {
+        "name": "Michael Caine",
+        "character": "Professor Brand",
+        "photo": "https://image.tmdb.org/t/p/w185/bVZRMlpjTAO2pJK6v90buFgVbSW.jpg"
+      },
+      {
+        "name": "Jessica Chastain",
+        "character": "Murph",
+        "photo": "https://image.tmdb.org/t/p/w185/lodMzLKSdrPcBry6TdoDsMN3Vge.jpg"
+      },
+      {
+        "name": "Casey Affleck",
+        "character": "Tom",
+        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
+      },
+      {
+        "name": "Wes Bentley",
+        "character": "Doyle",
+        "photo": "https://image.tmdb.org/t/p/w185/voD93lzFZrr9xfAggwFcPRBi84i.jpg"
+      },
+      {
+        "name": "Topher Grace",
+        "character": "Getty",
+        "photo": "https://image.tmdb.org/t/p/w185/oJQxl4DG0KSCtOGrpWNhYz9gUZA.jpg"
+      },
+      {
+        "name": "Mackenzie Foy",
+        "character": "Murph (10 Yrs.)",
+        "photo": "https://image.tmdb.org/t/p/w185/gW9BdiA9eooBWa5bzHWkV7rbTa8.jpg"
+      },
+      {
+        "name": "Ellen Burstyn",
+        "character": "Murph (older)",
+        "photo": "https://image.tmdb.org/t/p/w185/zGihSIVRzwmCqilnA4PmNM4C2RT.jpg"
+      },
+      {
+        "name": "John Lithgow",
+        "character": "Donald",
+        "photo": "https://image.tmdb.org/t/p/w185/ajfuBSm1HuVqFJlbTmAlza62Xxr.jpg"
+      }
+    ],
+    "trailer": "LY19rHKAaAg",
+    "tagline": "Mankind was born on Earth. It was never meant to die here.",
+    "status": "Released",
+    "language": "en",
+    "parsed": {
+      "title": "Interstellar",
+      "type": "movie",
+      "year": 2014,
+      "season": null,
+      "episode": null,
+      "part": null
+    },
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:14.210Z"
+  },
+  "RDpcTWVkaWFcU2VyaWVzXEJyZWFraW5nLkJhZC5TMDEuNzIwcC5IRVZDLkJsdVJheS5IaW5kaS5PUkctRW5nbGlzaC5FU3ViLngyNjUtSERIdWI0dS5UdlxCcmVha2luZy5CYWQuUzAxLkUwMS43MjBwLkhFVkMuQmx1UmF5LkhpbmRpLk9SRy1FbmdsaXNoLkVTdWIueDI2NS1IREh1YjR1LlR2Lm1rdg": {
+    "tmdbId": 1396,
+    "type": "series",
+    "title": "Breaking Bad",
+    "originalTitle": "Breaking Bad",
+    "year": 2008,
+    "overview": "Walter White, a New Mexico chemistry teacher, is diagnosed with Stage III cancer and given a prognosis of only two years left to live. He becomes filled with a sense of fearlessness and an unrelenting desire to secure his family's financial future at any cost as he enters the dangerous world of drugs and crime.",
+    "rating": 8.9,
+    "votes": 17682,
+    "genres": [
+      "Drama",
+      "Crime"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+    "totalSeasons": 5,
+    "totalEpisodes": 62,
+    "status": "Ended",
+    "cast": [
+      {
+        "name": "Bryan Cranston",
+        "character": "Walter White",
+        "photo": "https://image.tmdb.org/t/p/w185/npIIZJGSrcJIJ6yHdmbqO6Jzo5I.jpg"
+      },
+      {
+        "name": "Aaron Paul",
+        "character": "Jesse Pinkman",
+        "photo": "https://image.tmdb.org/t/p/w185/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg"
+      },
+      {
+        "name": "Anna Gunn",
+        "character": "Skyler White",
+        "photo": "https://image.tmdb.org/t/p/w185/adppyeu1a4REN3khtgmXusrapFi.jpg"
+      },
+      {
+        "name": "RJ Mitte",
+        "character": "Walter White Jr.",
+        "photo": "https://image.tmdb.org/t/p/w185/sNPA92ZrssYhlaB1UA2pWcLD9db.jpg"
+      },
+      {
+        "name": "Dean Norris",
+        "character": "Hank Schrader",
+        "photo": "https://image.tmdb.org/t/p/w185/mKRrEbsxAX3ro700HsViFArRM7l.jpg"
+      },
+      {
+        "name": "Betsy Brandt",
+        "character": "Marie Schrader",
+        "photo": "https://image.tmdb.org/t/p/w185/xAnuzyjdMbQq9L1c4JNwXL52Wm4.jpg"
+      },
+      {
+        "name": "Bob Odenkirk",
+        "character": "Saul Goodman",
+        "photo": "https://image.tmdb.org/t/p/w185/rF0Lb6SBhGSTvjRffmlKRSeI3jE.jpg"
+      },
+      {
+        "name": "Jonathan Banks",
+        "character": "Mike Ehrmantraut",
+        "photo": "https://image.tmdb.org/t/p/w185/bswk26L13PvY4iMTwUTAsepXCLv.jpg"
+      }
+    ],
+    "trailer": "XZ8daibM3AE",
+    "language": "en",
+    "seasonDetails": {
+      "seasonNumber": 1,
+      "name": "Season 1",
+      "overview": "High school chemistry teacher Walter White's life is suddenly transformed by a dire medical diagnosis. Street-savvy former student Jesse Pinkman \"teaches\" Walter a new trade.",
+      "poster": "https://image.tmdb.org/t/p/w500/1BP4xYv9ZG4ZVHkL7ocOziBbSYH.jpg",
+      "episodes": [
+        {
+          "episode": 1,
+          "title": "Pilot",
+          "overview": "When an unassuming high school chemistry teacher discovers he has a rare form of lung cancer, he decides to team up with a former student and create a top of the line crystal meth in a used RV, to provide for his family once he is gone.",
+          "airDate": "2008-01-20",
+          "runtime": 59,
+          "still": "https://image.tmdb.org/t/p/w300/ydlY3iPfeOAvu8gVqrxPoMvzNCn.jpg",
+          "rating": 8.5
+        },
+        {
+          "episode": 2,
+          "title": "Cat's in the Bag...",
+          "overview": "Walt and Jesse attempt to tie up loose ends. The desperate situation gets more complicated with the flip of a coin. Walt's wife, Skyler, becomes suspicious of Walt's strange behavior.",
+          "airDate": "2008-01-27",
+          "runtime": 49,
+          "still": "https://image.tmdb.org/t/p/w300/AbMoecO0ZZio0LcgeLxlzdyGs6X.jpg",
+          "rating": 8.2
+        },
+        {
+          "episode": 3,
+          "title": "...And the Bag's in the River",
+          "overview": "Walter fights with Jesse over his drug use, causing him to leave Walter alone with their captive, Krazy-8. Meanwhile, Hank has a scared straight moment with Walter Jr. after his aunt discovers he has been smoking pot. Also, Skylar is upset when Walter stays away from home.",
+          "airDate": "2008-02-10",
+          "runtime": 49,
+          "still": "https://image.tmdb.org/t/p/w300/2kBeBlxGqBOdWlKwzAxiwkfU5on.jpg",
+          "rating": 8.4
+        },
+        {
+          "episode": 4,
+          "title": "Cancer Man",
+          "overview": "Walter finally tells his family that he has been stricken with cancer. Meanwhile, the DEA believes Albuquerque has a new, big time player to worry about. Meanwhile, a worthy recipient is the target of a depressed Walter's anger, and Jesse makes a surprise visit to his parents home.",
+          "airDate": "2008-02-17",
+          "runtime": 49,
+          "still": "https://image.tmdb.org/t/p/w300/2UbRgW6apE4XPzhHPA726wUFyaR.jpg",
+          "rating": 7.9
+        },
+        {
+          "episode": 5,
+          "title": "Gray Matter",
+          "overview": "Walter and Skyler attend a former colleague's party. Jesse tries to free himself from the drugs, while Skyler organizes an intervention.",
+          "airDate": "2008-02-24",
+          "runtime": 49,
+          "still": "https://image.tmdb.org/t/p/w300/82G3wZgEvZLKcte6yoZJahUWBtx.jpg",
+          "rating": 8.1
+        },
+        {
+          "episode": 6,
+          "title": "Crazy Handful of Nothin'",
+          "overview": "The side effects of chemo begin to plague Walt. Meanwhile, the DEA rounds up suspected dealers.",
+          "airDate": "2008-03-02",
+          "runtime": 49,
+          "still": "https://image.tmdb.org/t/p/w300/rCCLuycNPL30W3BtuB8HafxEMYz.jpg",
+          "rating": 8.9
+        },
+        {
+          "episode": 7,
+          "title": "A No Rough Stuff Type Deal",
+          "overview": "Walter accepts his new identity as a drug dealer after a PTA meeting. Elsewhere, Jesse decides to put his aunt's house on the market and Skyler is the recipient of a baby shower.",
+          "airDate": "2008-03-09",
+          "runtime": 48,
+          "still": "https://image.tmdb.org/t/p/w300/1dgFAsajUpUT7DLXgAxHb9GyXHH.jpg",
+          "rating": 8.4
+        }
+      ]
+    },
+    "parsed": {
+      "title": "Breaking Bad",
+      "type": "series",
+      "year": null,
+      "season": 1,
+      "episode": 1,
+      "part": null
+    },
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:17.280Z"
+  },
+  "RDpcTWVkaWFcU2VyaWVzXEZhcnppLlMwMS43MjBwLkhFVkMuSGluZGkuV0VCLURMLjUuMS5FU3ViLngyNjUtSERIdWI0dS5UdlxGYXJ6aS5TMDEuRTAxLjcyMHAuSEVWQy5IaW5kaS5XRUItREw1LjEuRVN1Yi54MjY1LUhESHViNHUuVHYubWt2": {
+    "tmdbId": 132117,
+    "type": "series",
+    "title": "Farzi",
+    "originalTitle": "फर्जी",
+    "year": 2023,
+    "overview": "Sunny, a brilliant small-time artist is catapulted into the high-stakes world of counterfeiting when he creates the perfect fake currency note, even as Michael, a fiery, unorthodox task force officer wants to rid the country of the counterfeiting menace. In this thrilling cat-and-mouse race, losing is not an option!",
+    "rating": 7.7,
+    "votes": 161,
+    "genres": [
+      "Drama",
+      "Crime"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/cTS86RwEBIDgCgUmjWQTSoPsK6p.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/rGkjtv6UdL1ysDmZuBjbNl3PAA1.jpg",
+    "totalSeasons": 2,
+    "totalEpisodes": 8,
+    "status": "Returning Series",
+    "cast": [
+      {
+        "name": "Shahid Kapoor",
+        "character": "Sunny / Artist",
+        "photo": "https://image.tmdb.org/t/p/w185/q5jqLRioZgIVjXpKS8XHx27ScDQ.jpg"
+      },
+      {
+        "name": "Vijay Sethupathi",
+        "character": "Michael Vedanayagam",
+        "photo": "https://image.tmdb.org/t/p/w185/6qaMCgZ4MMBMYvTYEKCjLIdq0B5.jpg"
+      },
+      {
+        "name": "Kay Kay Menon",
+        "character": "Mansoor Dalal",
+        "photo": "https://image.tmdb.org/t/p/w185/lcCMzGpxHXTStLMN7G9SQovxSQo.jpg"
+      },
+      {
+        "name": "Bhuvan Arora",
+        "character": "Firoz",
+        "photo": "https://image.tmdb.org/t/p/w185/AtEfX9ta8LZTWh7yZ4dVc2wpIRO.jpg"
+      },
+      {
+        "name": "Raashii Khanna",
+        "character": "Megha Vyas",
+        "photo": "https://image.tmdb.org/t/p/w185/8nx3hzFdge51Cb5BcocIe4ShumU.jpg"
+      },
+      {
+        "name": "Chittaranjan Giri",
+        "character": "Yasir Chacha",
+        "photo": "https://image.tmdb.org/t/p/w185/guaB9EP5Md4MgX1FUKN5eSLhzvl.jpg"
+      },
+      {
+        "name": "Amol Palekar",
+        "character": "Madhav Nanu",
+        "photo": "https://image.tmdb.org/t/p/w185/kUnejDjArzNVxouIaIj3WxxC83G.jpg"
+      },
+      {
+        "name": "Zakir Hussain",
+        "character": "Pawan Gahlot",
+        "photo": "https://image.tmdb.org/t/p/w185/etiL0ANjzBhTiyvUblZl6vwIog9.jpg"
+      },
+      {
+        "name": "Jaswant Singh Dalal",
+        "character": "Shekhar",
+        "photo": null
+      }
+    ],
+    "trailer": "KQdgKpNYho8",
+    "language": "hi",
+    "seasonDetails": {
+      "seasonNumber": 1,
+      "name": "Season 1",
+      "overview": "Sunny, a brilliant small-time artist is catapulted into the high-stakes world of counterfeiting when he creates the perfect fake currency note, even as Michael, a fiery, unorthodox task force officer wants to rid the country of the counterfeiting menace. In this thrilling cat-and-mouse race, losing is not an option!",
+      "poster": "https://image.tmdb.org/t/p/w500/cTS86RwEBIDgCgUmjWQTSoPsK6p.jpg",
+      "episodes": [
+        {
+          "episode": 1,
+          "title": "Artist",
+          "overview": "To save his beloved grandpa's printing press from going under, brilliant artist Sunny comes up with an ingenious but dangerous plan. A determined officer, Michael, corners his arch-nemesis, counterfeiting kingpin Mansoor Dalal.",
+          "airDate": "2023-02-10",
+          "runtime": 60,
+          "still": "https://image.tmdb.org/t/p/w300/7YG4IHXbT2WdSTciAKOKDyvxMEA.jpg",
+          "rating": 8.9
+        },
+        {
+          "episode": 2,
+          "title": "Social Service",
+          "overview": "Sunny's plan works, but there is no end to greed. Michael tries to get an anti-counterfeiting task force sanctioned. Megha’s passion project has no takers among the powers that be.",
+          "airDate": "2023-02-10",
+          "runtime": 62,
+          "still": "https://image.tmdb.org/t/p/w300/uXketH7QzzZLCd5QtGx3Newdec6.jpg",
+          "rating": 8.5
+        },
+        {
+          "episode": 3,
+          "title": "CCFART",
+          "overview": "CCFART is formed. Sunny and Firoz accept a deal almost too large for them. Michael gate-crashes his son’s birthday party even though he is not invited. Michael hires Megha, but she steps on a few toes trying to track down the ‘artist’ who made the sandwich note.",
+          "airDate": "2023-02-10",
+          "runtime": 60,
+          "still": "https://image.tmdb.org/t/p/w300/hVaVxBTxVi9KkZNqDRvM7EdTdJu.jpg",
+          "rating": 7.6
+        },
+        {
+          "episode": 4,
+          "title": "Dhanrakshak",
+          "overview": "Dhanrakshak is launched, a huge victory for CCFART. Michael’s attempts to reconcile with his wife only push her further away. A rattled Sunny looks for his missing Grandpa, with no help from the inept bureaucracy. Mansoor’s operations are threatened by Dhanrakshak, and he needs a new note that can fool the new scanner.",
+          "airDate": "2023-02-10",
+          "runtime": 52,
+          "still": "https://image.tmdb.org/t/p/w300/3UGF1rLKZrP77FM6Gv8XRp2OCb0.jpg",
+          "rating": 9
+        },
+        {
+          "episode": 5,
+          "title": "Second Oldest Profession",
+          "overview": "Sunny cracks the Supernote. Michael gets a breakthrough in Bangladesh. Mansoor feels pressure from his bosses, and wants Sunny to take on a bigger role in his organisation. Megha finally finds someone she might be romantically interested in.",
+          "airDate": "2023-02-10",
+          "runtime": 60,
+          "still": "https://image.tmdb.org/t/p/w300/h6oSTKXZQ4ikXLQGfv0Lw4KQLuf.jpg",
+          "rating": 9.3
+        },
+        {
+          "episode": 6,
+          "title": "Cat and Mouse",
+          "overview": "Sunny has a mole in CCFART. Michael has a mole in Mansoor's organisation. Sunny adopts a risky plan, \"Trojan Horse\" to smuggle a huge shipment of notes to India.",
+          "airDate": "2023-02-10",
+          "runtime": 42,
+          "still": "https://image.tmdb.org/t/p/w300/ydtbocjEl3UJxz6ZN4n6Uaz6heW.jpg",
+          "rating": 10
+        },
+        {
+          "episode": 7,
+          "title": "Supernote",
+          "overview": "Sunny and Firoz love living the high life, as Sunny finds himself falling in love with Megha. Megha uncovers an important secret about the Supernote. Michael does something unorthodox to spur Minister Gahlot into action. Mansoor desperately needs to bring the cash into market.",
+          "airDate": "2023-02-10",
+          "runtime": 53,
+          "still": "https://image.tmdb.org/t/p/w300/hrPqN4qnIuFgmtvamvpb7MI2jd9.jpg",
+          "rating": 8
+        },
+        {
+          "episode": 8,
+          "title": "Crash and Burn",
+          "overview": "A trap is laid! Sunny and Firoz almost get caught. Michael, not one to give up, has yet another plan! Mansoor's very existence is at stake. Megha is very close to uncovering a devastating truth. Sunny pays a price too heavy for his tryst with crime.",
+          "airDate": "2023-02-10",
+          "runtime": 67,
+          "still": "https://image.tmdb.org/t/p/w300/c9bNHNLW6e6RVfhynO7nkTX4LQj.jpg",
+          "rating": 9.7
+        }
+      ]
+    },
+    "parsed": {
+      "title": "Farzi",
+      "type": "series",
+      "year": null,
+      "season": 1,
+      "episode": 1,
+      "part": null
+    },
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:18.847Z"
+  },
+  "RDpcTWVkaWFcU2VyaWVzXE1vbmV5IEhlaXN0IFMwMSBEdWFsIEF1ZGlvIHtIaW5kaS1FbmdsaXNofSA3MjBwIEhFVkMgLSBWZWdhbW92aWVzLnRvXE1vbmV5IEhlaXN0IFMwMUUwMSBEdWFsIEF1ZGlvIHtIaW5kaS1FbmdsaXNofSA3MjBwIEhFVkMgLSBWZWdhbW92aWVzLk5MLm1rdg": {
+    "tmdbId": 71446,
+    "type": "series",
+    "title": "Money Heist",
+    "originalTitle": "La casa de papel",
+    "year": 2017,
+    "overview": "To carry out the biggest heist in history, a mysterious man called The Professor recruits a band of eight robbers who have a single characteristic: none of them has anything to lose. Five months of seclusion - memorizing every step, every detail, every probability - culminate in eleven days locked up in the National Coinage and Stamp Factory of Spain, surrounded by police forces and with dozens of hostages in their power, to find out whether their suicide wager will lead to everything or nothing.",
+    "rating": 8.2,
+    "votes": 19390,
+    "genres": [
+      "Crime",
+      "Drama"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/reEMJA1uzscCbkpeRJeTT2bjqUp.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/gFZriCkpJYsApPZEF3jhxL4yLzG.jpg",
+    "totalSeasons": 3,
+    "totalEpisodes": 41,
+    "status": "Ended",
+    "cast": [
+      {
+        "name": "Úrsula Corberó",
+        "character": "Tokio",
+        "photo": "https://image.tmdb.org/t/p/w185/cmH8Z459tw9YkR61QfxlCSlZw9P.jpg"
+      },
+      {
+        "name": "Itziar Ituño",
+        "character": "Raquel Murillo",
+        "photo": "https://image.tmdb.org/t/p/w185/l7XfYka8XxPj0fYjq22lvyxkJ7S.jpg"
+      },
+      {
+        "name": "Álvaro Morte",
+        "character": "Profesor",
+        "photo": "https://image.tmdb.org/t/p/w185/2TGPhdpRC5wjdFEJqnLYiN5kbwg.jpg"
+      },
+      {
+        "name": "Pedro Alonso",
+        "character": "Berlín",
+        "photo": "https://image.tmdb.org/t/p/w185/38HeVKeOBztVYrLJOWzAtEZiB02.jpg"
+      },
+      {
+        "name": "Miguel Herrán",
+        "character": "Río",
+        "photo": "https://image.tmdb.org/t/p/w185/eFNlbsaMODCHys35ZQOkMQNh0Jq.jpg"
+      },
+      {
+        "name": "Esther Acebo",
+        "character": "Estocolmo",
+        "photo": "https://image.tmdb.org/t/p/w185/d7N6RWdMQmTI7wL44Ys4uvuSIoQ.jpg"
+      },
+      {
+        "name": "Jaime Lorente",
+        "character": "Denver",
+        "photo": "https://image.tmdb.org/t/p/w185/nLaxzU92z14FIbe25sE8jDMIThZ.jpg"
+      },
+      {
+        "name": "Najwa Nimri",
+        "character": "Alicia Sierra",
+        "photo": "https://image.tmdb.org/t/p/w185/qwFICDukwvAepZmtd0G5mH1lniU.jpg"
+      },
+      {
+        "name": "Enrique Arce",
+        "character": "Arturo Román",
+        "photo": "https://image.tmdb.org/t/p/w185/1lACQepfukuZ0l6FnUpMO03WxcJ.jpg"
+      },
+      {
+        "name": "Rodrigo de la Serna",
+        "character": "Palermo",
+        "photo": "https://image.tmdb.org/t/p/w185/hArSCSwj92ItqVMni7D8ehInnU5.jpg"
+      }
+    ],
+    "trailer": "_InqQJRqGW4",
+    "language": "es",
+    "seasonDetails": {
+      "seasonNumber": 1,
+      "name": "Season 1",
+      "overview": "Under the guidance of The Professor, a group of eight very peculiar robbers have attacked the National Coinage and Stamp Factory of Spain and took hostages to carry out the most perfect robbery in the history, aiming to take home 2.4 billion Euros in cash.",
+      "poster": "https://image.tmdb.org/t/p/w500/Al5ry93VbvtKACIUYoDjI4u4VWC.jpg",
+      "episodes": [
+        {
+          "episode": 1,
+          "title": "Episode 1",
+          "overview": "The Professor recruits a young female robber and seven other criminals for a grand heist, targeting the Royal Mint of Spain.",
+          "airDate": "2017-05-02",
+          "runtime": 48,
+          "still": "https://image.tmdb.org/t/p/w300/wKpQvdfzsOf7hKWwU0H8sSXZh1T.jpg",
+          "rating": 8.1
+        },
+        {
+          "episode": 2,
+          "title": "Episode 2",
+          "overview": "Hostage negotiator Raquel makes initial contact with the Professor. Police grab an image of the face of one of the robbers.",
+          "airDate": "2017-05-09",
+          "runtime": 42,
+          "still": "https://image.tmdb.org/t/p/w300/bxrCLKigYre6WfR8GyNJ4u0FBlX.jpg",
+          "rating": 8
+        },
+        {
+          "episode": 3,
+          "title": "Episode 3",
+          "overview": "Raquel suffers a personal crisis with her ex. The hostages are frightened by the gunshots they overheard. The thieves argue among themselves.",
+          "airDate": "2017-05-16",
+          "runtime": 51,
+          "still": "https://image.tmdb.org/t/p/w300/mS4EuitwU6QJuZZcy9ndDGDmgEp.jpg",
+          "rating": 7.7
+        },
+        {
+          "episode": 4,
+          "title": "Episode 4",
+          "overview": "The thieves let a medical team enter the Mint, and an undercover policemansneaks in with them. Can the Professor stay one step ahead of Raquel?",
+          "airDate": "2017-05-23",
+          "runtime": 52,
+          "still": "https://image.tmdb.org/t/p/w300/h1Jt1XUkSdUGf2NM4PK1yN463tN.jpg",
+          "rating": 7.8
+        },
+        {
+          "episode": 5,
+          "title": "Episode 5",
+          "overview": "Rio is disturbed by news he sees on the television. A break in the investigation puts the Professor at risk of being discovered.",
+          "airDate": "2017-05-30",
+          "runtime": 72,
+          "still": "https://image.tmdb.org/t/p/w300/w0IbY3aetrS01ZV0YySsLK1ypIA.jpg",
+          "rating": 7.9
+        },
+        {
+          "episode": 6,
+          "title": "Episode 6",
+          "overview": "Berlin seeks revenge once his identity is revealed in the press. Tokyo catches Alison chatting with Rio and confronts her.",
+          "airDate": "2017-06-06",
+          "runtime": 78,
+          "still": "https://image.tmdb.org/t/p/w300/rGfZXEba8shIyNViwSuPbGwHenw.jpg",
+          "rating": 7.8
+        },
+        {
+          "episode": 7,
+          "title": "Episode 7",
+          "overview": "Raquel enters the Mint to secure proof of life that all of the hostages are still alive and well. Nairobi gives Alison advice.",
+          "airDate": "2017-06-13",
+          "runtime": 70,
+          "still": "https://image.tmdb.org/t/p/w300/mTcAokdfaHN7DNvU9BrBKQmuEf0.jpg",
+          "rating": 7.8
+        },
+        {
+          "episode": 8,
+          "title": "Episode 8",
+          "overview": "Arturo formulates an escape plan for a group of hostages. Ángel and Raquel question each other's loyalties. Mónica makes a move on Denver.",
+          "airDate": "2017-06-20",
+          "runtime": 71,
+          "still": "https://image.tmdb.org/t/p/w300/1q5agV2ROKY4nIHD0Sv5PyLONyW.jpg",
+          "rating": 7.9
+        },
+        {
+          "episode": 9,
+          "title": "Episode 9",
+          "overview": "The Professor reveals who gave him the idea for the plan. At the Mint, the thieves offer the hostages a decision: money or freedom?",
+          "airDate": "2017-06-27",
+          "runtime": 75,
+          "still": "https://image.tmdb.org/t/p/w300/l4ctte6pCdonsB4AW3wAR0Lt7Bg.jpg",
+          "rating": 8.2
+        },
+        {
+          "episode": 10,
+          "title": "Episode 10",
+          "overview": "As forensic experts comb the Toledocountry house for DNA, the Professor loses control. Inside the Mint, the robbers' nerves reach a breaking point.",
+          "airDate": "2017-10-16",
+          "runtime": 69,
+          "still": "https://image.tmdb.org/t/p/w300/o2ohwlIbzDRVP5XFLTF2VFpDiYD.jpg",
+          "rating": 8.1
+        },
+        {
+          "episode": 11,
+          "title": "Episode 11",
+          "overview": "The police interrogate the first robber to be captured. Furious over Berlin's recent actions, Rio takes a stand against him.",
+          "airDate": "2017-10-23",
+          "runtime": 67,
+          "still": "https://image.tmdb.org/t/p/w300/ixduWz2wsNmxJ7gocG5xWkyDjJd.jpg",
+          "rating": 7.9
+        },
+        {
+          "episode": 12,
+          "title": "Episode 12",
+          "overview": "Recognizing their plan isn't working out, the robbers instead aim to win over the public via the press. Raquel sets a trap to capture the Professor.",
+          "airDate": "2017-11-02",
+          "runtime": 70,
+          "still": "https://image.tmdb.org/t/p/w300/AbABGEWs2IkvStrqyeBxbwmMlUV.jpg",
+          "rating": 8
+        },
+        {
+          "episode": 13,
+          "title": "Episode 13",
+          "overview": "Arturo faces harsh consequences for trying to set another escape plan in motion. After making a confession, Moscow loses Denver's trust.",
+          "airDate": "2017-11-09",
+          "runtime": 74,
+          "still": "https://image.tmdb.org/t/p/w300/oy19Zieotq2GK5gjTM7gyYl24wu.jpg",
+          "rating": 8.2
+        },
+        {
+          "episode": 14,
+          "title": "Episode 14",
+          "overview": "When Raquel's relationship with the Professor is discovered and she's removed from the case, she decides to conduct her own search for the mastermind.",
+          "airDate": "2017-11-16",
+          "runtime": 69,
+          "still": "https://image.tmdb.org/t/p/w300/hJb0sOE99VNSFmXTeXSiGKUhsz5.jpg",
+          "rating": 8.3
+        },
+        {
+          "episode": 15,
+          "title": "Episode 15",
+          "overview": "As the police enter the Mint, Berlín leads the robbers in a final showdown. Will they escape with the 984 million euros—and with their lives intact?",
+          "airDate": "2017-11-23",
+          "runtime": 70,
+          "still": "https://image.tmdb.org/t/p/w300/rrYS8n8hcEPTMmXIA0SpBW7AKei.jpg",
+          "rating": 8.8
+        }
+      ]
+    },
+    "parsed": {
+      "title": "Money Heist",
+      "type": "series",
+      "year": null,
+      "season": 1,
+      "episode": 1,
+      "part": null
+    },
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:22.366Z"
   },
   "RDpcTWVkaWFcU2VyaWVzXFN0cmFuZ2VyLlRoaW5ncy5TMDEuMTA4MHAuMTBCaXQuQmx1UmF5LkhpbmRpLjUuMS1FbmdsaXNoLjUuMS5IRVZDLngyNjUtSERIdWI0dS5Nc1xTdHJhbmdlci5UaGluZ3MuUzAxRTAxLjEwODBwLjEwQml0LkJsdVJheS5IaW5kaS41LjEtRW5nbGlzaC41LjEuSEVWQy54MjY1LUhESHViNHUuTXMubWt2": {
     "tmdbId": 66732,
@@ -336,7 +1038,7 @@
     "year": 2016,
     "overview": "When a young boy vanishes, a small town uncovers a mystery involving secret experiments, terrifying supernatural forces, and one strange little girl.",
     "rating": 8.6,
-    "votes": 21095,
+    "votes": 21112,
     "genres": [
       "Sci-Fi & Fantasy",
       "Mystery",
@@ -366,7 +1068,7 @@
       {
         "name": "Finn Wolfhard",
         "character": "Mike Wheeler",
-        "photo": "https://image.tmdb.org/t/p/w185/a1uynFLYQHij42kWu8yW1SvdJSG.jpg"
+        "photo": "https://image.tmdb.org/t/p/w185/5OVmquAk0W5BIsRlVKslEP497JD.jpg"
       },
       {
         "name": "Gaten Matarazzo",
@@ -386,7 +1088,7 @@
       {
         "name": "Sadie Sink",
         "character": "Max Mayfield",
-        "photo": "https://image.tmdb.org/t/p/w185/vo5x9GRs2vT47LNb1HZvKUEsk8C.jpg"
+        "photo": "https://image.tmdb.org/t/p/w185/m9OyHAyOx56Pm3JruEBqh4p9XeX.jpg"
       },
       {
         "name": "Natalia Dyer",
@@ -489,6 +1191,7 @@
       "episode": 1,
       "part": null
     },
-    "_cachedAt": "2026-05-10T03:18:34.009Z"
+    "_parserVersion": 2,
+    "_cachedAt": "2026-05-13T02:18:24.038Z"
   }
 }

@@ -3,6 +3,7 @@ import Root from "../Layout/Root";
 import Home from "../Pages/Home/Home";
 import AllCategory from "../Pages/Category/AllCategory";
 import CategoryPage from "../Pages/Category/CategoryPage";
+import MediaDetails from "../Pages/Media/Details/MediaDetails";
 
 export const router = createBrowserRouter([
     {
@@ -14,13 +15,22 @@ export const router = createBrowserRouter([
                 Component: Home,
             },
             {
-                path: "/category/all",
+                path: "category/all",
                 Component: AllCategory,
             },
             {
                 path: "category/:name",
                 Component: CategoryPage,
             },
+            {
+                path: "media/:id",
+                Component: MediaDetails,
+            },
+            {
+                path: "media/:id",
+                Component: MediaDetails,
+            },
+
             // {
             //     path: "live",
             //     Component: LiveTV,
