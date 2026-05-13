@@ -1,308 +1,4 @@
 {
-  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLkNoYXB0ZXItMi4yMDIyLjcyMHAuSGluZGkuV0VCLURMLjUuMS5FU3ViLngyNjQtSERIdWI0dS5Udi5ta3Y": {
-    "tmdbId": 962640,
-    "type": "movie",
-    "title": "K.G.F: Chapter 3",
-    "originalTitle": "K.G.F: Chapter 3",
-    "year": null,
-    "overview": null,
-    "rating": null,
-    "votes": 0,
-    "runtime": null,
-    "genres": [
-      "Action",
-      "Drama",
-      "Thriller"
-    ],
-    "poster": "https://image.tmdb.org/t/p/w500/ex2zyM6LVd31h9TlAi9RaR7QARK.jpg",
-    "backdrop": null,
-    "cast": [
-      {
-        "name": "Yash",
-        "character": "Raja Krishnappa Bairya 'Rocky'",
-        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
-      },
-      {
-        "name": "Srinidhi Shetty",
-        "character": "Reena",
-        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
-      },
-      {
-        "name": "Raveena Tandon",
-        "character": "PM Ramika Sen",
-        "photo": "https://image.tmdb.org/t/p/w185/3ifGMlHKKRFvK9Sg5y2bs5jWUlI.jpg"
-      },
-      {
-        "name": "Achyuth Kumar",
-        "character": "",
-        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
-      }
-    ],
-    "trailer": null,
-    "tagline": "violence... violence... violence...",
-    "status": "Rumored",
-    "language": "kn",
-    "parsed": {
-      "title": "K G F",
-      "type": "movie",
-      "year": null,
-      "season": null,
-      "episode": null,
-      "part": 2
-    },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.705Z"
-  },
-  "RDpcTWVkaWFcTW92aWVzXDMgSWRpb3RzICgyMDA5KSAxMDgwcCBCbHVSYXkgSGluZGkgeDI2NC5ta3Y": {
-    "tmdbId": 20453,
-    "type": "movie",
-    "title": "3 Idiots",
-    "originalTitle": "3 Idiots",
-    "year": 2009,
-    "overview": "Rascal. Joker. Dreamer. Genius... You've never met a college student quite like \"Rancho.\" From the moment he arrives at India's most prestigious university, Rancho's outlandish schemes turn the campus upside down—along with the lives of his two newfound best friends. Together, they make life miserable for \"Virus,\" the school’s uptight and heartless dean. But when Rancho catches the eye of the dean's daughter, Virus sets his sights on flunking out the \"3 idiots\" once and for all.",
-    "rating": 8,
-    "votes": 2688,
-    "runtime": 171,
-    "genres": [
-      "Drama",
-      "Comedy"
-    ],
-    "poster": "https://image.tmdb.org/t/p/w500/66A9MqXOyVFCssoloscw79z8Tew.jpg",
-    "backdrop": "https://image.tmdb.org/t/p/w1280/8gT3UKtglLVpu0YfccwbmXZ5Eis.jpg",
-    "cast": [
-      {
-        "name": "Aamir Khan",
-        "character": "Ranchoddas \"Rancho\" Chanchad",
-        "photo": "https://image.tmdb.org/t/p/w185/6uiZSwi2kvd1jZ7X7Xz9W9VGuV4.jpg"
-      },
-      {
-        "name": "R. Madhavan",
-        "character": "Farhan Qureshi",
-        "photo": "https://image.tmdb.org/t/p/w185/gaDrAdXxIrbBRCd9cX8YvJDEuLb.jpg"
-      },
-      {
-        "name": "Sharman Joshi",
-        "character": "Raju Rastogi",
-        "photo": "https://image.tmdb.org/t/p/w185/mQr8ynFFVq08qgQ4aSNl5B0ko8v.jpg"
-      },
-      {
-        "name": "Kareena Kapoor Khan",
-        "character": "Pia Sahastrabudhhe",
-        "photo": "https://image.tmdb.org/t/p/w185/pJZJJ93NwJq3kb3RWtaZBYVga1x.jpg"
-      },
-      {
-        "name": "Boman Irani",
-        "character": "Viru \"Virus\" Sahastrabudhhe",
-        "photo": "https://image.tmdb.org/t/p/w185/5J7GiiNar9bg9rGYeA2L30JXE2W.jpg"
-      },
-      {
-        "name": "Omi Vaidya",
-        "character": "Chatur \"Silencer\" Ramalingam",
-        "photo": "https://image.tmdb.org/t/p/w185/G37HGmfBM8b6pTczZrpJmTFIGl.jpg"
-      },
-      {
-        "name": "Mona Singh",
-        "character": "Mona Sahastrabuddhe",
-        "photo": "https://image.tmdb.org/t/p/w185/fBl5KYnlKY8HDUqlTs64xbDZtU8.jpg"
-      },
-      {
-        "name": "Rahul Kumar",
-        "character": "Millimeter",
-        "photo": "https://image.tmdb.org/t/p/w185/pYw7c1T0ifdvWMUtUJl3GMkx4aP.jpg"
-      },
-      {
-        "name": "Parikshat Sahni",
-        "character": "Mr. Qureshi",
-        "photo": "https://image.tmdb.org/t/p/w185/wQs7zYQNahLrntjqd7aIrajnbpM.jpg"
-      },
-      {
-        "name": "Farida Dadi",
-        "character": "Mrs. Qureshi",
-        "photo": "https://image.tmdb.org/t/p/w185/uriqyktmJedfF7LHkiWhKh4IXe1.jpg"
-      }
-    ],
-    "trailer": "zIKu9k50SDo",
-    "tagline": "Aal Izz Well!",
-    "status": "Released",
-    "language": "hi",
-    "parsed": {
-      "title": "3 Idiots",
-      "type": "movie",
-      "year": 2009,
-      "season": null,
-      "episode": null,
-      "part": null
-    },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.698Z"
-  },
-  "RDpcTWVkaWFcTW92aWVzXE9QUEVOSEVJTUVSIDIwMjMgMTA4MHAgMTBiaXQgQmx1UmF5IEhFVkMgeDI2NSBbIEhpbmRpIEFNWk4gRERQIDUuMSA2NDBrYnBzICsgRW5nIEFBQyA1LjEgXSBFU3VicyBQU0EgfiBWZWdhbW92aWVzLnRvLm1rdg": {
-    "tmdbId": 872585,
-    "type": "movie",
-    "title": "Oppenheimer",
-    "originalTitle": "Oppenheimer",
-    "year": 2023,
-    "overview": "The story of J. Robert Oppenheimer's role in the development of the atomic bomb during World War II.",
-    "rating": 8,
-    "votes": 11706,
-    "runtime": 181,
-    "genres": [
-      "Drama",
-      "History"
-    ],
-    "poster": "https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg",
-    "backdrop": "https://image.tmdb.org/t/p/w1280/neeNHeXjMF5fXoCJRsOmkNGC7q.jpg",
-    "cast": [
-      {
-        "name": "Cillian Murphy",
-        "character": "J. Robert Oppenheimer",
-        "photo": "https://image.tmdb.org/t/p/w185/2lKs67r7FI4bPu0AXxMUJZxmUXn.jpg"
-      },
-      {
-        "name": "Emily Blunt",
-        "character": "Kitty Oppenheimer",
-        "photo": "https://image.tmdb.org/t/p/w185/5nCSG5TL1bP1geD8aaBfaLnLLCD.jpg"
-      },
-      {
-        "name": "Matt Damon",
-        "character": "Leslie Groves",
-        "photo": "https://image.tmdb.org/t/p/w185/At3JgvaNeEN4Z4ESKlhhes85Xo3.jpg"
-      },
-      {
-        "name": "Robert Downey Jr.",
-        "character": "Lewis Strauss",
-        "photo": "https://image.tmdb.org/t/p/w185/5qHNjhtjMD4YWH3UP0rm4tKwxCL.jpg"
-      },
-      {
-        "name": "Florence Pugh",
-        "character": "Jean Tatlock",
-        "photo": "https://image.tmdb.org/t/p/w185/1Uvfh7xL4U2evkhs0M3C7BbBYFf.jpg"
-      },
-      {
-        "name": "Josh Hartnett",
-        "character": "Ernest Lawrence",
-        "photo": "https://image.tmdb.org/t/p/w185/9JS3PeypxTmHVXOnLCMRzJzySxO.jpg"
-      },
-      {
-        "name": "Casey Affleck",
-        "character": "Boris Pash",
-        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
-      },
-      {
-        "name": "Rami Malek",
-        "character": "David Hill",
-        "photo": "https://image.tmdb.org/t/p/w185/mESIaMPIPxtyWDQ6DAChUBobOp5.jpg"
-      },
-      {
-        "name": "Kenneth Branagh",
-        "character": "Niels Bohr",
-        "photo": "https://image.tmdb.org/t/p/w185/AbCqqFxNi5w3nDUFdQt0DGMFh5H.jpg"
-      },
-      {
-        "name": "Benny Safdie",
-        "character": "Edward Teller",
-        "photo": "https://image.tmdb.org/t/p/w185/u10A5DpUYRB1zMF7YoGYcyvhois.jpg"
-      }
-    ],
-    "trailer": "qiuSBWVdgLI",
-    "tagline": "The world forever changes.",
-    "status": "Released",
-    "language": "en",
-    "parsed": {
-      "title": "OPPENHEIMER",
-      "type": "movie",
-      "year": 2023,
-      "season": null,
-      "episode": null,
-      "part": null
-    },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.668Z"
-  },
-  "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
-    "tmdbId": 157336,
-    "type": "movie",
-    "title": "Interstellar",
-    "originalTitle": "Interstellar",
-    "year": 2014,
-    "overview": "The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel and conquer the vast distances involved in an interstellar voyage.",
-    "rating": 8.5,
-    "votes": 39639,
-    "runtime": 169,
-    "genres": [
-      "Adventure",
-      "Drama",
-      "Science Fiction"
-    ],
-    "poster": "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
-    "backdrop": "https://image.tmdb.org/t/p/w1280/2ssWTSVklAEc98frZUQhgtGHx7s.jpg",
-    "cast": [
-      {
-        "name": "Matthew McConaughey",
-        "character": "Cooper",
-        "photo": "https://image.tmdb.org/t/p/w185/lCySuYjhXix3FzQdS4oceDDrXKI.jpg"
-      },
-      {
-        "name": "Anne Hathaway",
-        "character": "Brand",
-        "photo": "https://image.tmdb.org/t/p/w185/s6tflSD20MGz04ZR2R1lZvhmC4Y.jpg"
-      },
-      {
-        "name": "Michael Caine",
-        "character": "Professor Brand",
-        "photo": "https://image.tmdb.org/t/p/w185/bVZRMlpjTAO2pJK6v90buFgVbSW.jpg"
-      },
-      {
-        "name": "Jessica Chastain",
-        "character": "Murph",
-        "photo": "https://image.tmdb.org/t/p/w185/lodMzLKSdrPcBry6TdoDsMN3Vge.jpg"
-      },
-      {
-        "name": "Casey Affleck",
-        "character": "Tom",
-        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
-      },
-      {
-        "name": "Wes Bentley",
-        "character": "Doyle",
-        "photo": "https://image.tmdb.org/t/p/w185/voD93lzFZrr9xfAggwFcPRBi84i.jpg"
-      },
-      {
-        "name": "Topher Grace",
-        "character": "Getty",
-        "photo": "https://image.tmdb.org/t/p/w185/oJQxl4DG0KSCtOGrpWNhYz9gUZA.jpg"
-      },
-      {
-        "name": "Mackenzie Foy",
-        "character": "Murph (10 Yrs.)",
-        "photo": "https://image.tmdb.org/t/p/w185/gW9BdiA9eooBWa5bzHWkV7rbTa8.jpg"
-      },
-      {
-        "name": "Ellen Burstyn",
-        "character": "Murph (older)",
-        "photo": "https://image.tmdb.org/t/p/w185/zGihSIVRzwmCqilnA4PmNM4C2RT.jpg"
-      },
-      {
-        "name": "John Lithgow",
-        "character": "Donald",
-        "photo": "https://image.tmdb.org/t/p/w185/ajfuBSm1HuVqFJlbTmAlza62Xxr.jpg"
-      }
-    ],
-    "trailer": "LY19rHKAaAg",
-    "tagline": "Mankind was born on Earth. It was never meant to die here.",
-    "status": "Released",
-    "language": "en",
-    "parsed": {
-      "title": "Interstellar",
-      "type": "movie",
-      "year": 2014,
-      "season": null,
-      "episode": null,
-      "part": null
-    },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.733Z"
-  },
   "RDpcTWVkaWFcTW92aWVzXFNpdGFhcmUgWmFtZWVuIFBhciAoMjAyNSkgMTA4MHAgV0VCUmlwIEhpbmRpIHgyNjQubWt2": {
     "tmdbId": 1190511,
     "type": "movie",
@@ -381,64 +77,95 @@
       "year": 2025,
       "season": null,
       "episode": null,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.703Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:04.097Z"
   },
-  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLUNoYXB0ZXIuMS4yMDE4LkhpbmRpLjcyMHAuV0VCLURMLkRENS4xLkVTdWIueDI2NC1IREh1YjR1LlVuby5ta3Y": {
-    "tmdbId": 962640,
+  "RDpcTWVkaWFcTW92aWVzXE9QUEVOSEVJTUVSIDIwMjMgMTA4MHAgMTBiaXQgQmx1UmF5IEhFVkMgeDI2NSBbIEhpbmRpIEFNWk4gRERQIDUuMSA2NDBrYnBzICsgRW5nIEFBQyA1LjEgXSBFU3VicyBQU0EgfiBWZWdhbW92aWVzLnRvLm1rdg": {
+    "tmdbId": 872585,
     "type": "movie",
-    "title": "K.G.F: Chapter 3",
-    "originalTitle": "K.G.F: Chapter 3",
-    "year": null,
-    "overview": null,
-    "rating": null,
-    "votes": 0,
-    "runtime": null,
+    "title": "Oppenheimer",
+    "originalTitle": "Oppenheimer",
+    "year": 2023,
+    "overview": "The story of J. Robert Oppenheimer's role in the development of the atomic bomb during World War II.",
+    "rating": 8,
+    "votes": 11706,
+    "runtime": 181,
     "genres": [
-      "Action",
       "Drama",
-      "Thriller"
+      "History"
     ],
-    "poster": "https://image.tmdb.org/t/p/w500/ex2zyM6LVd31h9TlAi9RaR7QARK.jpg",
-    "backdrop": null,
+    "poster": "https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/neeNHeXjMF5fXoCJRsOmkNGC7q.jpg",
     "cast": [
       {
-        "name": "Yash",
-        "character": "Raja Krishnappa Bairya 'Rocky'",
-        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
+        "name": "Cillian Murphy",
+        "character": "J. Robert Oppenheimer",
+        "photo": "https://image.tmdb.org/t/p/w185/2lKs67r7FI4bPu0AXxMUJZxmUXn.jpg"
       },
       {
-        "name": "Srinidhi Shetty",
-        "character": "Reena",
-        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
+        "name": "Emily Blunt",
+        "character": "Kitty Oppenheimer",
+        "photo": "https://image.tmdb.org/t/p/w185/5nCSG5TL1bP1geD8aaBfaLnLLCD.jpg"
       },
       {
-        "name": "Raveena Tandon",
-        "character": "PM Ramika Sen",
-        "photo": "https://image.tmdb.org/t/p/w185/3ifGMlHKKRFvK9Sg5y2bs5jWUlI.jpg"
+        "name": "Matt Damon",
+        "character": "Leslie Groves",
+        "photo": "https://image.tmdb.org/t/p/w185/At3JgvaNeEN4Z4ESKlhhes85Xo3.jpg"
       },
       {
-        "name": "Achyuth Kumar",
-        "character": "",
-        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
+        "name": "Robert Downey Jr.",
+        "character": "Lewis Strauss",
+        "photo": "https://image.tmdb.org/t/p/w185/5qHNjhtjMD4YWH3UP0rm4tKwxCL.jpg"
+      },
+      {
+        "name": "Florence Pugh",
+        "character": "Jean Tatlock",
+        "photo": "https://image.tmdb.org/t/p/w185/1Uvfh7xL4U2evkhs0M3C7BbBYFf.jpg"
+      },
+      {
+        "name": "Josh Hartnett",
+        "character": "Ernest Lawrence",
+        "photo": "https://image.tmdb.org/t/p/w185/9JS3PeypxTmHVXOnLCMRzJzySxO.jpg"
+      },
+      {
+        "name": "Casey Affleck",
+        "character": "Boris Pash",
+        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
+      },
+      {
+        "name": "Rami Malek",
+        "character": "David Hill",
+        "photo": "https://image.tmdb.org/t/p/w185/mESIaMPIPxtyWDQ6DAChUBobOp5.jpg"
+      },
+      {
+        "name": "Kenneth Branagh",
+        "character": "Niels Bohr",
+        "photo": "https://image.tmdb.org/t/p/w185/AbCqqFxNi5w3nDUFdQt0DGMFh5H.jpg"
+      },
+      {
+        "name": "Benny Safdie",
+        "character": "Edward Teller",
+        "photo": "https://image.tmdb.org/t/p/w185/u10A5DpUYRB1zMF7YoGYcyvhois.jpg"
       }
     ],
-    "trailer": null,
-    "tagline": "violence... violence... violence...",
-    "status": "Rumored",
-    "language": "kn",
+    "trailer": "qiuSBWVdgLI",
+    "tagline": "The world forever changes.",
+    "status": "Released",
+    "language": "en",
     "parsed": {
-      "title": "K G F",
+      "title": "Oppenheimer",
       "type": "movie",
-      "year": null,
+      "year": 2023,
       "season": null,
       "episode": null,
-      "part": 1
+      "episodeEnd": null,
+      "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.691Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:03.890Z"
   },
   "RDpcTWVkaWFcTW92aWVzXFByb2plY3QgSGFpbCBNYXJ5ICgyMDI2KSAxMDgwcCBQUkUtSEQgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
     "tmdbId": 687163,
@@ -518,10 +245,268 @@
       "year": 2026,
       "season": null,
       "episode": null,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:14.775Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:03.908Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
+    "tmdbId": 157336,
+    "type": "movie",
+    "title": "Interstellar",
+    "originalTitle": "Interstellar",
+    "year": 2014,
+    "overview": "The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel and conquer the vast distances involved in an interstellar voyage.",
+    "rating": 8.5,
+    "votes": 39644,
+    "runtime": 169,
+    "genres": [
+      "Adventure",
+      "Drama",
+      "Science Fiction"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/2ssWTSVklAEc98frZUQhgtGHx7s.jpg",
+    "cast": [
+      {
+        "name": "Matthew McConaughey",
+        "character": "Cooper",
+        "photo": "https://image.tmdb.org/t/p/w185/lCySuYjhXix3FzQdS4oceDDrXKI.jpg"
+      },
+      {
+        "name": "Anne Hathaway",
+        "character": "Brand",
+        "photo": "https://image.tmdb.org/t/p/w185/s6tflSD20MGz04ZR2R1lZvhmC4Y.jpg"
+      },
+      {
+        "name": "Michael Caine",
+        "character": "Professor Brand",
+        "photo": "https://image.tmdb.org/t/p/w185/bVZRMlpjTAO2pJK6v90buFgVbSW.jpg"
+      },
+      {
+        "name": "Jessica Chastain",
+        "character": "Murph",
+        "photo": "https://image.tmdb.org/t/p/w185/lodMzLKSdrPcBry6TdoDsMN3Vge.jpg"
+      },
+      {
+        "name": "Casey Affleck",
+        "character": "Tom",
+        "photo": "https://image.tmdb.org/t/p/w185/304ilSygaCRWykoBWAL67TOw8g9.jpg"
+      },
+      {
+        "name": "Wes Bentley",
+        "character": "Doyle",
+        "photo": "https://image.tmdb.org/t/p/w185/voD93lzFZrr9xfAggwFcPRBi84i.jpg"
+      },
+      {
+        "name": "Topher Grace",
+        "character": "Getty",
+        "photo": "https://image.tmdb.org/t/p/w185/oJQxl4DG0KSCtOGrpWNhYz9gUZA.jpg"
+      },
+      {
+        "name": "Mackenzie Foy",
+        "character": "Murph (10 Yrs.)",
+        "photo": "https://image.tmdb.org/t/p/w185/gW9BdiA9eooBWa5bzHWkV7rbTa8.jpg"
+      },
+      {
+        "name": "Ellen Burstyn",
+        "character": "Murph (older)",
+        "photo": "https://image.tmdb.org/t/p/w185/zGihSIVRzwmCqilnA4PmNM4C2RT.jpg"
+      },
+      {
+        "name": "John Lithgow",
+        "character": "Donald",
+        "photo": "https://image.tmdb.org/t/p/w185/ajfuBSm1HuVqFJlbTmAlza62Xxr.jpg"
+      }
+    ],
+    "trailer": "LY19rHKAaAg",
+    "tagline": "Mankind was born on Earth. It was never meant to die here.",
+    "status": "Released",
+    "language": "en",
+    "parsed": {
+      "title": "Interstellar",
+      "type": "movie",
+      "year": 2014,
+      "season": null,
+      "episode": null,
+      "episodeEnd": null,
+      "part": null
+    },
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:03.949Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLkNoYXB0ZXItMi4yMDIyLjcyMHAuSGluZGkuV0VCLURMLjUuMS5FU3ViLngyNjQtSERIdWI0dS5Udi5ta3Y": {
+    "tmdbId": 587412,
+    "type": "movie",
+    "title": "K.G.F: Chapter 2",
+    "originalTitle": "ಕೆ.ಜಿ.ಎಫ್: Chapter 2",
+    "year": 2022,
+    "overview": "The blood-soaked land of Kolar Gold Fields (KGF) has a new overlord now - Rocky, whose name strikes fear in the heart of his foes. His allies look up to Rocky as their Savior, the government sees him as a threat to law and order; enemies are clamoring for revenge and conspiring for his downfall. Bloodier battles and darker days await as Rocky continues on his quest for unchallenged supremacy.",
+    "rating": 7.4,
+    "votes": 203,
+    "runtime": 168,
+    "genres": [
+      "Action",
+      "Thriller",
+      "Adventure",
+      "Crime"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/khNVygolU0TxLIDWff5tQlAhZ23.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/nsV5Mfi9FAV4w8eDsdr7uqVswOk.jpg",
+    "cast": [
+      {
+        "name": "Yash",
+        "character": "Raja Krishnappa Bairya 'Rocky'",
+        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
+      },
+      {
+        "name": "Sanjay Dutt",
+        "character": "Adheera",
+        "photo": "https://image.tmdb.org/t/p/w185/oq4pnvWhl1HxKpp0KVlSfAr3Tiu.jpg"
+      },
+      {
+        "name": "Raveena Tandon",
+        "character": "Ramika Sen",
+        "photo": "https://image.tmdb.org/t/p/w185/3ifGMlHKKRFvK9Sg5y2bs5jWUlI.jpg"
+      },
+      {
+        "name": "Srinidhi Shetty",
+        "character": "Reena",
+        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
+      },
+      {
+        "name": "Archana Jois",
+        "character": "Shanthamma",
+        "photo": "https://image.tmdb.org/t/p/w185/kRmgREIRxLxNKssJMT7YxzNXmFH.jpg"
+      },
+      {
+        "name": "Achyuth Kumar",
+        "character": "Guru Pandyan",
+        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
+      },
+      {
+        "name": "Rao Ramesh",
+        "character": "Kanneganti Raghavan",
+        "photo": "https://image.tmdb.org/t/p/w185/jzO0wN21tEcmz0haekvliQU91JM.jpg"
+      },
+      {
+        "name": "Ayyappa P. Sharma",
+        "character": "Vanaram",
+        "photo": null
+      },
+      {
+        "name": "Easwari Rao",
+        "character": "Farmaan's mother",
+        "photo": "https://image.tmdb.org/t/p/w185/fjyvQ45YZcovy2Egj2eux8UiuHU.jpg"
+      },
+      {
+        "name": "Saran Shakthi",
+        "character": "Farmaan",
+        "photo": "https://image.tmdb.org/t/p/w185/wggtMYbkCfCsfZvUDKC6jXuweJ9.jpg"
+      }
+    ],
+    "trailer": null,
+    "tagline": "The World Is My Territory",
+    "status": "Released",
+    "language": "kn",
+    "parsed": {
+      "title": "KGF",
+      "type": "movie",
+      "year": 2022,
+      "season": null,
+      "episode": null,
+      "episodeEnd": null,
+      "part": 2
+    },
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:03.956Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXEsuRy5GLUNoYXB0ZXIuMS4yMDE4LkhpbmRpLjcyMHAuV0VCLURMLkRENS4xLkVTdWIueDI2NC1IREh1YjR1LlVuby5ta3Y": {
+    "tmdbId": 564147,
+    "type": "movie",
+    "title": "K.G.F: Chapter 1",
+    "originalTitle": "ಕೆಜಿಎಫ್ ಅಧ್ಯಾಯ ೧",
+    "year": 2018,
+    "overview": "A period drama set in the 1970s, KGF follows the story of a fierce rebel who rises against the brutal oppression in Kolar Gold Fields and becomes the symbol of hope to legions of downtrodden people.",
+    "rating": 7.5,
+    "votes": 273,
+    "runtime": 156,
+    "genres": [
+      "Action",
+      "Thriller",
+      "Adventure",
+      "Crime"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/ltHlJwvxKv7d0ooCiKSAvfwV9tX.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/4i1ofsSpfTuswHXcgPtXbZrSnoe.jpg",
+    "cast": [
+      {
+        "name": "Yash",
+        "character": "Rocky / Raja Krishnappa Bairya",
+        "photo": "https://image.tmdb.org/t/p/w185/es8St0vl9otL1XAAZJKYmNpL3Wy.jpg"
+      },
+      {
+        "name": "Srinidhi Shetty",
+        "character": "Reena",
+        "photo": "https://image.tmdb.org/t/p/w185/pTsixKDFS3n2xsvR6wDZ9J6jjfQ.jpg"
+      },
+      {
+        "name": "Ramachandra Raju",
+        "character": "Garuda",
+        "photo": "https://image.tmdb.org/t/p/w185/kU1a4H8o1IQA25Lyq3cW70aufhT.jpg"
+      },
+      {
+        "name": "Archana Jois",
+        "character": "Shanthamma / Rocky's Mother",
+        "photo": "https://image.tmdb.org/t/p/w185/kRmgREIRxLxNKssJMT7YxzNXmFH.jpg"
+      },
+      {
+        "name": "Anant Nag",
+        "character": "Anand Ingalagi",
+        "photo": "https://image.tmdb.org/t/p/w185/4XeYuoZX15cks43HRavV75RjlmN.jpg"
+      },
+      {
+        "name": "Vasishta N. Simha",
+        "character": "Kamal",
+        "photo": "https://image.tmdb.org/t/p/w185/lHriwmzxVYLwU9pxfSfa9S4RzSp.jpg"
+      },
+      {
+        "name": "Achyuth Kumar",
+        "character": "Guru Pandian",
+        "photo": "https://image.tmdb.org/t/p/w185/zO1MoCgaz0RxILjga8VYXguROMp.jpg"
+      },
+      {
+        "name": "Ayyappa P. Sharma",
+        "character": "Vanaram",
+        "photo": null
+      },
+      {
+        "name": "Malavika Avinash",
+        "character": "Deepa Hegde",
+        "photo": "https://image.tmdb.org/t/p/w185/1D3J1HIRP4gm0bYzrOdF2AmreV5.jpg"
+      },
+      {
+        "name": "B. S. Avinash",
+        "character": "Andrews",
+        "photo": "https://image.tmdb.org/t/p/w185/dhAScRQuHfOuUCEBM38NFUoyP4C.jpg"
+      }
+    ],
+    "trailer": "3oxo-wacE50",
+    "tagline": "From The Streets Of Mumbai...To The Bloody Gold Mines Of Kolar",
+    "status": "Released",
+    "language": "kn",
+    "parsed": {
+      "title": "KGF",
+      "type": "movie",
+      "year": 2018,
+      "season": null,
+      "episode": null,
+      "episodeEnd": null,
+      "part": 1
+    },
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:03.961Z"
   },
   "RDpcTWVkaWFcU2VyaWVzXEJyZWFraW5nLkJhZC5TMDEuNzIwcC5IRVZDLkJsdVJheS5IaW5kaS5PUkctRW5nbGlzaC5FU3ViLngyNjUtSERIdWI0dS5UdlxCcmVha2luZy5CYWQuUzAxLkUwMS43MjBwLkhFVkMuQmx1UmF5LkhpbmRpLk9SRy1FbmdsaXNoLkVTdWIueDI2NS1IREh1YjR1LlR2Lm1rdg": {
     "tmdbId": 1396,
@@ -662,10 +647,11 @@
       "year": null,
       "season": 1,
       "episode": 1,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:15.333Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:04.883Z"
   },
   "RDpcTWVkaWFcU2VyaWVzXEZhcnppLlMwMS43MjBwLkhFVkMuSGluZGkuV0VCLURMLjUuMS5FU3ViLngyNjUtSERIdWI0dS5UdlxGYXJ6aS5TMDEuRTAxLjcyMHAuSEVWQy5IaW5kaS5XRUItREw1LjEuRVN1Yi54MjY1LUhESHViNHUuVHYubWt2": {
     "tmdbId": 132117,
@@ -820,10 +806,11 @@
       "year": null,
       "season": 1,
       "episode": 1,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:18.997Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:08.272Z"
   },
   "RDpcTWVkaWFcU2VyaWVzXE1vbmV5IEhlaXN0IFMwMSBEdWFsIEF1ZGlvIHtIaW5kaS1FbmdsaXNofSA3MjBwIEhFVkMgLSBWZWdhbW92aWVzLnRvXE1vbmV5IEhlaXN0IFMwMUUwMSBEdWFsIEF1ZGlvIHtIaW5kaS1FbmdsaXNofSA3MjBwIEhFVkMgLSBWZWdhbW92aWVzLk5MLm1rdg": {
     "tmdbId": 71446,
@@ -1046,10 +1033,11 @@
       "year": null,
       "season": 1,
       "episode": 1,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:19.711Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:09.043Z"
   },
   "RDpcTWVkaWFcU2VyaWVzXFN0cmFuZ2VyLlRoaW5ncy5TMDEuMTA4MHAuMTBCaXQuQmx1UmF5LkhpbmRpLjUuMS1FbmdsaXNoLjUuMS5IRVZDLngyNjUtSERIdWI0dS5Nc1xTdHJhbmdlci5UaGluZ3MuUzAxRTAxLjEwODBwLjEwQml0LkJsdVJheS5IaW5kaS41LjEtRW5nbGlzaC41LjEuSEVWQy54MjY1LUhESHViNHUuTXMubWt2": {
     "tmdbId": 66732,
@@ -1210,9 +1198,94 @@
       "year": null,
       "season": 1,
       "episode": 1,
+      "episodeEnd": null,
       "part": null
     },
-    "_parserVersion": 2,
-    "_cachedAt": "2026-05-13T12:32:20.559Z"
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:16:09.815Z"
+  },
+  "RDpcTWVkaWFcTW92aWVzXDMgSWRpb3RzICgyMDA5KSAxMDgwcCBCbHVSYXkgSGluZGkgeDI2NC5ta3Y": {
+    "tmdbId": 20453,
+    "type": "movie",
+    "title": "3 Idiots",
+    "originalTitle": "3 Idiots",
+    "year": 2009,
+    "overview": "Rascal. Joker. Dreamer. Genius... You've never met a college student quite like \"Rancho.\" From the moment he arrives at India's most prestigious university, Rancho's outlandish schemes turn the campus upside down—along with the lives of his two newfound best friends. Together, they make life miserable for \"Virus,\" the school’s uptight and heartless dean. But when Rancho catches the eye of the dean's daughter, Virus sets his sights on flunking out the \"3 idiots\" once and for all.",
+    "rating": 8,
+    "votes": 2688,
+    "runtime": 171,
+    "genres": [
+      "Drama",
+      "Comedy"
+    ],
+    "poster": "https://image.tmdb.org/t/p/w500/66A9MqXOyVFCssoloscw79z8Tew.jpg",
+    "backdrop": "https://image.tmdb.org/t/p/w1280/8gT3UKtglLVpu0YfccwbmXZ5Eis.jpg",
+    "cast": [
+      {
+        "name": "Aamir Khan",
+        "character": "Ranchoddas \"Rancho\" Chanchad",
+        "photo": "https://image.tmdb.org/t/p/w185/6uiZSwi2kvd1jZ7X7Xz9W9VGuV4.jpg"
+      },
+      {
+        "name": "R. Madhavan",
+        "character": "Farhan Qureshi",
+        "photo": "https://image.tmdb.org/t/p/w185/gaDrAdXxIrbBRCd9cX8YvJDEuLb.jpg"
+      },
+      {
+        "name": "Sharman Joshi",
+        "character": "Raju Rastogi",
+        "photo": "https://image.tmdb.org/t/p/w185/mQr8ynFFVq08qgQ4aSNl5B0ko8v.jpg"
+      },
+      {
+        "name": "Kareena Kapoor Khan",
+        "character": "Pia Sahastrabudhhe",
+        "photo": "https://image.tmdb.org/t/p/w185/pJZJJ93NwJq3kb3RWtaZBYVga1x.jpg"
+      },
+      {
+        "name": "Boman Irani",
+        "character": "Viru \"Virus\" Sahastrabudhhe",
+        "photo": "https://image.tmdb.org/t/p/w185/5J7GiiNar9bg9rGYeA2L30JXE2W.jpg"
+      },
+      {
+        "name": "Omi Vaidya",
+        "character": "Chatur \"Silencer\" Ramalingam",
+        "photo": "https://image.tmdb.org/t/p/w185/G37HGmfBM8b6pTczZrpJmTFIGl.jpg"
+      },
+      {
+        "name": "Mona Singh",
+        "character": "Mona Sahastrabuddhe",
+        "photo": "https://image.tmdb.org/t/p/w185/fBl5KYnlKY8HDUqlTs64xbDZtU8.jpg"
+      },
+      {
+        "name": "Rahul Kumar",
+        "character": "Millimeter",
+        "photo": "https://image.tmdb.org/t/p/w185/pYw7c1T0ifdvWMUtUJl3GMkx4aP.jpg"
+      },
+      {
+        "name": "Parikshat Sahni",
+        "character": "Mr. Qureshi",
+        "photo": "https://image.tmdb.org/t/p/w185/wQs7zYQNahLrntjqd7aIrajnbpM.jpg"
+      },
+      {
+        "name": "Farida Dadi",
+        "character": "Mrs. Qureshi",
+        "photo": "https://image.tmdb.org/t/p/w185/uriqyktmJedfF7LHkiWhKh4IXe1.jpg"
+      }
+    ],
+    "trailer": "zIKu9k50SDo",
+    "tagline": "Aal Izz Well!",
+    "status": "Released",
+    "language": "hi",
+    "parsed": {
+      "title": "3 Idiots",
+      "type": "movie",
+      "year": 2009,
+      "season": null,
+      "episode": null,
+      "episodeEnd": null,
+      "part": null
+    },
+    "_parserVersion": 3,
+    "_cachedAt": "2026-05-13T13:27:37.284Z"
   }
 }

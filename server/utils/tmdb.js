@@ -4,21 +4,17 @@ const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMAGE_BASE = "https://image.tmdb.org/t/p";
 const POSTER_SIZE = "w500";
 const BACKDROP_SIZE = "w1280";
-const STILL_SIZE = "w300"; // episode stills
+const STILL_SIZE = "w300";
 
 // Simple token-bucket rate limiter — TMDB allows 40 req / 10 s
-const RATE_LIMIT = 38; // stay just under
-const RATE_WINDOW = 10_000; // ms
+const RATE_LIMIT = 38;
+const RATE_WINDOW = 10_000;
 let requestsInWindow = 0;
 let windowStart = Date.now();
 
-// Mutex: a promise chain that serializes all callers so the check/sleep/increment
-// is atomic — no two concurrent awaiters can both pass the quota check.
 let _rateMutex = Promise.resolve();
 
 function rateLimit() {
-    // Each caller appends to the chain; the previous work completes before
-    // the next one enters, making check+sleep+increment non-concurrent.
     _rateMutex = _rateMutex.then(async () => {
         const now = Date.now();
         if (now - windowStart > RATE_WINDOW) {
@@ -36,7 +32,6 @@ function rateLimit() {
     return _rateMutex;
 }
 
-// Core fetch wrapper — uses TMDB_API_KEY from env
 async function tmdbFetch(endpoint, params = {}) {
     const apiKey = process.env.TMDB_API_KEY;
     if (!apiKey) throw new Error("TMDB_API_KEY is not set in .env");
@@ -68,7 +63,6 @@ async function tmdbFetch(endpoint, params = {}) {
     return res.json();
 }
 
-// Returns a full image URL or null
 function imgUrl(size, filePath) {
     if (!filePath) return null;
     return `${IMAGE_BASE}/${size}${filePath}`;
@@ -76,19 +70,13 @@ function imgUrl(size, filePath) {
 
 // ─── MOVIE ────────────────────────────────────────────────────────────────────
 
-// Searches for a movie and returns the best match
 async function searchMovie(title, year = null) {
     const data = await tmdbFetch("/search/movie", { query: title, year: year || undefined });
     if (!data.results?.length) return null;
-
-    // Prefer result whose year matches if provided
     const results = data.results;
-    const match = year ? results.find((r) => r.release_date?.startsWith(String(year))) || results[0] : results[0];
-
-    return match;
+    return year ? results.find((r) => r.release_date?.startsWith(String(year))) || results[0] : results[0];
 }
 
-// Fetches full movie details by TMDB ID
 async function getMovieDetails(tmdbId) {
     const data = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: "credits,videos" });
     return {
@@ -96,6 +84,7 @@ async function getMovieDetails(tmdbId) {
         type: "movie",
         title: data.title,
         originalTitle: data.original_title,
+        releaseDate: data.release_date || null,
         year: data.release_date ? parseInt(data.release_date.slice(0, 4), 10) : null,
         overview: data.overview || null,
         rating: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
@@ -118,7 +107,6 @@ async function getMovieDetails(tmdbId) {
 
 // ─── TV / SERIES ──────────────────────────────────────────────────────────────
 
-// Searches for a TV series and returns the best match
 async function searchTV(title, year = null) {
     const data = await tmdbFetch("/search/tv", {
         query: title,
@@ -126,11 +114,9 @@ async function searchTV(title, year = null) {
     });
     if (!data.results?.length) return null;
     const results = data.results;
-    const match = year ? results.find((r) => r.first_air_date?.startsWith(String(year))) || results[0] : results[0];
-    return match;
+    return year ? results.find((r) => r.first_air_date?.startsWith(String(year))) || results[0] : results[0];
 }
 
-// Fetches full series details by TMDB ID
 async function getTVDetails(tmdbId) {
     const data = await tmdbFetch(`/tv/${tmdbId}`, { append_to_response: "credits,videos" });
     return {
@@ -138,6 +124,7 @@ async function getTVDetails(tmdbId) {
         type: "series",
         title: data.name,
         originalTitle: data.original_name,
+        firstAirDate: data.first_air_date || null,
         year: data.first_air_date ? parseInt(data.first_air_date.slice(0, 4), 10) : null,
         overview: data.overview || null,
         rating: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
@@ -158,7 +145,6 @@ async function getTVDetails(tmdbId) {
     };
 }
 
-// Fetches episode details for a specific season
 async function getSeasonDetails(tmdbId, seasonNumber) {
     const data = await tmdbFetch(`/tv/${tmdbId}/season/${seasonNumber}`);
     return {
@@ -180,19 +166,14 @@ async function getSeasonDetails(tmdbId, seasonNumber) {
 
 // ─── ANIME ────────────────────────────────────────────────────────────────────
 
-// Anime lives in TMDB as TV shows — search TV with animation genre filter
 async function searchAnime(title, year = null) {
-    // Try TV first (most anime are series)
     const tv = await tmdbFetch("/search/tv", {
         query: title,
         first_air_date_year: year || undefined,
     });
-    const tvHit =
-        (tv.results || []).find((r) => r.genre_ids?.includes(16)) || // 16 = Animation
-        tv.results?.[0];
+    const tvHit = (tv.results || []).find((r) => r.genre_ids?.includes(16)) || tv.results?.[0];
     if (tvHit) return { ...tvHit, _searchType: "tv" };
 
-    // Fall back to movie search (anime films)
     const mv = await tmdbFetch("/search/movie", { query: title, year: year || undefined });
     const mvHit = (mv.results || []).find((r) => r.genre_ids?.includes(16)) || mv.results?.[0];
     if (mvHit) return { ...mvHit, _searchType: "movie" };
@@ -203,13 +184,38 @@ async function searchAnime(title, year = null) {
 // ─── UNIFIED LOOKUP ───────────────────────────────────────────────────────────
 
 /**
+ * Build a list of search title candidates to try in order.
+ *
+ * For movies with a part number we try both the full-chapter title
+ * ("KGF Chapter 1") and the bare title ("KGF") with the year as a
+ * discriminator so TMDB returns the right film even when the release
+ * uses "Chapter N" in its official title.
+ *
+ * Without this, searching "KGF" (no year, because the year was lost
+ * after truncating titleRaw at the chapter token) returned "K.G.F:
+ * Chapter 3" as the top hit instead of Chapter 1 or 2.
+ */
+function buildMovieTitleCandidates(title, part) {
+    const candidates = [];
+    if (part != null) {
+        // Try the full title with chapter first ("KGF Chapter 1")
+        candidates.push(`${title} Chapter ${part}`);
+        // Also try just the title — year will discriminate on TMDB
+        candidates.push(title);
+    } else {
+        candidates.push(title);
+    }
+    return candidates;
+}
+
+/**
  * Main entry point — given a parsed name object from nameParser,
  * finds the best TMDB match and returns full details.
  *
  * Returns null if nothing found.
  */
 async function lookupMetadata(parsed) {
-    const { title, type, year, season } = parsed;
+    const { title, type, year, season, part } = parsed;
 
     try {
         if (type === "anime") {
@@ -233,19 +239,36 @@ async function lookupMetadata(parsed) {
             return details;
         }
 
-        // movie — try with year first, fall back to no year if nothing found
-        const hit = (await searchMovie(title, year)) || (year ? await searchMovie(title) : null);
-        if (!hit) return null;
-        return await getMovieDetails(hit.id);
+        // ── Movie (including multi-part films like KGF) ───────────────────────
+        //
+        // Try title candidates in order, with year first (most specific),
+        // then without year as a fallback.  Stop at the first hit.
+        const candidates = buildMovieTitleCandidates(title, part);
+
+        for (const candidate of candidates) {
+            // With year
+            if (year) {
+                const hit = await searchMovie(candidate, year);
+                if (hit) return await getMovieDetails(hit.id);
+            }
+            // Without year
+            const hit = await searchMovie(candidate);
+            if (hit) return await getMovieDetails(hit.id);
+        }
+
+        return null;
     } catch (err) {
-        console.error(`[TMDB] lookupMetadata failed`, {
-            title,
-            type,
-            year,
-            error: err.message,
-        });
+        console.error("[TMDB] lookupMetadata failed", { title, type, year, part, error: err.message });
         return null;
     }
 }
 
-module.exports = { lookupMetadata, searchMovie, searchTV, searchAnime, getMovieDetails, getTVDetails, getSeasonDetails };
+module.exports = {
+    lookupMetadata,
+    searchMovie,
+    searchTV,
+    searchAnime,
+    getMovieDetails,
+    getTVDetails,
+    getSeasonDetails,
+};
