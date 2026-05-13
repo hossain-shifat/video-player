@@ -238,7 +238,12 @@ async function lookupMetadata(parsed) {
         if (!hit) return null;
         return await getMovieDetails(hit.id);
     } catch (err) {
-        console.error(`[TMDB] lookupMetadata failed for "${title}":`, err.message);
+        console.error(`[TMDB] lookupMetadata failed`, {
+            title,
+            type,
+            year,
+            error: err.message,
+        });
         return null;
     }
 }

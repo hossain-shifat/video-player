@@ -11,8 +11,9 @@ function normalise(item) {
         return {
             id: item.id,
             type: "movie",
-            title: item.parsed?.title || item.name || "Unknown",
-            year: item.parsed?.year ?? null,
+            // Prefer TMDB title/year; fall back to parsed (pre-enrichment or KGF)
+            title: item.metadata?.title || item.parsed?.title || item.name || "Unknown",
+            year: item.metadata?.year ?? item.parsed?.year ?? null,
             poster: item.metadata?.poster ?? null,
             rating: item.metadata?.rating ?? null,
             streamUrl: item.streamUrl,
@@ -161,7 +162,7 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
 
     const handleAction = (key) => {
         closeMenu();
-        const payload = { name: media.raw.metadata.title, poster: media.poster, type: media.type };
+        const payload = { name: media.title, poster: media.poster, type: media.type };
         switch (key) {
             case "play":
                 onPlay?.(media.raw);
@@ -178,24 +179,16 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
     };
 
     return (
-        <div
-            onClick={() => {
-                if (media.type === "series") {
-                    navigate(`/media/${encodeURIComponent(media.id)}`);
-                } else {
-                    navigate(`/media/${encodeURIComponent(media.id)}`);
-                }
-            }}
-            className="group relative shrink-0 w-40 sm:w-44 cursor-pointer select-none my-2">
+        <div onClick={() => navigate(`/media/${encodeURIComponent(media.id)}`)} className="group relative shrink-0 w-40 sm:w-44 cursor-pointer select-none my-2">
             {/* ── Poster — overflow:hidden is safe because menu is NOT inside ── */}
             <div
                 className="relative w-full aspect-2/3 rounded-xl overflow-hidden bg-base-300
                             shadow-lg ring-1 ring-white/5 transition-transform duration-200
                             group-hover:scale-[1.03] group-hover:shadow-2xl group-hover:ring-white/20">
                 {media.poster && !imgError ? (
-                    <img src={media.poster} alt={media.raw.metadata.title} className="w-full h-full object-cover" onError={() => setImgError(true)} loading="lazy" draggable={false} />
+                    <img src={media.poster} alt={media.title} className="w-full h-full object-cover" onError={() => setImgError(true)} loading="lazy" draggable={false} />
                 ) : (
-                    <PosterFallback title={media.raw.metadata.title} type={media.type} />
+                    <PosterFallback title={media.title} type={media.type} />
                 )}
 
                 {/* Bottom gradient */}
@@ -233,7 +226,7 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
 
             {/* ── Info ── */}
             <div className="mt-2 px-0.5">
-                <p className="text-[13px] font-medium text-base-content truncate leading-tight">{media.raw.metadata.title}</p>
+                <p className="text-[13px] font-medium text-base-content truncate leading-tight">{media.title}</p>
 
                 <div className="flex items-center justify-between mt-1.5 gap-1">
                     <span className="text-[11px] text-base-content/45 font-medium shrink-0">{media.year ?? "—"}</span>
@@ -242,7 +235,7 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
                         <button
                             onClick={() =>
                                 toggleFavourite(media.id, {
-                                    name: media.raw.metadata.title,
+                                    name: media.title,
                                     poster: media.poster,
                                     type: media.type,
                                 })
