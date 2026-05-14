@@ -14,7 +14,7 @@ const profileMenuItems = [
     { icon: User, label: "Profile", to: "/profile" },
     { icon: Users, label: "Friends", to: "/friends" },
     { icon: List, label: "My Watchlist", to: "/watchlist" },
-    { icon: Library, label: "My Media", to: "/media" },
+    { icon: Library, label: "My Media", to: "/my-media" },
     { icon: FolderTree, label: "Folders", to: "/folders" },
     { icon: Layers, label: "Services", to: "/services" },
     { icon: ShieldCheck, label: "Privacy Settings", to: "/privacy" },
@@ -133,12 +133,7 @@ const Navbar = () => {
                                 <ul className="py-2">
                                     {profileMenuItems.map(({ icon: Icon, label, to }) => (
                                         <li key={to}>
-                                            <NavLink
-                                                to={to}
-                                                onClick={() => setProfileOpen(false)}
-                                                className={({ isActive }) =>
-                                                    `flex items-center gap-3 px-4 py-2.5 text-md md:text-sm transition-colors ${isActive ? "text-[#e5a00d] bg-white/5" : "text-white/70 hover:text-white hover:bg-white/5"}`
-                                                }>
+                                            <NavLink to={to} onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-md md:text-sm transition-colors">
                                                 <Icon size={20} strokeWidth={2} className="shrink-0 text-base-content" />
                                                 <span className="text-base-content">{label}</span>
                                             </NavLink>

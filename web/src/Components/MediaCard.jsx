@@ -11,8 +11,9 @@ function normalise(item) {
         return {
             id: item.id,
             type: "movie",
-            title: item.parsed?.title || item.name || "Unknown",
-            year: item.parsed?.year ?? null,
+            // Prefer TMDB title/year; fall back to parsed (pre-enrichment or KGF)
+            title: item.metadata?.title || item.parsed?.title || item.name || "Unknown",
+            year: item.metadata?.year ?? item.parsed?.year ?? null,
             poster: item.metadata?.poster ?? null,
             rating: item.metadata?.rating ?? null,
             streamUrl: item.streamUrl,
@@ -20,7 +21,7 @@ function normalise(item) {
         };
     }
     return {
-        id: item.seriesKey ?? item.title,
+        id: item.id,
         type: "series",
         title: item.metadata?.title ?? item.title ?? "Unknown",
         year: item.metadata?.year ?? null,
@@ -210,12 +211,12 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
                     <button
                         ref={btnRef}
                         onClick={handleMenuOpen}
-                        className="w-7 h-7 rounded-full bg-white/90 hover:bg-white
+                        className="w-7 h-7 rounded-full md:bg-white/90 hover:bg-white
                                    flex items-center justify-center shadow-md
                                    opacity-100 lg:opacity-0 lg:group-hover:opacity-100
                                    transition-all duration-150 active:scale-95 cursor-pointer"
                         aria-label="More options">
-                        <MoreVertical size={13} className="text-black" />
+                        <MoreVertical size={14} className="text-white font-bold md:text-black" />
                     </button>
                 </div>
             </div>

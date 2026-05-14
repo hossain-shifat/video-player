@@ -7,12 +7,24 @@ const { lookupMetadata } = require("./tmdb");
 
 const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 
+// ── Bump this whenever the parser logic changes significantly. ─────────────────
+// Any cached entry without this version (or with a lower one) is automatically
+// re-fetched, clearing out stale parsed data and wrong TMDB matches.
+//
+// History:
+//   1 — initial
+//   2 — expanded noise tags, basic acronym support
+//   3 — year-after-chapter fix (KGF years were being dropped, causing wrong
+//        TMDB matches); improved acronym collapse; part-aware TMDB search
+const PARSER_VERSION = 3;
+
 // In-memory mirror of the store file — Map<fileId, metadataObject>
 let store = new Map();
 let dirty = false;
 let saveTimer = null;
 
-// Loads the store from disk on first use
+// ─── Disk I/O ─────────────────────────────────────────────────────────────────
+
 function loadStore() {
     try {
         const raw = fs.readFileSync(STORE_FILE, "utf-8");
@@ -49,54 +61,94 @@ function scheduleSave() {
     }, 2000);
 }
 
-// Returns cached metadata for a file ID, or null if not yet fetched
+// ─── Cache helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Returns true if a cached entry was built with the current parser version.
+ * Entries from older versions are considered stale and will be re-fetched.
+ */
+function isCacheValid(entry) {
+    if (!entry) return false;
+    return (entry._parserVersion ?? 0) >= PARSER_VERSION;
+}
+
 function getCached(fileId) {
     if (store.size === 0) loadStore();
-    return store.get(fileId) || null;
+    const entry = store.get(fileId);
+    if (!entry || !isCacheValid(entry)) return null;
+    return entry;
 }
 
-// Stores metadata for a file ID and schedules a disk save
 function setCache(fileId, metadata) {
-    store.set(fileId, { ...metadata, _cachedAt: new Date().toISOString() });
+    store.set(fileId, {
+        ...metadata,
+        _parserVersion: PARSER_VERSION,
+        _cachedAt: new Date().toISOString(),
+    });
     scheduleSave();
 }
 
-// Marks a file ID as "not found on TMDB" so we don't retry on every request
 function setNotFound(fileId, title) {
-    store.set(fileId, { _notFound: true, _title: title, _cachedAt: new Date().toISOString() });
+    store.set(fileId, {
+        _notFound: true,
+        _title: title,
+        _parserVersion: PARSER_VERSION,
+        _cachedAt: new Date().toISOString(),
+    });
     scheduleSave();
 }
 
-// Deletes a cache entry so it will be re-fetched on next request
 function invalidate(fileId) {
     store.delete(fileId);
     scheduleSave();
 }
 
-// Clears all metadata cache
 function invalidateAll() {
     store.clear();
     scheduleSave();
 }
 
 /**
- * Main entry — given a file object { id, name } from the scanner,
- * returns enriched metadata. Hits TMDB only on cache miss.
+ * Purge every entry whose _parserVersion is below the current version.
+ * Called once at startup so stale data is gone before any requests arrive.
+ */
+function purgeStaleEntries() {
+    if (store.size === 0) return;
+    let purged = 0;
+    for (const [key, value] of store) {
+        if (!isCacheValid(value)) {
+            store.delete(key);
+            purged++;
+        }
+    }
+    if (purged > 0) {
+        console.log(`[Metadata] Purged ${purged} stale cache entries (parser v${PARSER_VERSION})`);
+        scheduleSave();
+    }
+}
+
+// ─── Main entry ───────────────────────────────────────────────────────────────
+
+/**
+ * Given a file object { id, name } from the scanner, returns enriched metadata.
+ * Hits TMDB only on a cache miss or after a parser version bump.
  *
  * Returns null if TMDB has no match (and caches that result too).
  */
 async function getMetadata(file) {
-    if (store.size === 0) loadStore();
+    if (store.size === 0) {
+        loadStore();
+        purgeStaleEntries();
+    }
 
     const cached = store.get(file.id);
-    if (cached) {
+    if (cached && isCacheValid(cached)) {
         if (cached._notFound) return null;
         return cached;
     }
 
-    // Cache miss — parse filename and call TMDB
     const parsed = parseFilename(file.name);
-    console.log(`[Metadata] Fetching TMDB for: "${parsed.title}" (${parsed.type})`);
+    console.log(`[Metadata] Fetching TMDB for: "${parsed.title}"` + ` (${parsed.type}${parsed.year ? ` ${parsed.year}` : ""}${parsed.part ? ` Part ${parsed.part}` : ""})`);
 
     const metadata = await lookupMetadata(parsed);
 
@@ -105,10 +157,9 @@ async function getMetadata(file) {
         return null;
     }
 
-    // Store the parsed info alongside TMDB data so client knows season/episode
     const enriched = { ...metadata, parsed };
     setCache(file.id, enriched);
     return enriched;
 }
 
-module.exports = { getMetadata, getCached, setCache, invalidate, invalidateAll };
+module.exports = { getMetadata, getCached, setCache, invalidate, invalidateAll, purgeStaleEntries };
