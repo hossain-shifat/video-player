@@ -71,7 +71,9 @@ const YEAR_RE = /(?<![A-Za-z])[\s._(-]?((?:19|20)\d{2})[\s._)-]?/;
 const ANIME_EP_RE = /[-_\s](\d{2,3})(?:\s*[-_\(]|$)/;
 
 // Anime hint keywords
-const ANIME_HINTS = /\b(anime|BD|OVA|ONA|OAD|NCED|NCOP|[Ss]ub(?:bed)?|[\u3000-\u9fff])\b/;
+// BD only matches when explicitly bracketed "[BD]" to avoid false positives
+// from filenames like "Movie.2020.BD.1080p" — bare "BD" is a common source tag.
+const ANIME_HINTS = /\b(anime|OVA|ONA|OAD|NCED|NCOP|[Ss]ub(?:bed)?|[\u3000-\u9fff])\b|\[BD\]/;
 
 // ─── Language detection ───────────────────────────────────────────────────────
 // Maps every tag that can appear in a filename to its ISO 639-1 code.

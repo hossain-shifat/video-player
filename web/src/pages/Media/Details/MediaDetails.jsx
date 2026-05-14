@@ -234,7 +234,7 @@ function CastCarousel({ cast }) {
 // ─── Episode row ──────────────────────────────────────────────────────────────
 function EpisodeRow({ ep, onPlay }) {
     return (
-        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-base-300 cursor-pointer group transition-colors" onClick={() => ep.id && onPlay(ep.id)}>
+        <div className={`flex items-center gap-3 p-2 rounded-lg hover:bg-base-300 group transition-colors${ep.id ? " cursor-pointer" : ""}`} onClick={() => ep.id && onPlay(ep.id)}>
             {ep.still ? (
                 <img src={ep.still} alt={ep.title} className="w-20 h-12 object-cover rounded shrink-0" loading="lazy" />
             ) : (
@@ -508,12 +508,13 @@ export default function MediaDetails() {
         );
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
     return (
         <div className="min-h-screen -m-4 sm:-m-6 lg:-m-8">
             {/* ── Backdrop + Hero ──────────────────────────────────────────── */}
             <div className="relative">
                 {/* Backdrop */}
-                <div className="absolute inset-x-0 top-0 h-80 sm:h-105 pointer-events-none" style={{ zIndex: 0 }}>
+                <div className="absolute inset-x-0 top-0 h-80 sm:h-[420px] pointer-events-none" style={{ zIndex: 0 }}>
                     {backdrop && !imgError ? (
                         <img src={backdrop} alt={title} className="w-full h-full object-cover object-top" onError={() => setImgError(true)} />
                     ) : (

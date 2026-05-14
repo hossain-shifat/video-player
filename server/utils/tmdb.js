@@ -198,9 +198,11 @@ async function searchAnime(title, year = null) {
 function buildMovieTitleCandidates(title, part) {
     const candidates = [];
     if (part != null) {
-        // Try the full title with chapter first ("KGF Chapter 1")
+        // "Chapter N" convention (e.g. "KGF Chapter 1")
         candidates.push(`${title} Chapter ${part}`);
-        // Also try just the title — year will discriminate on TMDB
+        // "Part N" convention — some TMDB titles use this wording
+        candidates.push(`${title} Part ${part}`);
+        // Bare title as final fallback — year will discriminate on TMDB
         candidates.push(title);
     } else {
         candidates.push(title);

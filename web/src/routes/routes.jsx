@@ -26,11 +26,6 @@ export const router = createBrowserRouter([
                 path: "media/:id",
                 Component: MediaDetails,
             },
-            {
-                path: "media/:id",
-                Component: MediaDetails,
-            },
-
             // {
             //     path: "live",
             //     Component: LiveTV,
