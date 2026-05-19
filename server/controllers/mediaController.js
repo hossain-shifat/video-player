@@ -107,30 +107,52 @@ async function getAllMedia(req, res) {
 }
 
 // GET /api/media/:id — single file with metadata
+// Handles both movie IDs and series-episode file IDs (which are nested inside seasons)
 async function getMediaById(req, res) {
     try {
+        const { id } = req.params;
         const folders = await readFolders();
         const { allMedia } = await getAllCached(folders);
-
-        // Group media first
         const grouped = await groupMedia(allMedia);
 
-        // Search everywhere
-        const media = [...grouped.movies, ...grouped.series, ...grouped.anime].find((item) => item.id === req.params.id);
+        // 1. Check top-level items by id (movies + series-group objects)
+        const topLevel = [...grouped.movies, ...grouped.series, ...grouped.anime].find((item) => item.id === id);
+        if (topLevel) return res.json(topLevel);
 
-        if (!media) {
-            return res.status(404).json({
-                error: "Media not found",
-            });
+        // 1b. Fallback: find series/anime by seriesKey (some frontend paths use this)
+        const byKey = [...grouped.series, ...grouped.anime].find((s) => s.seriesKey === id);
+        if (byKey) return res.json(byKey);
+
+        // 2. Search inside series/anime episode lists (episode file IDs are nested)
+        for (const group of [...grouped.series, ...grouped.anime]) {
+            for (const season of Object.values(group.seasons)) {
+                const ep = season.episodes.find((e) => e.id === id);
+                if (ep) {
+                    // Return episode enriched with series-level metadata so the player
+                    // has title, poster, season/episode number, etc.
+                    return res.json({
+                        ...ep,
+                        type: group.type,
+                        seriesTitle: group.title,
+                        metadata: {
+                            ...(ep.metadata || {}),
+                            title: ep.title || ep.name,
+                            poster: ep.still || group.metadata?.poster || null,
+                            backdrop: group.metadata?.backdrop || null,
+                            // carry series-level fields the player uses
+                            seriesPoster: group.metadata?.poster || null,
+                            seriesTitle: group.title,
+                        },
+                        parsed: ep.parsed,
+                    });
+                }
+            }
         }
 
-        return res.json(media);
+        return res.status(404).json({ error: "Media not found" });
     } catch (err) {
         console.error("[Media] getMediaById error:", err);
-
-        return res.status(500).json({
-            error: "Failed to get media",
-        });
+        return res.status(500).json({ error: "Failed to get media" });
     }
 }
 

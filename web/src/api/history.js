@@ -13,9 +13,12 @@ export function getHistory() {
  */
 export async function getResumePoint(id) {
     try {
-        return await api.get(`/api/history/${id}`);
+        const data = await api.get(`/api/history/${id}`);
+        // FIX: handle new 200+null pattern (exists:false) and old 404 pattern
+        if (!data || data.position === null || data.position === undefined) return null;
+        return data;
     } catch (err) {
-        if (err.status === 404) return null;
+        if (err.status === 404) return null; // backwards compat
         throw err;
     }
 }

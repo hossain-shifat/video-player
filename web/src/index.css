@@ -130,21 +130,65 @@
     --border: 1px;
 }
 
-* {
-    font-family: "Inter";
+/* ─── Flux appearance CSS variable hooks ─────────────────────────────────── */
+/* These are written by themeContext.jsx at runtime via element.style.setProperty */
+
+:root {
+    --flux-font-family: "Inter", sans-serif;
+    --flux-font-scale: 1;
+    --flux-density-scale: 1;
+    --flux-ui-scale: 1;
+    --flux-line-height: 1.5;
+    --flux-content-width: 100%;
+    --flux-sidebar-width: 200px;
 }
 
+* {
+    font-family: var(--flux-font-family);
+}
+
+/* UI scaling (scales everything since it changes root rem) */
+html {
+    font-size: calc(16px * var(--flux-ui-scale, 1));
+}
+
+/* Text-specific scaling */
+body {
+    font-size: calc(1rem * var(--flux-font-scale, 1));
+    line-height: var(--flux-line-height, 1.5);
+}
+
+/* ─── Accessibility helpers ───────────────────────────────────────────────── */
+
+.flux-reduced-motion *,
+.flux-reduced-motion *::before,
+.flux-reduced-motion *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+}
+
+.flux-high-contrast {
+    --tw-text-opacity: 1;
+    filter: contrast(1.25);
+}
+
+/* ─── Font helpers ────────────────────────────────────────────────────────── */
+
 .font-inter {
-    font-family: "Inter";
+    font-family: "Inter", sans-serif;
 }
 
 .font-ibm-plex-sans {
-    font-family: "IBM Plex Sans";
+    font-family: "IBM Plex Sans", sans-serif;
 }
 
 .font-circular {
-    font-family: "CircularStd";
+    font-family: "CircularStd", sans-serif;
 }
+
+/* ─── Scrollbar hide ─────────────────────────────────────────────────────── */
 
 *::-webkit-scrollbar {
     display: none;
@@ -158,6 +202,8 @@
 .overflow-x-auto::-webkit-scrollbar {
     display: none;
 }
+
+/* ─── Settings active link ───────────────────────────────────────────────── */
 
 .active {
     @apply bg-primary text-white;

@@ -4,8 +4,17 @@ import Home from "../Pages/Home/Home";
 import AllCategory from "../Pages/Category/AllCategory";
 import CategoryPage from "../Pages/Category/CategoryPage";
 import MediaDetails from "../Pages/Media/Details/MediaDetails";
+import Movies from "../Pages/Media/Movies/Movies";
+import Series from "../Pages/Media/Series/Series";
+import PlayerPage from "../../src/Pages/Player/PlayerPage";
+import Settings from "../Pages/Settings/Settings";
+import WatchList from "../Pages/WatchList/WatchList";
 
 export const router = createBrowserRouter([
+    {
+        path: "/player/:id",
+        Component: PlayerPage,
+    },
     {
         path: "/",
         Component: Root,
@@ -26,54 +35,22 @@ export const router = createBrowserRouter([
                 path: "media/:id",
                 Component: MediaDetails,
             },
-            // {
-            //     path: "live",
-            //     Component: LiveTV,
-            // },
-            // {
-            //     path: "movies",
-            //     Component: Movies,
-            // },
-            // {
-            //     path: "series",
-            //     Component: Series,
-            // },
-            // {
-            //     path: "library",
-            //     Component: Library,
-            // },
-            // {
-            //     path: "profile",
-            //     Component: Profile,
-            // },
-            // {
-            //     path: "friends",
-            //     Component: Friends,
-            // },
-            // {
-            //     path: "watchlist",
-            //     Component: Watchlist,
-            // },
-            // {
-            //     path: "media",
-            //     Component: Media,
-            // },
-            // {
-            //     path: "folders",
-            //     Component: Folders,
-            // },
-            // {
-            //     path: "services",
-            //     Component: Services,
-            // },
-            // {
-            //     path: "privacy",
-            //     Component: Privacy,
-            // },
-            // {
-            //     path: "settings",
-            //     Component: SettingsPage,
-            // },
+            {
+                path: "movies",
+                Component: Movies,
+            },
+            {
+                path: "series",
+                Component: Series,
+            },
+            {
+                path: "settings",
+                Component: Settings,
+            },
+            {
+                path: "watchlist",
+                Component: WatchList,
+            },
         ],
     },
 ]);
