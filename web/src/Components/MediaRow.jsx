@@ -31,7 +31,7 @@ export default function MediaRow({ title, items = [], onPlay, onWatchTrailer, vi
             <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                     <h2 className="text-base sm:text-lg font-semibold text-base-content">{title}</h2>
-                    <span className="text-xs text-base-content/35 font-medium bg-base-300 px-2 py-0.5 rounded-full">{items.length}</span>
+                    <span className="text-xs text-base-content/35 font-medium bg-base-300 py-0.5 rounded-full">{items.length}</span>
                 </div>
 
                 <div className="flex items-center gap-2">

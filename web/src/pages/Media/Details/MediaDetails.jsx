@@ -104,23 +104,16 @@ function fmtRuntime(mins) {
     const m = mins % 60;
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
-
 function fmtVotes(n) {
     if (!n) return null;
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
     if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
     return n.toLocaleString();
 }
-
-// Format ISO date "2023-07-21" → "July 21, 2023"
 function fmtDate(iso) {
     if (!iso) return null;
     try {
-        return new Date(iso).toLocaleDateString("en-US", {
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-        });
+        return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
     } catch {
         return iso;
     }
@@ -130,7 +123,6 @@ function fmtDate(iso) {
 function Badge({ children, className = "" }) {
     return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold ${className}`}>{children}</span>;
 }
-
 function SectionHeading({ icon: Icon, children }) {
     return (
         <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3 flex items-center gap-2">
@@ -139,7 +131,6 @@ function SectionHeading({ icon: Icon, children }) {
         </h2>
     );
 }
-
 function Divider() {
     return <div className="border-t border-white/5" />;
 }
@@ -252,8 +243,7 @@ function EpisodeRow({ ep, onPlay }) {
             <div className="flex items-center gap-2 shrink-0">
                 {ep.rating && (
                     <span className="hidden sm:flex items-center gap-0.5 text-xs text-base-content/40">
-                        <Star size={10} className="fill-warning text-warning" />
-                        {ep.rating}
+                        <Star size={10} className="fill-warning text-warning" /> {ep.rating}
                     </span>
                 )}
                 {ep.runtime && <span className="text-xs text-base-content/40">{fmtRuntime(ep.runtime)}</span>}
@@ -301,7 +291,7 @@ function SeasonsPanel({ seasons, onPlayEpisode }) {
                                     <button
                                         className="w-full text-xs text-primary py-2 hover:underline flex items-center justify-center gap-1"
                                         onClick={() => setShowAllEps((p) => ({ ...p, [num]: !p[num] }))}>
-                                        {showAll ? (
+                                        {showAllEps[num] ? (
                                             <>
                                                 <ChevronUp size={12} /> Show less
                                             </>
@@ -370,23 +360,23 @@ export default function MediaDetails() {
     const [resumePos, setResumePos] = useState(null);
     const [showTrailer, setShowTrailer] = useState(false);
 
+    // id from URL is already the raw base64url string — no encode/decode needed.
+    // React Router passes :id exactly as typed in the URL.
+    // We used encodeURIComponent() when navigating, so decode once here.
     const decodedId = decodeURIComponent(id);
 
-    // ── Scroll to top on every navigation to this page ─────────────────────────
+    // ── Scroll to top on every navigation ─────────────────────────────────────
     useEffect(() => {
         window.scrollTo({ top: 0, behavior: "instant" });
     }, [decodedId]);
 
     // ── Resolve item — context-first, network fallback ────────────────────────
-    // When navigating from the home/browse page the context arrays are already
-    // populated, so we find the item instantly with zero network round-trip.
-    // Only falls back to a fetch when landing via a deep-link before context loads.
     useEffect(() => {
         setImgError(false);
         setOverviewExpanded(false);
 
         // 1. Instant lookup from already-loaded context
-        const contextItem = [...movies, ...series, ...anime].find((m) => m.id === decodedId);
+        const contextItem = [...movies, ...series, ...anime].find((m) => m.id === decodedId || m.seriesKey === decodedId);
         if (contextItem) {
             setItem(contextItem);
             setLoading(false);
@@ -448,8 +438,6 @@ export default function MediaDetails() {
     const year = m?.year;
     const rating = m?.rating;
 
-    // ── Release date — exact ISO date from new API fields ─────────────────────
-    // Movies expose `releaseDate`, TV/anime expose `firstAirDate`.
     const releaseIso = m?.releaseDate || m?.firstAirDate || null;
     const releaseDateFmt = fmtDate(releaseIso);
     const releaseDateLabel = m?.firstAirDate ? "First Aired" : "Released";
@@ -465,20 +453,13 @@ export default function MediaDetails() {
     const favourited = isFavourite(decodedId);
     const overviewLong = overview && overview.length > 220;
 
-    // ── Language / audio ───────────────────────────────────────────────────────
-    // Parsed languages from filename e.g. ["hi","en"] take priority over TMDB lang code
     const parsedLangs = item?.parsed?.languages;
     const isDualAudio = item?.parsed?.dualAudio || item?.parsed?.multiAudio || (parsedLangs && parsedLangs.length > 1);
     const isMultiAudio = item?.parsed?.multiAudio || (parsedLangs && parsedLangs.length > 2);
     const audioLabel = isDualAudio ? (isMultiAudio ? "Multi Audio" : "Dual Audio") : null;
-
-    // Full language name(s) for display — slash-separated for dual/multi audio
     const primaryLangDisplay = parsedLangs?.length > 0 ? parsedLangs.map(langName).join(" / ") : langName(m?.language);
-
-    // Hero meta row: show primary language (from TMDB), full name
     const heroLang = langName(m?.language);
 
-    // ── Related parts — other chapters of same multi-part movie ───────────────
     const relatedParts = useMemo(() => {
         if (!item || isSeries || partNum == null) return [];
         const baseTitle = item.parsed?.title?.toLowerCase();
@@ -487,10 +468,24 @@ export default function MediaDetails() {
     }, [item, isSeries, partNum, movies]);
 
     // ── Handlers ───────────────────────────────────────────────────────────────
+
+    /**
+     * handlePlayMovie — navigates to the player with the movie's file ID.
+     *
+     * BUG FIX: was navigating to `/stream/${id}` which is a backend URL,
+     * not a React Router route. Corrected to `/player/:id`.
+     *
+     * The ID is already a base64url string (URL-safe). We still wrap it in
+     * encodeURIComponent so React Router gets a clean single-segment param.
+     */
     const handlePlayMovie = () => {
-        if (item?.streamUrl) navigate(`/player/${encodeURIComponent(item.id)}`);
+        navigate(`/player/${encodeURIComponent(decodedId)}`);
     };
 
+    /**
+     * handlePlayEpisode — navigates to the player with a specific episode file ID.
+     * Called from EpisodeRow inside the SeasonsPanel.
+     */
     const handlePlayEpisode = (epId) => {
         navigate(`/player/${encodeURIComponent(epId)}`);
     };
@@ -514,7 +509,7 @@ export default function MediaDetails() {
             {/* ── Backdrop + Hero ──────────────────────────────────────────── */}
             <div className="relative">
                 {/* Backdrop */}
-                <div className="absolute inset-x-0 top-0 h-80 sm:h-[420px] pointer-events-none" style={{ zIndex: 0 }}>
+                <div className="absolute inset-x-0 top-0 h-80 sm:h-420px pointer-events-none" style={{ zIndex: 0 }}>
                     {backdrop && !imgError ? (
                         <img src={backdrop} alt={title} className="w-full h-full object-cover object-top" onError={() => setImgError(true)} />
                     ) : (
@@ -563,15 +558,12 @@ export default function MediaDetails() {
                                     {isAnime ? <Clapperboard size={11} /> : isSeries ? <Tv size={11} /> : <Film size={11} />}
                                     {isAnime ? "Anime" : isSeries ? "Series" : "Movie"}
                                 </Badge>
-
                                 {m?.status && <Badge className="bg-base-300 text-base-content/55">{m.status}</Badge>}
-
                                 {partNum != null && (
                                     <Badge className="bg-secondary/20 text-secondary">
                                         <Layers size={11} /> Part {partNum}
                                     </Badge>
                                 )}
-
                                 {audioLabel && (
                                     <Badge className="bg-success/15 text-success">
                                         <Volume2 size={11} /> {audioLabel}
@@ -581,11 +573,7 @@ export default function MediaDetails() {
 
                             {/* Title */}
                             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-base-content leading-tight mb-1">{title}</h1>
-
-                            {/* Original title */}
                             {originalTitle && <p className="text-xs text-base-content/35 mb-2 font-medium">{originalTitle}</p>}
-
-                            {/* Tagline */}
                             {tagline && <p className="text-sm text-base-content/50 italic mb-3">{tagline}</p>}
 
                             {/* Meta row */}
@@ -630,6 +618,7 @@ export default function MediaDetails() {
 
                             {/* Action buttons */}
                             <div className="flex flex-wrap items-center gap-2 mb-5">
+                                {/* Play button — movies only (series use the episode list below) */}
                                 {!isSeries && (
                                     <button onClick={handlePlayMovie} className="btn btn-primary btn-sm sm:btn-md gap-2 px-6 rounded-full border-none">
                                         <Play size={16} fill="currentColor" />
@@ -695,7 +684,7 @@ export default function MediaDetails() {
                     </section>
                 )}
 
-                {/* ── Other parts row (multi-part movies: KGF Ch1 & Ch2) ───── */}
+                {/* ── Other parts row ──────────────────────────────────────── */}
                 {relatedParts.length > 0 && (
                     <section>
                         <MediaRow

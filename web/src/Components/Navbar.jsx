@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { NavLink } from "react-router";
+import { NavLink, Link } from "react-router";
 import { Search, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut } from "lucide-react";
 import Logo from "./Logo";
 
@@ -11,13 +11,13 @@ const navLinks = [
 ];
 
 const profileMenuItems = [
-    { icon: User, label: "Profile", to: "/profile" },
+    { icon: User, label: "Profile", to: "/settings?tab=profile" },
     { icon: Users, label: "Friends", to: "/friends" },
     { icon: List, label: "My Watchlist", to: "/watchlist" },
     { icon: Library, label: "My Media", to: "/my-media" },
-    { icon: FolderTree, label: "Folders", to: "/folders" },
+    { icon: FolderTree, label: "Folders", to: "/settings?tab=library" },
     { icon: Layers, label: "Services", to: "/services" },
-    { icon: ShieldCheck, label: "Privacy Settings", to: "/privacy" },
+    { icon: ShieldCheck, label: "Privacy Settings", to: "/settings?tab=privacy" },
     { icon: Settings, label: "Settings", to: "/settings" },
 ];
 
@@ -47,6 +47,8 @@ const Navbar = () => {
                 <input
                     type="text"
                     placeholder="Search..."
+                    name="Search"
+                    id="Search"
                     onFocus={() => setSearchFocused(true)}
                     onBlur={() => setSearchFocused(false)}
                     className="bg-transparent outline-none text-md text-white placeholder-base-content placeholder:text-md w-full"
@@ -71,7 +73,7 @@ const Navbar = () => {
             <div className="flex items-center gap-1 ml-auto">
                 {/* my media */}
                 <NavLink
-                    to="/media"
+                    to="/my-media"
                     className={({ isActive }) =>
                         `hidden lg:flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded transition-colors ${isActive ? "text-white bg-white/10" : "text-white/60 hover:text-white hover:bg-white/5"}`
                     }>
@@ -90,7 +92,12 @@ const Navbar = () => {
                 </NavLink>
 
                 <div className="tooltip tooltip-bottom" data-tip="Watchlist">
-                    <NavLink to="/watchlist" aria-label="Watchlist" className="lg:hidden inline-flex items-center justify-center p-2 rounded text-white/70 hover:text-white hover:bg-white/5">
+                    <NavLink
+                        to="/watchlist"
+                        aria-label="Watchlist"
+                        className={({ isActive }) =>
+                            `lg:hidden inline-flex items-center justify-center p-2 rounded transition-colors ${isActive ? "text-white bg-none" : "text-white/70 hover:text-white hover:bg-white/5"}`
+                        }>
                         <Bookmark size={25} />
                     </NavLink>
                 </div>
@@ -117,7 +124,7 @@ const Navbar = () => {
                             </div>
 
                             {/* Profile inside floating menu */}
-                            <NavLink to="/profile">
+                            <Link to="/settings?tab=profile" onClick={() => setProfileOpen(false)}>
                                 <div className="flex flex-col justify-center items-center gap-4">
                                     <h1 className="bg-primary w-20 h-20 flex justify-center items-center rounded-full">
                                         <User size={50} />
@@ -127,16 +134,16 @@ const Navbar = () => {
                                         <p className="text-white/70">hossain222</p>
                                     </div>
                                 </div>
-                            </NavLink>
+                            </Link>
                             {/* profile floating navigations */}
                             <div>
                                 <ul className="py-2">
                                     {profileMenuItems.map(({ icon: Icon, label, to }) => (
                                         <li key={to}>
-                                            <NavLink to={to} onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-md md:text-sm transition-colors">
+                                            <Link to={to} onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-md md:text-sm transition-colors hover:bg-white/5">
                                                 <Icon size={20} strokeWidth={2} className="shrink-0 text-base-content" />
                                                 <span className="text-base-content">{label}</span>
-                                            </NavLink>
+                                            </Link>
                                         </li>
                                     ))}
                                 </ul>

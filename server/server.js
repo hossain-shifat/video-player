@@ -1,5 +1,10 @@
 "use strict";
 
+/**
+ * server.js (v2 — FLUX Streaming Engine)
+ * Adds: HLS cleanup daemon, graceful shutdown, session cleanup on exit.
+ */
+
 require("dotenv").config();
 
 const express = require("express");
@@ -14,12 +19,15 @@ const metadataRouter = require("./routes/metadata");
 const historyRouter = require("./routes/history");
 const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
+
 const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/fileHelpers");
+const { startDaemon, stopDaemon } = require("./utils/hlsCleanup");
+const { killAllSessions } = require("./utils/transcoderService");
+const { detect: detectHW } = require("./utils/hwAccel");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Load package.json once at startup — avoids blocking readFileSync on request paths
 const { version: APP_VERSION } = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
@@ -28,35 +36,31 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173").
 app.use(
     cors({
         origin: (origin, callback) => {
-            // Allow requests with no origin (e.g. mobile apps, curl, Postman)
-            if (!origin || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                // Deny without throwing — throwing causes a 500; null,false gives a proper CORS denial
-                callback(null, false);
-            }
+            if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+            else callback(null, false);
         },
         methods: ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Range"],
-        exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length"],
+        allowedHeaders: ["Content-Type", "Range", "X-Flux-Client", "X-Flux-Profile"],
+        exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length", "X-Content-Duration", "ETag"],
     }),
 );
 
-// ─── BODY PARSING ─────────────────────────────────────────────────────────────
 app.use(express.json());
 
-// ─── REQUEST LOGGER ───────────────────────────────────────────────────────────
+// ─── Request Logger ───────────────────────────────────────────────────────────
 app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-        const duration = Date.now() - start;
-        const date = new Date().toISOString();
-        console.log(`[${date}] ${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
+        const ms = Date.now() - start;
+        if (!req.path.startsWith("/stream/hls")) {
+            // don't spam HLS segment logs
+            console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${ms}ms`);
+        }
     });
     next();
 });
 
-// ─── ROUTES ───────────────────────────────────────────────────────────────────
+// ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api/library", libraryRouter);
 app.use("/api/media", mediaRouter);
 app.use("/api/metadata", metadataRouter);
@@ -65,65 +69,69 @@ app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/stream", streamRouter);
 
-// ─── HEALTH ENDPOINT ──────────────────────────────────────────────────────────
+// ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
-    res.json({
-        status: "ok",
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        version: APP_VERSION || "1.0.0",
-    });
+    res.json({ status: "ok", uptime: process.uptime(), version: APP_VERSION });
 });
 
-// ─── INFO ENDPOINT ────────────────────────────────────────────────────────────
+// ─── Info ─────────────────────────────────────────────────────────────────────
 app.get("/api/info", async (req, res) => {
     try {
         const foldersRaw = await fs.promises.readFile(path.join(__dirname, "data", "folders.json"), "utf-8");
         const folders = JSON.parse(foldersRaw);
+        const hw = await detectHW().catch(() => ({ type: "unknown" }));
         res.json({
             videoExtensions: VIDEO_EXTENSIONS,
             subtitleExtensions: SUBTITLE_EXTENSIONS,
             folderCount: folders.length,
             port: PORT,
+            hwAccel: hw.type,
+            version: APP_VERSION,
         });
     } catch {
-        res.json({
-            videoExtensions: VIDEO_EXTENSIONS,
-            subtitleExtensions: SUBTITLE_EXTENSIONS,
-            folderCount: 0,
-            port: PORT,
-        });
+        res.json({ videoExtensions: VIDEO_EXTENSIONS, subtitleExtensions: SUBTITLE_EXTENSIONS, folderCount: 0, port: PORT });
     }
 });
 
-// ─── 404 HANDLER ──────────────────────────────────────────────────────────────
-app.use((req, res) => {
-    res.status(404).json({ error: "Not found" });
-});
-
-// ─── GLOBAL ERROR HANDLER ─────────────────────────────────────────────────────
+// ─── 404 / Error ─────────────────────────────────────────────────────────────
+app.use((req, res) => res.status(404).json({ error: "Not found" }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
     console.error("[Server] Unhandled error:", err);
-    const status = err.status || err.statusCode || 500;
-    res.status(status).json({ error: err.message || "Internal server error" });
+    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
 });
 
-// Allow all origins for local testing
-// app.use(
-//     cors({
-//         origin: "*",
-//         methods: ["GET", "POST", "PUT", "DELETE"],
-//         allowedHeaders: ["Content-Type", "Authorization"],
-//     }),
-// );
+// ─── Graceful Shutdown ────────────────────────────────────────────────────────
+async function shutdown(signal) {
+    console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
+    stopDaemon();
+    await killAllSessions();
+    console.log("[Server] All transcoding sessions terminated. Bye.");
+    process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
-// ─── START ────────────────────────────────────────────────────────────────────
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`\n🎬 Media Server running at http://localhost:${PORT}`);
-    console.log(`   Health:  http://localhost:${PORT}/health`);
-    console.log(`   Library: http://localhost:${PORT}/api/library`);
-    console.log(`   Media:   http://localhost:${PORT}/api/media`);
-    console.log(`   Stream:  http://localhost:${PORT}/stream/video/:id`);
-    console.log(`   Info:    http://localhost:${PORT}/api/info\n`);
+// ─── Start ────────────────────────────────────────────────────────────────────
+const server = app.listen(PORT, "0.0.0.0", async () => {
+    console.log(`\n🎬  FLUX Media Server v${APP_VERSION}`);
+    console.log(`    http://localhost:${PORT}`);
+    console.log(`    Health:  /health`);
+    console.log(`    Library: /api/library`);
+    console.log(`    Media:   /api/media`);
+    console.log(`    Stream:  /stream/video/:id\n`);
+
+    // Start HLS cleanup daemon
+    startDaemon();
+
+    // Pre-warm hardware detection
+    detectHW()
+        .then((hw) => {
+            console.log(`[Server] Hardware acceleration: ${hw.type}`);
+        })
+        .catch(() => {});
 });
+
+// Keep-alive timeouts — prevents premature connection drops during chunked streaming
+server.keepAliveTimeout = 65000; // 65s (must be > load balancer/proxy timeout)
+server.headersTimeout = 66000;   // slightly higher than keepAliveTimeout
