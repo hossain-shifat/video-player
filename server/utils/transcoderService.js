@@ -215,6 +215,8 @@ function buildFFmpegArgs({
 
     // ── Stream mapping ────────────────────────────────────────────────────────
     args.push("-map", "0:v:0");
+    const hasVideo = Boolean(mediaInfo?.video);
+    if (hasVideo) args.push("-map", "0:v:0");
     args.push("-map", "0:a:0?");
 
     // ── Muxer stability ───────────────────────────────────────────────────────
