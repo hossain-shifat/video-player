@@ -1,133 +1,133 @@
-import { useEffect, useState, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { usePlayerState } from "./UsePlayerState";
 
-// ─── SRT Parser ─────────────────────────────────────────────────────────────
+// ─── Parser ───────────────────────────────────────────────────────────────────
 
-function parseSRT(raw) {
-    const cues = [];
-    const blocks = raw.trim().split(/\n\s*\n/);
-    for (const block of blocks) {
-        const lines = block.trim().split("\n");
-        if (lines.length < 3) continue;
-        // Find the timing line
-        const timingIdx = lines.findIndex((l) => l.includes("-->"));
-        if (timingIdx < 0) continue;
-        const [startStr, endStr] = lines[timingIdx].split("-->").map((s) => s.trim());
-        const start = srtTimeToSeconds(startStr);
-        const end = srtTimeToSeconds(endStr);
-        const text = lines
-            .slice(timingIdx + 1)
-            .join("\n")
-            .replace(/<[^>]+>/g, "");
-        cues.push({ start, end, text });
-    }
-    return cues;
-}
-
-function srtTimeToSeconds(str) {
-    // 00:01:23,456 or 00:01:23.456
-    const clean = str.replace(",", ".");
-    const parts = clean.split(":");
-    if (parts.length !== 3) return 0;
-    const [h, m, s] = parts;
-    return parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s);
-}
-
-// ─── VTT Parser ─────────────────────────────────────────────────────────────
-
-function parseVTT(raw) {
-    const cues = [];
-    // Strip WEBVTT header
-    const body = raw.replace(/^WEBVTT.*\n/, "").trim();
-    const blocks = body.split(/\n\s*\n/);
-    for (const block of blocks) {
-        const lines = block.trim().split("\n");
-        const timingIdx = lines.findIndex((l) => l.includes("-->"));
-        if (timingIdx < 0) continue;
-        const [startStr, endStr] = lines[timingIdx].split("-->").map((s) => s.trim().split(" ")[0]);
-        const start = vttTimeToSeconds(startStr);
-        const end = vttTimeToSeconds(endStr);
-        const text = lines
-            .slice(timingIdx + 1)
-            .join("\n")
-            .replace(/<[^>]+>/g, "");
-        cues.push({ start, end, text });
-    }
-    return cues;
-}
-
-function vttTimeToSeconds(str) {
-    // HH:MM:SS.mmm or MM:SS.mmm
-    const parts = str.split(":");
+/**
+ * parseTime — converts "HH:MM:SS,mmm" / "MM:SS.mmm" / "HH:MM:SS.mmm" → float seconds
+ * Handles both VTT (.) and SRT (,) decimal separators.
+ */
+function parseTime(str) {
+    const s = str.trim().replace(",", ".");
+    const parts = s.split(":");
     if (parts.length === 3) {
-        return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseFloat(parts[2]);
+        return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
     }
     if (parts.length === 2) {
-        return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+        return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
     }
-    return parseFloat(str) || 0;
+    return parseFloat(s) || 0;
 }
 
-// ─── SubtitleRenderer ────────────────────────────────────────────────────────
+/**
+ * parseCues — minimal VTT/SRT parser.
+ * Returns [{ start, end, text }] sorted by start time.
+ */
+function parseCues(raw) {
+    const cues = [];
+    const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const blocks = text.split(/\n{2,}/);
 
+    for (const block of blocks) {
+        const lines = block.trim().split("\n");
+        let ti = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes("-->")) {
+                ti = i;
+                break;
+            }
+        }
+        if (ti < 0) continue;
+
+        const m = lines[ti].match(/(\d{1,2}:?[\d:.]+[.,]\d{1,3})\s*-->\s*(\d{1,2}:?[\d:.]+[.,]\d{1,3})/);
+        if (!m) continue;
+
+        const start = parseTime(m[1]);
+        const end = parseTime(m[2]);
+
+        // Strip VTT positioning tags but keep line breaks
+        const body = lines
+            .slice(ti + 1)
+            .join("\n")
+            .replace(/<[^>]+>/g, "")
+            .trim();
+
+        if (body) cues.push({ start, end, text: body });
+    }
+
+    return cues.sort((a, b) => a.start - b.start);
+}
+
+// ─── SubtitleRenderer ─────────────────────────────────────────────────────────
+/**
+ * SubtitleRenderer
+ *
+ * No props — reads everything from usePlayerState:
+ *   activeSubtitle  — { url, filename, label } or null
+ *   currentTime     — seconds
+ *   subtitleDelay   — ms offset (positive = delay, negative = advance)
+ *   subtitleFontSize — px
+ *
+ * Fetches the subtitle file on activeSubtitle change, parses VTT/SRT,
+ * and renders the active cue at the bottom of the player.
+ */
 export default function SubtitleRenderer() {
     const { state } = usePlayerState();
-    const { activeSubtitle, subtitleDelay, subtitleFontSize, currentTime, controlsVisible } = state;
+    const { activeSubtitle, currentTime, subtitleDelay, subtitleFontSize } = state;
 
     const [cues, setCues] = useState([]);
-    const [loading, setLoading] = useState(false);
+    const loadedUrlRef = useRef(null);
 
-    // Fetch and parse subtitle file whenever activeSubtitle changes
+    // Fetch + parse whenever subtitle track changes
     useEffect(() => {
-        if (!activeSubtitle?.url) {
+        const url = activeSubtitle?.url;
+
+        if (!url) {
             setCues([]);
+            loadedUrlRef.current = null;
             return;
         }
+
+        // Already loaded this URL — no re-fetch needed
+        if (url === loadedUrlRef.current) return;
+        loadedUrlRef.current = url;
+
         let cancelled = false;
-        setLoading(true);
-        fetch(activeSubtitle.url)
-            .then((r) => r.text())
-            .then((raw) => {
-                if (cancelled) return;
-                const isVTT = activeSubtitle.ext === ".vtt" || raw.trimStart().startsWith("WEBVTT");
-                const parsed = isVTT ? parseVTT(raw) : parseSRT(raw);
-                setCues(parsed);
-                setLoading(false);
+        fetch(url)
+            .then((r) => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.text();
+            })
+            .then((text) => {
+                if (!cancelled) setCues(parseCues(text));
             })
             .catch(() => {
-                if (!cancelled) setLoading(false);
+                if (!cancelled) setCues([]);
             });
+
         return () => {
             cancelled = true;
         };
-    }, [activeSubtitle]);
+    }, [activeSubtitle?.url]);
 
-    // Find the cue to display at current time (accounting for delay)
-    const activeCue = useMemo(() => {
-        if (!cues.length) return null;
-        const adjustedTime = currentTime - subtitleDelay / 1000;
-        return cues.find((c) => adjustedTime >= c.start && adjustedTime < c.end) || null;
-    }, [cues, currentTime, subtitleDelay]);
+    if (!activeSubtitle || !cues.length) return null;
 
-    if (!activeSubtitle || !activeCue) return null;
+    // Apply subtitle delay: positive delay shifts cues later (subtract from currentTime)
+    const adjustedTime = currentTime - (subtitleDelay || 0) / 1000;
 
-    // Move subtitles up when controls are visible
-    const bottomOffset = controlsVisible ? "5rem" : "2rem";
+    // Binary search would be optimal, but cue counts are small — linear is fine
+    const cue = cues.find((c) => adjustedTime >= c.start && adjustedTime <= c.end);
+
+    if (!cue) return null;
 
     return (
-        <div className="absolute left-0 right-0 z-30 flex justify-center pointer-events-none px-4" style={{ bottom: bottomOffset, transition: "bottom 0.3s ease" }}>
-            <div
-                className="max-w-[85%] text-center px-3 py-1.5 rounded-lg"
-                style={{
-                    background: "rgba(0,0,0,0.65)",
-                    fontSize: `${subtitleFontSize}px`,
-                    lineHeight: 1.4,
-                    color: "#fff",
-                    textShadow: "0 1px 3px rgba(0,0,0,0.9)",
-                    whiteSpace: "pre-wrap",
-                }}>
-                {activeCue.text}
-            </div>
+        <div className="absolute bottom-20 inset-x-0 z-25 flex justify-center pointer-events-none px-6">
+            <p
+                className="bg-black/75 text-white text-center px-3 py-1.5 rounded-lg leading-snug max-w-2xl"
+                style={{ fontSize: subtitleFontSize || 20 }}
+                // VTT body may contain <b>/<i>/<u> — keep sanitised markup for italics support
+                dangerouslySetInnerHTML={{ __html: cue.text.replace(/\n/g, "<br/>") }}
+            />
         </div>
     );
 }

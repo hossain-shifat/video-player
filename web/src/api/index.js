@@ -9,7 +9,3 @@ export * from "./history";
 export * from "./user";
 export { api } from "./client";
 export * from "./stream";
-
-export { default as PlayerPage } from "../Pages/Player/PlayerPage";
-export { PlayerProvider, usePlayerState } from "../Pages/Player/UsePlayerState";
-export { useProgress } from "../Pages/Player/useProgress";

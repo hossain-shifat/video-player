@@ -1,15 +1,15 @@
 {
-  "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg": {
-    "id": "RDpcTWVkaWFcTW92aWVzXEludGVyc3RlbGxhciAoMjAxNCkgSU1BWCAxMDgwcCBCbHVSYXkgW0R1YWwgQXVkaW9dIFtIaW5kaStFbmdsaXNoXSB4MjY0Lm1rdg",
-    "name": "Interstellar",
+  "RDpcTWVkaWFcTW92aWVzXDMgSWRpb3RzICgyMDA5KSAxMDgwcCBCbHVSYXkgSGluZGkgeDI2NC5ta3Y": {
+    "id": "RDpcTWVkaWFcTW92aWVzXDMgSWRpb3RzICgyMDA5KSAxMDgwcCBCbHVSYXkgSGluZGkgeDI2NC5ta3Y",
+    "name": "3 Idiots",
     "type": "movie",
-    "poster": "https://image.tmdb.org/t/p/w500/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg",
-    "streamUrl": "http://192.168.0.159:5000/stream/hls/d4e7c55af9ece57b/index.m3u8",
-    "watchedAt": "2026-05-19T09:43:45.126Z",
-    "position": 0,
-    "duration": 17,
+    "poster": "https://image.tmdb.org/t/p/w500/66A9MqXOyVFCssoloscw79z8Tew.jpg",
+    "streamUrl": "http://192.168.0.159:5000/stream/hls/2960a3a5347dfb8d/index.m3u8",
+    "watchedAt": "2026-05-20T10:43:11.002Z",
+    "position": 9,
+    "duration": 12,
     "completed": false,
     "watchCount": 5,
-    "lastSessionStart": 5
+    "lastSessionStart": 14.098037
   }
 }

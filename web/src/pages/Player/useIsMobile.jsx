@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
 
-/** True for phones/tablets and touch-first layouts (max-width 1023px). */
-export function useIsMobile() {
-    const [isMobile, setIsMobile] = useState(() => {
-        if (typeof window === "undefined") return false;
-        return window.matchMedia("(max-width: 1023px)").matches;
-    });
+/**
+ * useIsMobile
+ *
+ * Returns true when viewport is < 768px wide or the device has touch support.
+ * Re-evaluates on window resize.
+ */
+export default function useIsMobile() {
+    const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768 || "ontouchstart" in window);
 
     useEffect(() => {
-        const mq = window.matchMedia("(max-width: 1023px)");
-        const onChange = () => setIsMobile(mq.matches);
-        mq.addEventListener("change", onChange);
-        return () => mq.removeEventListener("change", onChange);
+        const check = () => setIsMobile(window.innerWidth < 768 || "ontouchstart" in window);
+
+        window.addEventListener("resize", check);
+        return () => window.removeEventListener("resize", check);
     }, []);
 
     return isMobile;
