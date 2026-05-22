@@ -1,14 +1,14 @@
 [
-    {
-        "id": "1",
-        "path": "D:\\Media\\Movies",
-        "label": "Test Movies",
-        "addedAt": "2026-05-09T09:14:54.334Z"
-    },
-    {
-        "id": "c3ff0f2e-14e2-4cc5-8a20-b9ac0a289f64",
-        "path": "D:\\Media\\Series",
-        "label": "Test Series",
-        "addedAt": "2026-05-15T09:26:38.767Z"
-    }
+  {
+    "id": "1",
+    "path": "D:\\Media\\Movies",
+    "label": "Test Movies",
+    "addedAt": "2026-05-09T09:14:54.334Z"
+  },
+  {
+    "id": "c3ff0f2e-14e2-4cc5-8a20-b9ac0a289f64",
+    "path": "D:\\Media\\Series",
+    "label": "Test Series",
+    "addedAt": "2026-05-15T09:26:38.767Z"
+  }
 ]

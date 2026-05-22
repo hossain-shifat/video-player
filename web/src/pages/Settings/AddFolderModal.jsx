@@ -87,11 +87,7 @@ export default function AddFolderModal({ open, onClose, onAdd }) {
                 <button onClick={onClose} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-ghost flex-1 rounded focus:outline-none focus-visible:outline-none">
                     Cancel
                 </button>
-                <button
-                    onClick={submit}
-                    disabled={!path.trim() || !label.trim()}
-                    style={{ outline: "none", boxShadow: "none" }}
-                    className="btn btn-sm btn-primary flex-1 rounded gap-1.5 border-none">
+                <button onClick={submit} disabled={!path.trim() || !label.trim()} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-primary flex-1 rounded gap-1.5 border-none">
                     <FolderPlus size={13} /> Add Folder
                 </button>
             </div>

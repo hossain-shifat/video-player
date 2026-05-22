@@ -9,11 +9,12 @@ import Series from "../Pages/Media/Series/Series";
 import PlayerPage from "../../src/Pages/Player/PlayerPage";
 import Settings from "../Pages/Settings/Settings";
 import WatchList from "../Pages/WatchList/WatchList";
+import Player from "../Pages/Player/Player";
 
 export const router = createBrowserRouter([
     {
         path: "/player/:id",
-        Component: PlayerPage,
+        Component: Player,
     },
     {
         path: "/",

@@ -1,42 +1,51 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
-import { PlayerProvider, usePlayerState } from "./UsePlayerState";
+import { PlayerProvider } from "./UsePlayerState";
 import VideoCore from "./VideoCore";
 import PlayerControls from "./PlayerControls";
 import PlayerGestures from "./PlayerGestures";
 import PlayerLock from "./PlayerLock";
 import PlayerOverlays, { useOverlay } from "./PlayerOverlays";
 import SubtitleRenderer from "./SubtitleRenderer";
+import { usePlayerState } from "./UsePlayerState";
 import { useProgress } from "./useProgress";
 import { getMediaById, getSubtitles } from "../../api/media";
 import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream";
 
-// ─── PlayerInner (inside PlayerProvider) ─────────────────────────────────────
+// ─── Inner component (inside PlayerProvider) ──────────────────────────────────
 
 function PlayerInner({ mediaId }) {
     const navigate = useNavigate();
     const containerRef = useRef(null);
     const videoRef = useRef(null);
     const hideTimer = useRef(null);
+
+    // Session state — in refs for use in intervals/cleanup
     const sessionIdRef = useRef(null);
     const clientIdRef = useRef(null);
-
-    const { state, actions } = usePlayerState();
-
-    // ── Media + stream state ──────────────────────────────────────────────────
-    const [mediaInfo, setMediaInfo] = useState(null);
-    const [subtitles, setSubtitles] = useState([]);
-    const [streamUrl, setStreamUrl] = useState(null);
     const [sessionId, setSessionId] = useState(null);
-    const [loadingMedia, setLoadingMedia] = useState(true);
-    const [mediaError, setMediaError] = useState(null);
 
-    // Keep session refs current for use inside intervals / cleanup
+    // Keep ref in sync
     useEffect(() => {
         sessionIdRef.current = sessionId;
     }, [sessionId]);
 
-    // ── Overlay state ─────────────────────────────────────────────────────────
+    const { state, actions } = usePlayerState();
+
+    // Media + stream state
+    const [mediaInfo, setMediaInfo] = useState(null);
+    const [subtitles, setSubtitles] = useState([]);
+    const [streamUrl, setStreamUrl] = useState(null);
+    const [startTimeSec, setStartTimeSec] = useState(0);
+    const [loadingMedia, setLoadingMedia] = useState(true);
+    const [mediaError, setMediaError] = useState(null);
+    const [streamMode, setStreamMode] = useState(null); // "direct" | "hls"
+
+    // Retry state
+    const retryCountRef = useRef(0);
+    const [isReconnecting, setIsReconnecting] = useState(false);
+
+    // Overlay state
     const [overlayState, setOverlayState] = useState({
         brightness: 1,
         volume: 1,
@@ -61,7 +70,6 @@ function PlayerInner({ mediaId }) {
         triggerLock: lockOverlay.trigger,
         triggerAudioTrack: audioTrackOverlay.trigger,
     };
-
     const overlayVis = {
         showBrightness: brightnessOverlay.visible,
         showVolume: volumeOverlay.visible,
@@ -72,6 +80,7 @@ function PlayerInner({ mediaId }) {
     };
 
     // ── Auto-hide controls ────────────────────────────────────────────────────
+
     const showControls = useCallback(() => {
         actions.setControlsVisible(true);
         clearTimeout(hideTimer.current);
@@ -91,110 +100,91 @@ function PlayerInner({ mediaId }) {
 
     useEffect(() => () => clearTimeout(hideTimer.current), []);
 
-    // Sync overlay state ← player state
+    // Sync overlay from state
     useEffect(() => {
-        setOverlayState((s) => ({ ...s, brightness: state.brightness, volume: state.volume, muted: state.muted }));
+        setOverlayState((s) => ({
+            ...s,
+            brightness: state.brightness,
+            volume: state.volume,
+            muted: state.muted,
+        }));
     }, [state.brightness, state.volume, state.muted]);
 
-    // ── Fullscreen ────────────────────────────────────────────────────────────
-    // FIX: fullscreen implemented here and surfaced via containerRef helper
-    // so PlayerControls can call containerRef.current._toggleFullscreen()
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
+    // ── Session heartbeat ─────────────────────────────────────────────────────
+    // Sends positionSec so server knows what segments are safe to delete.
+    // Jellyfin equivalent: ReportPlaybackProgress
 
-        const onFullscreenChange = () => {
-            actions.setFullscreen(!!document.fullscreenElement);
-        };
-        document.addEventListener("fullscreenchange", onFullscreenChange);
-
-        // Attach helpers to the DOM node so child components can call them
-        container._toggleFullscreen = () => {
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            } else {
-                container.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
-            }
-        };
-
-        return () => {
-            document.removeEventListener("fullscreenchange", onFullscreenChange);
-            if (container) {
-                delete container._toggleFullscreen;
-            }
-        };
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // ── Picture-in-Picture ────────────────────────────────────────────────────
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const onPiPChange = () => {
-            actions.setPiP(document.pictureInPictureElement === videoRef.current);
-        };
-        document.addEventListener("enterpictureinpicture", onPiPChange);
-        document.addEventListener("leavepictureinpicture", onPiPChange);
-
-        container._togglePiP = async () => {
-            const video = videoRef.current;
-            if (!video) return;
-            try {
-                if (document.pictureInPictureElement) {
-                    await document.exitPictureInPicture();
-                } else {
-                    await video.requestPictureInPicture();
-                }
-            } catch {
-                // PiP not supported or user denied
-            }
-        };
-
-        return () => {
-            document.removeEventListener("enterpictureinpicture", onPiPChange);
-            document.removeEventListener("leavepictureinpicture", onPiPChange);
-            if (container) delete container._togglePiP;
-        };
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // ── HLS session heartbeat ─────────────────────────────────────────────────
-    // Keeps the transcode session alive every 10s + updates download position
-    // so the server's segment cleaner knows what's safe to delete.
     useEffect(() => {
         if (!sessionId) return;
         const interval = setInterval(() => {
-            heartbeatSession(sessionId, clientIdRef.current);
+            const pos = videoRef.current?.currentTime || 0;
+            heartbeatSession(sessionId, pos, clientIdRef.current);
         }, 10_000);
         return () => clearInterval(interval);
     }, [sessionId]);
 
     // ── Session cleanup on unmount ────────────────────────────────────────────
+
     useEffect(() => {
         return () => {
             if (sessionIdRef.current) {
                 stopSession(sessionIdRef.current, clientIdRef.current);
             }
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            }
-            if (screen.orientation?.unlock) {
-                screen.orientation.unlock();
-            }
         };
     }, []);
 
-    // ── Load media info + resolve stream ──────────────────────────────────────
+    // ── Stream reconnect (called when VideoCore reports 404 / session expired) ─
+
+    const handleStreamReconnect = useCallback(async () => {
+        if (isReconnecting || retryCountRef.current >= 3) {
+            actions.setError("Stream failed after retries. Go back and try again.");
+            return;
+        }
+        retryCountRef.current++;
+        setIsReconnecting(true);
+        actions.setError(null);
+
+        try {
+            const currentPos = videoRef.current?.currentTime || 0;
+            const playback = await resolvePlayback(mediaId, {
+                seekSec: Math.max(0, currentPos - 2), // small back-step to avoid edge
+            });
+
+            clientIdRef.current = playback.clientId;
+            setStreamUrl(playback.mode === "hls" ? playback.hlsUrl : playback.streamUrl);
+            setStartTimeSec(currentPos > 2 ? currentPos - 2 : 0);
+            if (playback.sessionId) {
+                setSessionId(playback.sessionId);
+            }
+            setStreamMode(playback.mode);
+        } catch (err) {
+            actions.setError(`Reconnect failed: ${err.message}`);
+        } finally {
+            setIsReconnecting(false);
+        }
+    }, [mediaId, isReconnecting, actions]);
+
+    // ── Handle new session ID from server (seek restart) ─────────────────────
+    // Server sends X-New-Session-Id when it restarted the session for a seek.
+    // We must update our session ID to keep heartbeat pointing at the right session.
+
+    const handleNewSessionId = useCallback((newSid) => {
+        console.log("[PlayerPage] Server restarted session, new ID:", newSid);
+        setSessionId(newSid);
+    }, []);
+
+    // ── Load media + resolve stream ───────────────────────────────────────────
+
     useEffect(() => {
         if (!mediaId) return;
         let cancelled = false;
         setLoadingMedia(true);
         setMediaError(null);
-        setStreamUrl(null);
-        setSessionId(null);
+        retryCountRef.current = 0;
 
         (async () => {
             try {
-                // 1. Fetch media metadata (title, poster, etc.)
+                // 1. Fetch media metadata
                 const data = await getMediaById(mediaId);
                 if (cancelled) return;
                 const file = data?.file || data;
@@ -210,27 +200,30 @@ function PlayerInner({ mediaId }) {
                     year: metadata?.year || null,
                 });
 
-                // 2. Smart playback decision via /stream/video/:id?info=1
-                //    Returns { mode: "direct"|"hls", streamUrl?, hlsUrl?, sessionId?, clientId }
+                // 2. Resolve stream — pre-flight then start if needed
+                //    Uses new /stream/info/:id → then POST /stream/transcode/:id for HLS
+                //    This is the Jellyfin pattern: PlaybackInfo first, then StartStream
                 const playback = await resolvePlayback(mediaId);
                 if (cancelled) return;
 
                 clientIdRef.current = playback.clientId;
 
                 if (playback.mode === "hls") {
-                    setSessionId(playback.sessionId);
-                    sessionIdRef.current = playback.sessionId;
                     setStreamUrl(playback.hlsUrl);
+                    setSessionId(playback.sessionId);
                 } else {
                     setStreamUrl(playback.streamUrl);
+                    setSessionId(null);
                 }
+                setStreamMode(playback.mode);
+                setStartTimeSec(0); // resume handled by useProgress after canplay
 
                 // 3. Subtitles (non-fatal)
                 try {
                     const subData = await getSubtitles(mediaId);
                     if (!cancelled) setSubtitles(subData?.subtitles || []);
                 } catch {
-                    /* no subtitles — fine */
+                    /* no subtitles */
                 }
             } catch (err) {
                 if (!cancelled) setMediaError(err.message || "Failed to load media");
@@ -244,33 +237,46 @@ function PlayerInner({ mediaId }) {
         };
     }, [mediaId]);
 
-    // Lock orientation to landscape on mobile
+    // ── Lock orientation to landscape on mobile ───────────────────────────────
+
     useEffect(() => {
         if (screen.orientation?.lock) {
             screen.orientation.lock("landscape").catch(() => {});
         }
         return () => {
-            if (screen.orientation?.unlock) screen.orientation.unlock();
+            screen.orientation?.unlock?.();
         };
     }, []);
 
-    // ── Progress tracking (resume + history) ──────────────────────────────────
+    // ── Progress / resume tracking ────────────────────────────────────────────
+
     const progressProps = useProgress({
         mediaId,
-        clientId: clientIdRef.current,
         name: mediaInfo?.title,
         type: mediaInfo?.type,
         poster: mediaInfo?.poster,
         streamUrl,
         videoRef,
         playing: state.playing,
-        currentTime: state.currentTime,
         duration: state.duration,
     });
+
+    // Wire canplay → onReadyToSeek so resume seek fires at the right time
+    // This is called from a useEffect in VideoCore via the onCanPlay path.
+    // We attach it by passing a callback to VideoCore through a ref trick,
+    // OR we can listen on the video element directly here.
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        const handler = () => progressProps.onReadyToSeek();
+        video.addEventListener("canplay", handler, { once: false });
+        return () => video.removeEventListener("canplay", handler);
+    }, [streamUrl, progressProps.onReadyToSeek]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleBack = () => navigate(-1);
 
     // ── Loading ───────────────────────────────────────────────────────────────
+
     if (loadingMedia) {
         return (
             <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
@@ -282,15 +288,13 @@ function PlayerInner({ mediaId }) {
         );
     }
 
-    // ── Error ─────────────────────────────────────────────────────────────────
+    // ── Error (fatal load error) ──────────────────────────────────────────────
+
     if (mediaError) {
         return (
             <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-4 z-50">
                 <span className="text-red-400 text-base">{mediaError}</span>
-                <button
-                    onClick={handleBack}
-                    className="px-6 py-2 rounded-xl bg-white/10 text-white text-sm
-                               hover:bg-white/20 transition-colors">
+                <button onClick={handleBack} className="px-6 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/20 transition-colors">
                     Go Back
                 </button>
             </div>
@@ -298,15 +302,16 @@ function PlayerInner({ mediaId }) {
     }
 
     // ── Player ────────────────────────────────────────────────────────────────
+
     return (
         <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
             {/* Video core */}
-            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} />}
+            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} startTimeSec={startTimeSec} onVideoClick={showControls} onNewSessionId={handleNewSessionId} />}
 
             {/* Gesture layer */}
             <PlayerGestures videoRef={videoRef} containerRef={containerRef} overlayTriggers={overlayTriggers} setOverlayState={setOverlayState} showControls={showControls} />
 
-            {/* Visual overlays (brightness / volume / seek feedback) */}
+            {/* Visual overlays */}
             <PlayerOverlays overlayState={overlayState} overlayVis={overlayVis} />
 
             {/* Subtitles */}
@@ -315,33 +320,24 @@ function PlayerInner({ mediaId }) {
             {/* Screen lock */}
             <PlayerLock />
 
-            {/* Controls UI */}
+            {/* Controls */}
             <PlayerControls mediaInfo={mediaInfo} videoRef={videoRef} containerRef={containerRef} subtitles={subtitles} onBack={handleBack} onShowControls={showControls} />
 
             {/* Resume dialog */}
             {progressProps.showResumeDialog && (
                 <div className="absolute inset-0 z-60 flex items-end justify-center pb-28 px-4 pointer-events-none">
-                    <div
-                        className="pointer-events-auto flex items-center gap-3 px-5 py-4
-                                    rounded-2xl bg-black/80 backdrop-blur-md border border-white/15
-                                    shadow-2xl max-w-sm w-full">
+                    <div className="pointer-events-auto flex items-center gap-3 px-5 py-4 rounded-2xl bg-black/80 backdrop-blur-md border border-white/15 shadow-2xl max-w-sm w-full">
                         <div className="flex-1 min-w-0">
                             <p className="text-white text-sm font-semibold leading-tight">Resume watching?</p>
                             <p className="text-white/50 text-xs mt-0.5">
                                 Paused at {Math.floor((progressProps.resumePoint?.position || 0) / 60)}m {Math.floor((progressProps.resumePoint?.position || 0) % 60)}s
                             </p>
                         </div>
-                        <button
-                            onClick={progressProps.handleStartOver}
-                            className="px-3 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs
-                                       hover:bg-white/20 transition-colors shrink-0">
+                        <button onClick={progressProps.handleStartOver} className="px-3 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs hover:bg-white/20 transition-colors shrink-0">
                             Start Over
                             <span className="ml-1 text-white/40">({progressProps.resumeCountdown})</span>
                         </button>
-                        <button
-                            onClick={progressProps.handleResume}
-                            className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs
-                                       font-semibold hover:bg-red-500 transition-colors shrink-0">
+                        <button onClick={progressProps.handleResume} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-500 transition-colors shrink-0">
                             Resume
                         </button>
                     </div>
@@ -349,23 +345,31 @@ function PlayerInner({ mediaId }) {
             )}
 
             {/* Buffering spinner */}
-            {state.isBuffering && !state.error && (
+            {(state.isBuffering || isReconnecting) && !state.error && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
                     <div className="w-14 h-14 border-4 border-white/20 border-t-white/90 rounded-full animate-spin" />
+                    {isReconnecting && <span className="absolute top-[calc(50%+40px)] text-white/50 text-xs font-medium">Reconnecting…</span>}
                 </div>
             )}
 
-            {/* Error overlay */}
+            {/* Error overlay (recoverable) */}
             {state.error && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-                    <div className="px-6 py-4 rounded-2xl bg-black/80 border border-red-500/30 text-center max-w-xs">
+                <div className="absolute inset-0 z-20 flex items-center justify-center">
+                    <div className="px-6 py-4 rounded-2xl bg-black/80 border border-red-500/30 text-center max-w-xs flex flex-col gap-3">
                         <p className="text-red-400 text-sm font-medium">{state.error}</p>
-                        <button
-                            onClick={() => actions.setError(null)}
-                            className="pointer-events-auto mt-3 px-4 py-1.5 rounded-lg
-                                       bg-white/10 text-white/70 text-xs hover:bg-white/20 transition-colors">
-                            Dismiss
-                        </button>
+                        <div className="flex gap-2 justify-center">
+                            <button
+                                onClick={() => {
+                                    actions.setError(null);
+                                    handleStreamReconnect();
+                                }}
+                                className="px-4 py-1.5 rounded-lg bg-red-600/80 text-white text-xs font-semibold hover:bg-red-500 transition-colors">
+                                Retry
+                            </button>
+                            <button onClick={handleBack} className="px-4 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs hover:bg-white/20 transition-colors">
+                                Go Back
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -378,6 +382,7 @@ function PlayerInner({ mediaId }) {
 export default function PlayerPage() {
     const { id } = useParams();
     const mediaId = decodeURIComponent(id);
+
     return (
         <PlayerProvider>
             <PlayerInner mediaId={mediaId} />

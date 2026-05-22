@@ -47,17 +47,22 @@ export function Card({ children }) {
 export function Modal({ open, onClose, title, subtitle, children }) {
     useEffect(() => {
         if (open) {
-            document.body.style.overflow = 'hidden';
+            document.body.style.overflow = "hidden";
         } else {
-            document.body.style.overflow = 'unset';
+            document.body.style.overflow = "unset";
         }
-        return () => { document.body.style.overflow = 'unset'; };
+        return () => {
+            document.body.style.overflow = "unset";
+        };
     }, [open]);
 
     if (!open) return null;
     return (
-        <div className="fixed inset-0 z-[9999999999999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
-            <div className="w-full max-w-md bg-base-200 rounded-lg border border-white/10 shadow-2xl p-6 overflow-y-auto max-h-[90vh]" onClick={(e) => e.stopPropagation()} style={{ animation: "fadeUp .18s ease-out both" }}>
+        <div className="fixed inset-0 z-9999999999999 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
+            <div
+                className="w-full max-w-md bg-base-200 rounded-lg border border-white/10 shadow-2xl p-6 overflow-y-auto max-h-[90vh]"
+                onClick={(e) => e.stopPropagation()}
+                style={{ animation: "fadeUp .18s ease-out both" }}>
                 <div className="flex items-start justify-between mb-5">
                     <div>
                         <h3 className="font-semibold text-white">{title}</h3>

@@ -1,34 +1,22 @@
 /**
- * useFluxPlayer.js
+ * useFluxPlayer.js — FLUX v4
  *
- * React hook that wraps HLS.js and the FLUX streaming API.
+ * Lightweight hook for components that need direct player access
+ * WITHOUT the full PlayerPage stack (e.g. inline previews, trailers).
  *
- * Handles:
- *  - Fetching stream decision from /stream/video/:id?info=1
- *  - Attaching HLS.js for HLS streams
- *  - Direct play via <video src> for direct play
- *  - Session ping heartbeat (keeps session alive + updates downloadPosition)
- *  - Seek detection → triggers new ?t= session if backend needs restart
- *  - Session cleanup on unmount
+ * For the main player → use PlayerPage + VideoCore directly.
  *
- * Usage:
- *   const { videoRef, status, error, currentTime, duration } = useFluxPlayer({ mediaId, autoPlay });
- *   <video ref={videoRef} controls />
+ * FIXED over v3:
+ *  1. Uses new resolvePlayback() from api/stream.js (pre-flight + warmup)
+ *  2. HLS URL is absolute (v4 backend) — no double-prefix
+ *  3. Heartbeat sends positionSec correctly
+ *  4. Cleanup uses keepalive DELETE (survives page close)
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { resolvePlayback, heartbeatSession, stopSession } from "../api/stream";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const PING_INTERVAL_MS = 10_000; // ping every 10s
-
-// Lazy-load HLS.js only when needed (avoids bundling for direct-play users)
-let _hlsPromise = null;
-function loadHlsJs() {
-    if (!_hlsPromise) {
-        _hlsPromise = import("hls.js").then((m) => m.default || m);
-    }
-    return _hlsPromise;
-}
+const PING_MS = 10_000;
 
 export function useFluxPlayer({ mediaId, autoPlay = false, quality, forceTranscode = false }) {
     const videoRef = useRef(null);
@@ -36,76 +24,52 @@ export function useFluxPlayer({ mediaId, autoPlay = false, quality, forceTransco
 
     const [status, setStatus] = useState("idle"); // idle | loading | playing | error
     const [error, setError] = useState(null);
-    const [sessionId, setSessionId] = useState(null);
-    const [mode, setMode] = useState(null); // direct | hls
-    const [currentTime, setCurrentTime] = useState(0);
-    const [duration, setDuration] = useState(0);
+    const [sessionId, setSid] = useState(null);
+    const [mode, setMode] = useState(null);
+    const [currentTime, setCT] = useState(0);
+    const [duration, setDur] = useState(0);
 
-    const sessionIdRef = useRef(null);
-
-    // Keep sessionId in ref for use inside intervals/callbacks
+    const sidRef = useRef(null);
     useEffect(() => {
-        sessionIdRef.current = sessionId;
+        sidRef.current = sessionId;
     }, [sessionId]);
 
-    // ── Ping heartbeat ────────────────────────────────────────────────────────
-
+    // Heartbeat
     useEffect(() => {
         if (!sessionId) return;
-        const interval = setInterval(() => {
-            const vid = videoRef.current;
-            const pos = vid ? vid.currentTime : 0;
-            fetch(`${API_BASE}/stream/sessions/${sessionId}/ping`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ positionSec: pos }),
-            }).catch(() => {});
-        }, PING_INTERVAL_MS);
-        return () => clearInterval(interval);
+        const t = setInterval(() => {
+            const pos = videoRef.current?.currentTime || 0;
+            heartbeatSession(sessionId, pos);
+        }, PING_MS);
+        return () => clearInterval(t);
     }, [sessionId]);
 
-    // ── Cleanup on unmount or mediaId change ──────────────────────────────────
-
+    // Cleanup
     const cleanup = useCallback(() => {
-        if (hlsRef.current) {
-            hlsRef.current.destroy();
-            hlsRef.current = null;
+        const hls = hlsRef.current;
+        hlsRef.current = null;
+        if (hls) hls.destroy();
+        if (sidRef.current) {
+            stopSession(sidRef.current);
+            sidRef.current = null;
         }
-        if (sessionIdRef.current) {
-            // Best-effort: kill session on server
-            fetch(`${API_BASE}/stream/sessions/${sessionIdRef.current}`, {
-                method: "DELETE",
-                keepalive: true,
-            }).catch(() => {});
-            sessionIdRef.current = null;
-        }
-        setSessionId(null);
+        setSid(null);
         setMode(null);
         setStatus("idle");
     }, []);
-
     useEffect(() => () => cleanup(), [cleanup]);
 
-    // ── Main load effect ──────────────────────────────────────────────────────
-
+    // Load
     const load = useCallback(
         async (seekSec = 0) => {
             if (!mediaId) return;
-
             cleanup();
             setStatus("loading");
             setError(null);
 
-            const params = new URLSearchParams({ info: "1" });
-            if (seekSec > 0) params.set("t", String(seekSec));
-            if (quality) params.set("quality", quality);
-            if (forceTranscode) params.set("transcode", "1");
-
-            let info;
+            let playback;
             try {
-                const res = await fetch(`${API_BASE}/stream/video/${encodeURIComponent(mediaId)}?${params}`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                info = await res.json();
+                playback = await resolvePlayback(mediaId, { seekSec, quality, forceTranscode });
             } catch (e) {
                 setError(e.message);
                 setStatus("error");
@@ -119,138 +83,108 @@ export function useFluxPlayer({ mediaId, autoPlay = false, quality, forceTransco
                 return;
             }
 
-            // ── Direct play ───────────────────────────────────────────────────────
-            if (info.mode === "direct") {
+            if (playback.mode === "direct") {
                 setMode("direct");
-                video.src = info.streamUrl;
-                if (seekSec > 0) video.currentTime = seekSec;
+                video.src = playback.streamUrl;
+                if (seekSec > 0) {
+                    video.addEventListener(
+                        "loadedmetadata",
+                        () => {
+                            video.currentTime = seekSec;
+                        },
+                        { once: true },
+                    );
+                }
                 if (autoPlay) video.play().catch(() => {});
                 setStatus("playing");
                 return;
             }
 
-            // ── HLS ───────────────────────────────────────────────────────────────
-            if (info.mode === "hls") {
-                setMode("hls");
-                setSessionId(info.sessionId);
-                sessionIdRef.current = info.sessionId;
+            // HLS
+            setMode("hls");
+            setSid(playback.sessionId);
+            sidRef.current = playback.sessionId;
 
-                const hlsUrl = `${API_BASE}${info.hlsUrl}`;
+            const hlsUrl = playback.hlsUrl; // absolute URL from v4 backend
 
-                // Native HLS (Safari)
-                if (video.canPlayType("application/vnd.apple.mpegurl")) {
-                    video.src = hlsUrl;
-                    if (autoPlay) video.play().catch(() => {});
-                    setStatus("playing");
-                    return;
-                }
-
-                // HLS.js
-                let Hls;
-                try {
-                    Hls = await loadHlsJs();
-                } catch {
-                    setError("HLS.js failed to load");
-                    setStatus("error");
-                    return;
-                }
-
-                if (!Hls.isSupported()) {
-                    setError("HLS not supported in this browser");
-                    setStatus("error");
-                    return;
-                }
-
-                const hls = new Hls({
-                    // These settings match what Jellyfin/Plex clients use
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    backBufferLength: 30, // keep 30s behind playhead
-                    maxBufferLength: 30, // buffer up to 30s ahead
-                    maxMaxBufferLength: 60,
-                    startFragPrefetch: true,
-                    // Don't start over when a segment is not found — wait
-                    fragLoadingMaxRetry: 6,
-                    fragLoadingRetryDelay: 500,
-                    manifestLoadingMaxRetry: 4,
-                    // Important: don't abandon segments too quickly
-                    fragLoadingTimeOut: 30_000,
-                });
-
-                hls.loadSource(hlsUrl);
-                hls.attachMedia(video);
-
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    if (autoPlay) video.play().catch(() => {});
-                    setStatus("playing");
-                });
-
-                hls.on(Hls.Events.ERROR, (_, data) => {
-                    if (data.fatal) {
-                        console.error("[HLS] Fatal error:", data.type, data.details);
-                        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                            hls.startLoad(); // try to recover
-                        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                            hls.recoverMediaError();
-                        } else {
-                            setError(`HLS fatal: ${data.details}`);
-                            setStatus("error");
-                        }
-                    }
-                });
-
-                hlsRef.current = hls;
+            if (video.canPlayType("application/vnd.apple.mpegurl")) {
+                video.src = hlsUrl;
+                if (autoPlay) video.play().catch(() => {});
+                setStatus("playing");
+                return;
             }
+
+            const { default: Hls } = await import("hls.js");
+            if (!Hls.isSupported()) {
+                setError("HLS not supported");
+                setStatus("error");
+                return;
+            }
+
+            const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: false,
+                backBufferLength: 30,
+                maxBufferLength: 30,
+                maxMaxBufferLength: 60,
+                startPosition: seekSec > 0 ? seekSec : -1,
+                fragLoadingMaxRetry: 3,
+                manifestLoadingMaxRetry: 2,
+                fragLoadingTimeOut: 30_000,
+            });
+
+            hls.loadSource(hlsUrl);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (autoPlay) video.play().catch(() => {});
+                setStatus("playing");
+            });
+            hls.on(Hls.Events.ERROR, (_, data) => {
+                if (!data.fatal) return;
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    hls.startLoad(video.currentTime);
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    hls.recoverMediaError();
+                } else {
+                    setError(`HLS: ${data.details}`);
+                    setStatus("error");
+                }
+            });
+            hlsRef.current = hls;
         },
         [mediaId, quality, forceTranscode, autoPlay, cleanup],
     );
 
-    // Load on mediaId change
     useEffect(() => {
         load(0);
     }, [load]);
 
-    // ── Video time tracking ───────────────────────────────────────────────────
+    // Time tracking
     useEffect(() => {
-        const video = videoRef.current;
-        if (!video) return;
-        const onTime = () => setCurrentTime(video.currentTime);
-        const onDuration = () => setDuration(video.duration || 0);
-        video.addEventListener("timeupdate", onTime);
-        video.addEventListener("durationchange", onDuration);
+        const v = videoRef.current;
+        if (!v) return;
+        const onTime = () => setCT(v.currentTime);
+        const onDur = () => setDur(v.duration || 0);
+        v.addEventListener("timeupdate", onTime);
+        v.addEventListener("durationchange", onDur);
         return () => {
-            video.removeEventListener("timeupdate", onTime);
-            video.removeEventListener("durationchange", onDuration);
+            v.removeEventListener("timeupdate", onTime);
+            v.removeEventListener("durationchange", onDur);
         };
     }, []);
 
-    // ── Exposed seek function ─────────────────────────────────────────────────
-    // For HLS: restart session at new seek point (server handles it)
-    // For direct play: just set currentTime
     const seek = useCallback(
         (sec) => {
-            const video = videoRef.current;
-            if (!video) return;
+            const v = videoRef.current;
+            if (!v) return;
             if (mode === "direct") {
-                video.currentTime = sec;
+                v.currentTime = sec;
                 return;
             }
-            // HLS: reload session from new position
-            // The backend will detect gap and restart FFmpeg if needed
             load(sec);
         },
         [mode, load],
     );
 
-    return {
-        videoRef,
-        status,
-        error,
-        mode,
-        sessionId,
-        currentTime,
-        duration,
-        seek,
-        reload: () => load(currentTime),
-    };
+    return { videoRef, status, error, mode, sessionId, currentTime, duration, seek, reload: () => load(currentTime) };
 }

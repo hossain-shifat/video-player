@@ -1,49 +1,127 @@
 import { useEffect, useRef, useCallback } from "react";
 import { usePlayerState } from "./UsePlayerState";
-import { useOverlay } from "./PlayerOverlays";
 
-// Speed levels for cycling
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
-function formatTime(secs) {
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = Math.floor(secs % 60);
-    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 /**
- * @param {object} props
- * @param {React.RefObject} props.videoRef
- * @param {React.RefObject} props.containerRef
- * @param {object} props.overlayTriggers - { triggerBrightness, triggerVolume, triggerSeek, ... }
- * @param {function} props.setOverlayState
- * @param {function} props.showControls - shows controls temporarily
+ * PlayerGestures — renderless component
+ *
+ * Handles ALL input outside the controls bar:
+ *   • Keyboard shortcuts (desktop)
+ *   • Touch gestures: double-tap seek, swipe volume/brightness/seek, long-press speed boost
+ *   • Pinch-to-zoom video scaling
+ *   • Fullscreen / PiP lifecycle
+ *
+ * Exposes toggleFullscreen + togglePiP + cycleSpeed on containerRef._xxx
+ * so PlayerControls can call them without prop drilling.
  */
 export default function PlayerGestures({ videoRef, containerRef, overlayTriggers, setOverlayState, showControls }) {
     const { state, actions } = usePlayerState();
-    const isMobile = useRef(false);
+    const isMobileRef = useRef(false);
     const longPressTimer = useRef(null);
     const speedBoostActive = useRef(false);
-    const lastTap = useRef({ time: 0, x: 0, side: null });
+    const lastTap = useRef({ time: 0, side: null });
     const dragStart = useRef(null);
     const pinchStart = useRef(null);
     const scaleRef = useRef(1);
 
     const { triggerBrightness, triggerVolume, triggerSeek, triggerSpeedBoost, triggerAudioTrack } = overlayTriggers;
 
-    // Detect if mobile
+    // Detect mobile/touch device
     useEffect(() => {
         const check = () => {
-            isMobile.current = window.innerWidth < 1024 || navigator.maxTouchPoints > 0;
+            isMobileRef.current = window.innerWidth < 1024 || navigator.maxTouchPoints > 0;
         };
         check();
         window.addEventListener("resize", check);
         return () => window.removeEventListener("resize", check);
     }, []);
 
-    // ── Keyboard shortcuts (desktop) ─────────────────────────────────────────
+    // ── Fullscreen ────────────────────────────────────────────────────────────
+
+    const toggleFullscreen = useCallback(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        if (!document.fullscreenElement) {
+            el.requestFullscreen?.()
+                .then(() => {
+                    screen.orientation?.lock?.("landscape").catch(() => {});
+                    actions.setFullscreen(true);
+                })
+                .catch(() => {});
+        } else {
+            document
+                .exitFullscreen?.()
+                .then(() => {
+                    screen.orientation?.unlock?.();
+                    actions.setFullscreen(false);
+                })
+                .catch(() => {});
+        }
+    }, [containerRef, actions]);
+
+    // Sync fullscreen state from browser events (user presses Esc etc.)
+    useEffect(() => {
+        const onChange = () => {
+            actions.setFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener("fullscreenchange", onChange);
+        return () => document.removeEventListener("fullscreenchange", onChange);
+    }, [actions]);
+
+    // ── Picture-in-Picture ────────────────────────────────────────────────────
+
+    const togglePiP = useCallback(async () => {
+        const video = videoRef.current;
+        if (!video) return;
+        try {
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+                actions.setPiP(false);
+            } else {
+                await video.requestPictureInPicture();
+                actions.setPiP(true);
+            }
+        } catch {}
+    }, [videoRef, actions]);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        const onEnter = () => actions.setPiP(true);
+        const onLeave = () => actions.setPiP(false);
+        video.addEventListener("enterpictureinpicture", onEnter);
+        video.addEventListener("leavepictureinpicture", onLeave);
+        return () => {
+            video.removeEventListener("enterpictureinpicture", onEnter);
+            video.removeEventListener("leavepictureinpicture", onLeave);
+        };
+    }, [videoRef, actions]);
+
+    // ── Speed cycle ───────────────────────────────────────────────────────────
+
+    const cycleSpeed = useCallback(
+        (dir) => {
+            const idx = SPEEDS.indexOf(state.playbackSpeed);
+            const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, idx + dir))];
+            actions.setPlaybackSpeed(next);
+        },
+        [state.playbackSpeed, actions],
+    );
+
+    // ── Audio track cycle ─────────────────────────────────────────────────────
+
+    const cycleAudioTrack = useCallback(() => {
+        if (!state.audioTracks.length) return;
+        const next = (state.activeAudioTrack + 1) % state.audioTracks.length;
+        actions.setActiveAudioTrack(next);
+        const name = state.audioTracks[next]?.name || "Track";
+        setOverlayState((s) => ({ ...s, audioTrack: name }));
+        triggerAudioTrack();
+    }, [state.audioTracks, state.activeAudioTrack, actions, setOverlayState, triggerAudioTrack]);
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
     useEffect(() => {
         const onKey = (e) => {
             if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -59,31 +137,42 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                     break;
                 case "ArrowLeft":
                     e.preventDefault();
-                    video.currentTime = Math.max(0, video.currentTime - 10);
-                    setOverlayState((s) => ({ ...s, seekDir: "backward", seekSec: 10 }));
-                    triggerSeek();
-                    showControls();
+                    {
+                        const seekBy = e.shiftKey ? 30 : 10;
+                        video.currentTime = Math.max(0, video.currentTime - seekBy);
+                        setOverlayState((s) => ({ ...s, seekDir: "backward", seekSec: seekBy }));
+                        triggerSeek();
+                        showControls();
+                    }
                     break;
                 case "ArrowRight":
                     e.preventDefault();
-                    video.currentTime = Math.min(video.duration, video.currentTime + 10);
-                    setOverlayState((s) => ({ ...s, seekDir: "forward", seekSec: 10 }));
-                    triggerSeek();
-                    showControls();
+                    {
+                        const seekBy = e.shiftKey ? 30 : 10;
+                        video.currentTime = Math.min(video.duration || 0, video.currentTime + seekBy);
+                        setOverlayState((s) => ({ ...s, seekDir: "forward", seekSec: seekBy }));
+                        triggerSeek();
+                        showControls();
+                    }
                     break;
                 case "ArrowUp":
                     e.preventDefault();
-                    actions.setVolume(Math.min(1, state.volume + 0.1));
-                    setOverlayState((s) => ({ ...s, volume: Math.min(1, state.volume + 0.1), muted: false }));
-                    triggerVolume();
-                    showControls();
+                    {
+                        const newVol = Math.min(1, state.volume + 0.1);
+                        actions.setVolume(newVol);
+                        if (state.muted) actions.setMuted(false);
+                        setOverlayState((s) => ({ ...s, volume: newVol, muted: false }));
+                        triggerVolume();
+                    }
                     break;
                 case "ArrowDown":
                     e.preventDefault();
-                    actions.setVolume(Math.max(0, state.volume - 0.1));
-                    setOverlayState((s) => ({ ...s, volume: Math.max(0, state.volume - 0.1) }));
-                    triggerVolume();
-                    showControls();
+                    {
+                        const newVol = Math.max(0, state.volume - 0.1);
+                        actions.setVolume(newVol);
+                        setOverlayState((s) => ({ ...s, volume: newVol }));
+                        triggerVolume();
+                    }
                     break;
                 case "f":
                 case "F":
@@ -93,9 +182,12 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 case "m":
                 case "M":
                     e.preventDefault();
-                    actions.setMuted(!state.muted);
-                    setOverlayState((s) => ({ ...s, muted: !state.muted, volume: state.volume }));
-                    triggerVolume();
+                    {
+                        const newMuted = !state.muted;
+                        actions.setMuted(newMuted);
+                        setOverlayState((s) => ({ ...s, muted: newMuted, volume: state.volume }));
+                        triggerVolume();
+                    }
                     break;
                 case "p":
                 case "P":
@@ -121,10 +213,12 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                     cycleAudioTrack();
                     break;
                 default:
+                    // 0-9 → jump to % of duration
                     if (e.key >= "0" && e.key <= "9" && !e.ctrlKey && !e.metaKey) {
                         e.preventDefault();
-                        const pct = parseInt(e.key) / 10;
-                        if (video.duration) video.currentTime = video.duration * pct;
+                        if (video.duration) {
+                            video.currentTime = video.duration * (parseInt(e.key) / 10);
+                        }
                         showControls();
                     }
             }
@@ -134,124 +228,64 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [state.playing, state.volume, state.muted, state.audioTracks, state.activeAudioTrack]);
 
-    // ── Fullscreen toggle ────────────────────────────────────────────────────
-    const toggleFullscreen = useCallback(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        if (!document.fullscreenElement) {
-            el.requestFullscreen?.()
-                .then(() => {
-                    // Lock to landscape on mobile (silently ignore if unavailable on desktop)
-                    if (screen.orientation?.lock) {
-                        screen.orientation.lock("landscape").catch(() => {});
-                    }
-                })
-                .catch(() => {});
-        } else {
-            document.exitFullscreen?.()
-                .then(() => {
-                    if (screen.orientation?.unlock) {
-                        screen.orientation.unlock();
-                    }
-                })
-                .catch(() => {});
-        }
-    }, [containerRef]);
+    // ── Touch zone helper ─────────────────────────────────────────────────────
 
-    useEffect(() => {
-        const onFS = () => actions.setFullscreen(!!document.fullscreenElement);
-        document.addEventListener("fullscreenchange", onFS);
-        return () => document.removeEventListener("fullscreenchange", onFS);
-    }, [actions]);
-
-    // ── PiP ──────────────────────────────────────────────────────────────────
-    const togglePiP = useCallback(async () => {
-        const video = videoRef.current;
-        if (!video) return;
-        try {
-            if (document.pictureInPictureElement) {
-                await document.exitPictureInPicture();
-                actions.setPiP(false);
-            } else {
-                await video.requestPictureInPicture();
-                actions.setPiP(true);
-            }
-        } catch {}
-    }, [videoRef, actions]);
-
-    // ── Speed cycling ────────────────────────────────────────────────────────
-    const cycleSpeed = useCallback(
-        (dir) => {
-            const idx = SPEEDS.indexOf(state.playbackSpeed);
-            const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, idx + dir))];
-            actions.setPlaybackSpeed(next);
-        },
-        [state.playbackSpeed, actions],
-    );
-
-    // ── Audio track cycling ──────────────────────────────────────────────────
-    const cycleAudioTrack = useCallback(() => {
-        if (!state.audioTracks.length) return;
-        const next = (state.activeAudioTrack + 1) % state.audioTracks.length;
-        actions.setActiveAudioTrack(next);
-        const trackName = state.audioTracks[next]?.name || "Track";
-        setOverlayState((s) => ({ ...s, audioTrack: trackName }));
-        triggerAudioTrack();
-    }, [state.audioTracks, state.activeAudioTrack, actions, setOverlayState, triggerAudioTrack]);
-
-    // ── Touch gesture handlers ───────────────────────────────────────────────
-
-    const getZone = (x, containerWidth) => {
-        if (x < containerWidth * 0.3) return "left";
-        if (x > containerWidth * 0.7) return "right";
+    const getZone = (x, w) => {
+        if (x < w * 0.3) return "left";
+        if (x > w * 0.7) return "right";
         return "center";
     };
+
+    // ── Touch handlers ────────────────────────────────────────────────────────
 
     const handleTouchStart = useCallback(
         (e) => {
             if (state.isLocked) return;
-            const touch = e.touches[0];
-            const now = Date.now();
-            const container = containerRef.current;
-            if (!container) return;
-            const rect = container.getBoundingClientRect();
-            const x = touch.clientX - rect.left;
-            const y = touch.clientY - rect.top;
-            const zone = getZone(x, rect.width);
-
-            // Pinch detection
             if (e.touches.length === 2) {
                 const dx = e.touches[0].clientX - e.touches[1].clientX;
                 const dy = e.touches[0].clientY - e.touches[1].clientY;
                 pinchStart.current = Math.sqrt(dx * dx + dy * dy);
                 return;
             }
+            const touch = e.touches[0];
+            const container = containerRef.current;
+            if (!container) return;
+            const rect = container.getBoundingClientRect();
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+            const zone = getZone(x, rect.width);
+            const now = Date.now();
 
-            // Double tap detection
-            const timeSinceLast = now - lastTap.current.time;
-            const sameSide = lastTap.current.side === zone;
-            if (timeSinceLast < 300 && sameSide && zone !== "center") {
-                // Double tap
+            // Double-tap detection
+            const sinceLastTap = now - lastTap.current.time;
+            if (sinceLastTap < 300 && lastTap.current.side === zone && zone !== "center") {
                 const video = videoRef.current;
                 if (video) {
+                    const seekBy = 10;
                     if (zone === "right") {
-                        video.currentTime = Math.min(video.duration, video.currentTime + 10);
-                        setOverlayState((s) => ({ ...s, seekDir: "forward", seekSec: 10 }));
-                        triggerSeek();
+                        video.currentTime = Math.min(video.duration || 0, video.currentTime + seekBy);
+                        setOverlayState((s) => ({ ...s, seekDir: "forward", seekSec: seekBy }));
                     } else {
-                        video.currentTime = Math.max(0, video.currentTime - 10);
-                        setOverlayState((s) => ({ ...s, seekDir: "backward", seekSec: 10 }));
-                        triggerSeek();
+                        video.currentTime = Math.max(0, video.currentTime - seekBy);
+                        setOverlayState((s) => ({ ...s, seekDir: "backward", seekSec: seekBy }));
                     }
+                    triggerSeek();
                 }
-                lastTap.current = { time: 0, x: 0, side: null };
+                lastTap.current = { time: 0, side: null };
                 return;
             }
+            lastTap.current = { time: now, side: zone };
 
-            lastTap.current = { time: now, x, side: zone };
-            dragStart.current = { x, y, volume: state.volume, brightness: state.brightness, currentTime: videoRef.current?.currentTime || 0, zone };
+            dragStart.current = {
+                x,
+                y,
+                zone,
+                volume: state.volume,
+                brightness: state.brightness,
+                currentTime: videoRef.current?.currentTime || 0,
+            };
 
-            // Long press for speed boost
+            // Long press → 2× speed boost
             longPressTimer.current = setTimeout(() => {
                 if (!speedBoostActive.current) {
                     speedBoostActive.current = true;
@@ -272,22 +306,20 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             }
             pinchStart.current = null;
 
-            // Single tap → toggle controls
+            // Single tap → toggle controls visibility
             if (dragStart.current && e.changedTouches.length === 1) {
                 const container = containerRef.current;
-                if (!container) return;
-                const rect = container.getBoundingClientRect();
-                const endX = e.changedTouches[0].clientX - rect.left;
-                const endY = e.changedTouches[0].clientY - rect.top;
-                const dx = Math.abs(endX - dragStart.current.x);
-                const dy = Math.abs(endY - dragStart.current.y);
-                if (dx < 10 && dy < 10) {
-                    showControls();
+                if (container) {
+                    const rect = container.getBoundingClientRect();
+                    const t = e.changedTouches[0];
+                    const dx = Math.abs(t.clientX - rect.left - dragStart.current.x);
+                    const dy = Math.abs(t.clientY - rect.top - dragStart.current.y);
+                    if (dx < 12 && dy < 12) showControls();
                 }
             }
             dragStart.current = null;
         },
-        [actions, state.controlsVisible, showControls, containerRef],
+        [actions, containerRef, showControls],
     );
 
     const handleTouchMove = useCallback(
@@ -295,7 +327,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             if (state.isLocked) return;
             clearTimeout(longPressTimer.current);
 
-            // Pinch to zoom
+            // Pinch-to-zoom
             if (e.touches.length === 2 && pinchStart.current) {
                 const dx = e.touches[0].clientX - e.touches[1].clientX;
                 const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -310,36 +342,40 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             const container = containerRef.current;
             if (!container) return;
             const rect = container.getBoundingClientRect();
-            const touch = e.touches[0];
-            const x = touch.clientX - rect.left;
-            const y = touch.clientY - rect.top;
+            const t = e.touches[0];
+            const x = t.clientX - rect.left;
+            const y = t.clientY - rect.top;
             const dx = x - dragStart.current.x;
             const dy = y - dragStart.current.y;
             const { zone } = dragStart.current;
 
             if (zone === "left") {
-                // Brightness
+                // Left swipe → brightness
                 const delta = -dy / (rect.height * 0.7);
-                const newBrightness = Math.max(0.5, Math.min(2, dragStart.current.brightness + delta * 1.5));
-                actions.setBrightness(newBrightness);
-                setOverlayState((s) => ({ ...s, brightness: newBrightness }));
+                const newBr = Math.max(0.2, Math.min(2, dragStart.current.brightness + delta * 1.5));
+                actions.setBrightness(newBr);
+                setOverlayState((s) => ({ ...s, brightness: newBr }));
                 triggerBrightness();
             } else if (zone === "right") {
-                // Volume
+                // Right swipe → volume
                 const delta = -dy / (rect.height * 0.7);
                 const newVol = Math.max(0, Math.min(1, dragStart.current.volume + delta));
                 actions.setVolume(newVol);
-                setOverlayState((s) => ({ ...s, volume: newVol, muted: false }));
+                if (newVol > 0) actions.setMuted(false);
+                setOverlayState((s) => ({ ...s, volume: newVol, muted: newVol === 0 }));
                 triggerVolume();
             } else if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 20) {
-                // Horizontal seek
+                // Horizontal center swipe → seek (±90s over full width)
                 const video = videoRef.current;
-                if (video && video.duration) {
-                    const seekDelta = (dx / rect.width) * 90; // ±90s over full width
+                if (video?.duration) {
+                    const seekDelta = (dx / rect.width) * 90;
                     const newTime = Math.max(0, Math.min(video.duration, dragStart.current.currentTime + seekDelta));
                     video.currentTime = newTime;
-                    const dir = seekDelta >= 0 ? "forward" : "backward";
-                    setOverlayState((s) => ({ ...s, seekDir: dir, seekSec: Math.abs(Math.round(seekDelta)) }));
+                    setOverlayState((s) => ({
+                        ...s,
+                        seekDir: seekDelta >= 0 ? "forward" : "backward",
+                        seekSec: Math.abs(Math.round(seekDelta)),
+                    }));
                     triggerSeek();
                 }
             }
@@ -347,7 +383,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
         [state.isLocked, containerRef, videoRef, actions, setOverlayState, triggerBrightness, triggerVolume, triggerSeek],
     );
 
-    // Attach touch events to container
+    // Attach touch listeners to container (passive for performance)
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
@@ -361,7 +397,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
         };
     }, [containerRef, handleTouchStart, handleTouchEnd, handleTouchMove]);
 
-    // Expose toggleFullscreen and togglePiP for PlayerControls
+    // Expose to PlayerControls via containerRef (avoids prop-drilling)
     useEffect(() => {
         if (containerRef.current) {
             containerRef.current._toggleFullscreen = toggleFullscreen;
@@ -370,5 +406,5 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
         }
     }, [containerRef, toggleFullscreen, togglePiP, cycleSpeed]);
 
-    return null; // Renders nothing — all logic
+    return null; // pure logic component — renders nothing
 }
