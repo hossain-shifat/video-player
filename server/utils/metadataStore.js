@@ -7,25 +7,32 @@ const { lookupMetadata } = require("./tmdb");
 
 const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 
-// ── Bump this whenever the parser logic changes significantly. ─────────────────
-// Any cached entry without this version (or with a lower one) is automatically
-// re-fetched, clearing out stale parsed data and wrong TMDB matches.
+// ── Version history ────────────────────────────────────────────────────────────
+// Bump whenever parser logic or TMDB matching changes significantly.
+// All cache entries below this version are purged at startup and re-fetched.
 //
-// History:
-//   1 — initial
-//   2 — expanded noise tags, basic acronym support
-//   3 — year-after-chapter fix (KGF years were being dropped, causing wrong
-//        TMDB matches); improved acronym collapse; part-aware TMDB search
-const PARSER_VERSION = 3;
+//   1-3 — original parser iterations
+//   4   — fuzzy year (±1), title similarity scoring
+//   5-6 — intermediate fixes
+//   7   — error swallowing fix (network errors no longer cached as _notFound)
+//   8   — TMDB dual auth (Bearer + api_key), Friends 1x01 title fix,
+//          parsed object no longer stored in cache (cleaner media.json)
+const PARSER_VERSION = 8;
 
-// In-memory mirror of the store file — Map<fileId, metadataObject>
+// _notFound entries expire after 7 days — prevents permanently cached misses
+// from a bad API key or transient network failure blocking real lookups.
+const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 let store = new Map();
 let dirty = false;
 let saveTimer = null;
+let storeLoaded = false;
 
 // ─── Disk I/O ─────────────────────────────────────────────────────────────────
 
 function loadStore() {
+    if (storeLoaded) return;
+    storeLoaded = true;
     try {
         const raw = fs.readFileSync(STORE_FILE, "utf-8");
         const obj = JSON.parse(raw);
@@ -33,10 +40,10 @@ function loadStore() {
         console.log(`[Metadata] Loaded ${store.size} cached entries`);
     } catch {
         store = new Map();
+        console.log("[Metadata] No cache file found, starting fresh");
     }
 }
 
-// Debounced save — writes to disk at most once per 2 s during bulk enrichment
 function scheduleSave() {
     dirty = true;
     if (saveTimer) return;
@@ -63,25 +70,35 @@ function scheduleSave() {
 
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
-/**
- * Returns true if a cached entry was built with the current parser version.
- * Entries from older versions are considered stale and will be re-fetched.
- */
 function isCacheValid(entry) {
     if (!entry) return false;
-    return (entry._parserVersion ?? 0) >= PARSER_VERSION;
+    if ((entry._parserVersion ?? 0) < PARSER_VERSION) return false;
+    if (entry._notFound) {
+        const age = Date.now() - new Date(entry._cachedAt).getTime();
+        return age < NOT_FOUND_TTL_MS;
+    }
+    return true;
 }
 
 function getCached(fileId) {
-    if (store.size === 0) loadStore();
+    loadStore();
     const entry = store.get(fileId);
     if (!entry || !isCacheValid(entry)) return null;
     return entry;
 }
 
 function setCache(fileId, metadata) {
+    // ── FIX: Do NOT persist the 'parsed' object into the cache ────────────────
+    // parsed is internal parser data (episodes array, confidence score, codec,
+    // resolution, languages, etc.) that is useful during enrichment but bloats
+    // metadata.json and is re-generated on each request anyway.
+    //
+    // The stored entry contains only clean TMDB data:
+    //   title, year, overview, poster, backdrop, genres, cast, trailer, ...
+    const { parsed: _drop, ...cleanMetadata } = metadata;
+
     store.set(fileId, {
-        ...metadata,
+        ...cleanMetadata,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
     });
@@ -105,14 +122,12 @@ function invalidate(fileId) {
 
 function invalidateAll() {
     store.clear();
+    storeLoaded = false;
     scheduleSave();
 }
 
-/**
- * Purge every entry whose _parserVersion is below the current version.
- * Called once at startup so stale data is gone before any requests arrive.
- */
 function purgeStaleEntries() {
+    loadStore();
     if (store.size === 0) return;
     let purged = 0;
     for (const [key, value] of store) {
@@ -122,7 +137,7 @@ function purgeStaleEntries() {
         }
     }
     if (purged > 0) {
-        console.log(`[Metadata] Purged ${purged} stale cache entries (parser v${PARSER_VERSION})`);
+        console.log(`[Metadata] Purged ${purged} stale entries (→ v${PARSER_VERSION})`);
         scheduleSave();
     }
 }
@@ -130,16 +145,19 @@ function purgeStaleEntries() {
 // ─── Main entry ───────────────────────────────────────────────────────────────
 
 /**
- * Given a file object { id, name } from the scanner, returns enriched metadata.
- * Hits TMDB only on a cache miss or after a parser version bump.
+ * Given { id, name } returns enriched TMDB metadata (or null if no match).
  *
- * Returns null if TMDB has no match (and caches that result too).
+ * Cache behaviour:
+ *   HIT  (valid version, not _notFound) → return immediately, no network call
+ *   HIT  (_notFound, within TTL)        → return null immediately
+ *   HIT  (_notFound, expired)           → purge + re-fetch
+ *   MISS or stale version               → fetch from TMDB, cache result
+ *
+ * Network/auth errors are NOT cached — next request will retry TMDB.
+ * Genuine "no result" responses ARE cached (for NOT_FOUND_TTL_MS).
  */
 async function getMetadata(file) {
-    if (store.size === 0) {
-        loadStore();
-        purgeStaleEntries();
-    }
+    loadStore();
 
     const cached = store.get(file.id);
     if (cached && isCacheValid(cached)) {
@@ -147,19 +165,43 @@ async function getMetadata(file) {
         return cached;
     }
 
+    // Stale or missing — re-fetch
     const parsed = parseFilename(file.name);
-    console.log(`[Metadata] Fetching TMDB for: "${parsed.title}"` + ` (${parsed.type}${parsed.year ? ` ${parsed.year}` : ""}${parsed.part ? ` Part ${parsed.part}` : ""})`);
 
-    const metadata = await lookupMetadata(parsed);
+    console.log(
+        `[Metadata] Fetching: "${parsed.title}"` +
+            ` type=${parsed.type}` +
+            (parsed.year ? ` year=${parsed.year}` : "") +
+            (parsed.season != null ? ` S${String(parsed.season).padStart(2, "0")}` : "") +
+            (parsed.part != null ? ` Part ${parsed.part}` : ""),
+    );
+
+    let metadata;
+    try {
+        metadata = await lookupMetadata(parsed);
+    } catch (err) {
+        // Network / auth errors: log but DO NOT cache as _notFound.
+        // The next request will try again.
+        console.error(`[Metadata] TMDB error for "${parsed.title}": ${err.message}`);
+        return null;
+    }
 
     if (!metadata) {
+        // Genuine "no result from TMDB" — cache it so we don't hammer the API
         setNotFound(file.id, parsed.title);
         return null;
     }
 
-    const enriched = { ...metadata, parsed };
-    setCache(file.id, enriched);
-    return enriched;
+    // Store clean TMDB data (no 'parsed' internals)
+    setCache(file.id, metadata);
+    return store.get(file.id); // return the stored version (without parsed)
 }
 
-module.exports = { getMetadata, getCached, setCache, invalidate, invalidateAll, purgeStaleEntries };
+module.exports = {
+    getMetadata,
+    getCached,
+    setCache,
+    invalidate,
+    invalidateAll,
+    purgeStaleEntries,
+};

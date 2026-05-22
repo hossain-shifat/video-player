@@ -40,11 +40,11 @@ const Footer = () => {
 
                     {/* Navigate */}
                     <div>
-                        <p className="text-[11px] font-semibold text-base-content uppercase tracking-[0.18em] mb-4">Navigate</p>
+                        <p className="text-[11px] font-semibold text-primary uppercase tracking-[0.18em] mb-4">Navigate</p>
                         <ul className="flex flex-col gap-2.5">
                             {navLinks.map(({ label, to }) => (
                                 <li key={to}>
-                                    <a href={to} className="text-sm text-base-content hover:text-base-content transition-colors duration-150">
+                                    <a href={to} className="text-sm text-base-content hover:text-primary transition-colors duration-150">
                                         {label}
                                     </a>
                                 </li>
@@ -54,11 +54,11 @@ const Footer = () => {
 
                     {/* Server */}
                     <div>
-                        <p className="text-[11px] font-semibold text-base-content uppercase tracking-[0.18em] mb-4">Server</p>
+                        <p className="text-[11px] font-semibold text-primary uppercase tracking-[0.18em] mb-4">Server</p>
                         <ul className="flex flex-col gap-2.5">
                             {serverLinks.map(({ label, to }) => (
                                 <li key={to}>
-                                    <a href={to} className="text-sm text-base-content hover:text-base-content transition-colors duration-150">
+                                    <a href={to} className="text-sm text-base-content hover:text-primary transition-colors duration-150">
                                         {label}
                                     </a>
                                 </li>
@@ -69,11 +69,11 @@ const Footer = () => {
                     {/* Legal + TMDB */}
                     <div className="flex flex-col gap-6">
                         <div>
-                            <p className="text-[11px] font-semibold text-base-content uppercase tracking-[0.18em] mb-4">Legal</p>
+                            <p className="text-[11px] font-semibold text-primary uppercase tracking-[0.18em] mb-4">Legal</p>
                             <ul className="flex flex-col gap-2.5">
                                 {legalLinks.map(({ label, to }) => (
                                     <li key={to}>
-                                        <a href={to} className="text-sm text-base-content hover:text-base-content transition-colors duration-150">
+                                        <a href={to} className="text-sm text-base-content hover:text-primary transition-colors duration-150">
                                             {label}
                                         </a>
                                     </li>
