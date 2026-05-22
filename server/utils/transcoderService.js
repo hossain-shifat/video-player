@@ -7,8 +7,9 @@
  *  1. Segment-based seeking: seek = segmentId * segmentDuration (not raw -ss)
  *     → FFmpeg receives -start_number N, output starts at correct position
  *     → Manifest continuity: segments numbered from N, player timeline correct
- *  2. -copyts -avoid_negative_ts disabled  (Jellyfin's magic pair)
- *     → Preserves original PTS, no timestamp rebase → no random start position
+ *  2. -copyts -avoid_negative_ts make_zero  (safe timestamp preservation)
+ *     → Preserves original PTS, shifts to zero if negative (unlike "disabled"
+ *       which could leave negative timestamps that break some players)
  *  3. -hls_list_size 0 + -hls_playlist_type event  (not vod, not rolling)
  *     → Manifest grows; past segments stay in list (seekable)
  *     → Player always has full timeline, no 404 on back-seek
@@ -139,9 +140,10 @@ function buildFFmpegArgs({
 
     // ── Timestamp preservation (THE KEY FIX for random start position bug) ───
     // -copyts: do NOT rebase timestamps; keep original PTS from source
-    // -avoid_negative_ts disabled: do not shift even if PTS goes negative
+    // -avoid_negative_ts make_zero: if PTS goes negative, shift to zero (safe)
+    // Note: "disabled" caused playback at wrong position on some content
     args.push("-copyts");
-    args.push("-avoid_negative_ts", "disabled");
+    args.push("-avoid_negative_ts", "make_zero");
 
     // ── Video stream ──────────────────────────────────────────────────────────
     if (decision.decision === DECISION.DIRECT_STREAM || decision.decision === DECISION.AUDIO_TRANSCODE) {
@@ -214,7 +216,7 @@ function buildFFmpegArgs({
     args.push("-map_chapters", "-1");
 
     // ── Stream mapping ────────────────────────────────────────────────────────
-    args.push("-map", "0:v:0");
+    // Only map video if it exists (avoids "-map 0:v:0" on audio-only files)
     const hasVideo = Boolean(mediaInfo?.video);
     if (hasVideo) args.push("-map", "0:v:0");
     args.push("-map", "0:a:0?");
