@@ -1,0 +1,11 @@
+{
+  "detectedAt": 1779459082694,
+  "profile": {
+    "type": "cpu",
+    "decodeFlag": null,
+    "encodeCodecH264": "libx264",
+    "encodeCodecH265": "libx265",
+    "hwDevice": null,
+    "supported": true
+  }
+}

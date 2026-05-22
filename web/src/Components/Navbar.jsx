@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink, Link } from "react-router";
-import { BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut } from "lucide-react";
+import { Search, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut } from "lucide-react";
 import Logo from "./Logo";
-import Search from "./Search";
 
 const navLinks = [
     { to: "/live", label: "Live TV" },
@@ -43,8 +42,17 @@ const Navbar = () => {
             <Logo />
 
             {/* Search bar */}
-            <div className="">
-                <Search />
+            <div className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 transition-all duration-200 ${searchFocused ? "ring-1 ring-white/30 bg-white/15 w-80" : "w-64"}`}>
+                <Search size={20} className="text-base-content shrink-0" />
+                <input
+                    type="text"
+                    placeholder="Search..."
+                    name="Search"
+                    id="Search"
+                    onFocus={() => setSearchFocused(true)}
+                    onBlur={() => setSearchFocused(false)}
+                    className="bg-transparent outline-none text-md text-white placeholder-base-content placeholder:text-md w-full"
+                />
             </div>
 
             {/* Center nav links */}

@@ -22,7 +22,11 @@ export default function PlayerLock() {
     if (!state.isLocked) return null;
 
     return (
-        <div className="absolute inset-0 z-50" onPointerDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        <div
+            className="absolute inset-0 z-50"
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}>
             {/* subtle dark tint */}
             <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.15)" }} />
 
@@ -53,7 +57,9 @@ export default function PlayerLock() {
                         border: "1px solid rgba(255,255,255,0.15)",
                         boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
                     }}>
-                    <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "rgba(229,62,62,0.15)", border: "1.5px solid rgba(229,62,62,0.4)" }}>
+                    <div
+                        className="w-14 h-14 rounded-full flex items-center justify-center"
+                        style={{ background: "rgba(229,62,62,0.15)", border: "1.5px solid rgba(229,62,62,0.4)" }}>
                         <Unlock size={26} className="text-red-400" strokeWidth={1.8} />
                     </div>
                     <span className="text-white text-sm font-semibold">Tap to Unlock</span>

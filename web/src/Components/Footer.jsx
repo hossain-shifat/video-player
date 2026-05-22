@@ -94,7 +94,7 @@ const Footer = () => {
             <div>
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row items-center justify-center gap-3 border-t border-base-content/25">
                     {/* Copyright */}
-                    <p className="text-xs text-base-content font-mono tracking-wide whitespace-nowrap">© 2026 FLUX · MIT License</p>
+                    <p className="text-xs text-base-content/35 font-mono tracking-wide whitespace-nowrap">© 2026 FLUX · MIT License</p>
                 </div>
             </div>
         </footer>
