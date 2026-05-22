@@ -6,14 +6,15 @@ import CategoryPage from "../Pages/Category/CategoryPage";
 import MediaDetails from "../Pages/Media/Details/MediaDetails";
 import Movies from "../Pages/Media/Movies/Movies";
 import Series from "../Pages/Media/Series/Series";
-import PlayerPage from "../../src/Pages/Player/PlayerPage";
+import PlayerPage from "../Pages/Player/PlayerPage";
 import Settings from "../Pages/Settings/Settings";
 import WatchList from "../Pages/WatchList/WatchList";
+import Player from "../Pages/Player/Player";
 
 export const router = createBrowserRouter([
     {
         path: "/player/:id",
-        Component: PlayerPage,
+        Component: Player,
     },
     {
         path: "/",

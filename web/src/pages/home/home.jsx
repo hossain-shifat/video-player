@@ -3,8 +3,10 @@ import { useApi } from "../../Context/apiContext";
 import CategoryBar from "../../Components/CategoryBar";
 import MediaRow from "../../Components/MediaRow";
 import { HomeMediaSections } from "./HomeMediaSections";
+import { useNavigate } from "react-router";
 
 const Home = () => {
+    const navigate = useNavigate();
     const { movies, series, anime, fetchByCategory } = useApi();
 
     const movieItems = movies?.items ?? movies ?? [];
@@ -12,9 +14,9 @@ const Home = () => {
     const animeItems = anime?.items ?? anime ?? [];
 
     const handlePlay = (rawItem) => {
-        const base = import.meta.env.VITE_API_URL || "http://localhost:5000";
-        const url = rawItem.streamUrl ? `${base}${rawItem.streamUrl}` : null;
-        if (url) window.open(url, "_blank");
+        if (rawItem?.id) {
+            navigate(`/player/${encodeURIComponent(rawItem.id)}`);
+        }
     };
 
     const handleTrailer = (normItem) => {
