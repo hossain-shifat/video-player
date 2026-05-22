@@ -8,7 +8,7 @@ const initialState = {
     duration: 0,
     volume: 1,
     muted: false,
-    brightness: 1, // 0.5–2 (CSS filter brightness)
+    brightness: 1, // 0.5 – 2 (CSS filter brightness)
     playbackSpeed: 1,
     isFullscreen: false,
     isPiP: false,
@@ -16,20 +16,19 @@ const initialState = {
     aspectRatio: "auto", // 'auto' | 'fill' | '16:9' | '4:3' | '1:1' | 'stretch'
     controlsVisible: true,
     isLocked: false,
-    activeSubtitle: null, // subtitle track object or null
+    activeSubtitle: null, // track object or null
     subtitleDelay: 0, // ms
     subtitleFontSize: 20, // px
-    qualityLevels: [], // HLS quality levels from HLS.js
-    activeQuality: -1, // -1 = auto ABR
+    qualityLevels: [], // HLS quality levels
+    activeQuality: -1, // -1 = auto
     audioTracks: [],
     activeAudioTrack: 0,
-    buffered: null, // TimeRanges object
+    buffered: null,
     isReady: false,
     isBuffering: false,
-    isStalled: false, // NEW: stall detection (no timeupdate for >4s)
     speedBoostActive: false,
-    preSpeedBoost: 1,
-    error: null, // string | null
+    preSpeedBoost: 1, // saved speed before boost
+    error: null,
 };
 
 // ─── Action Types ────────────────────────────────────────────────────────────
@@ -58,7 +57,6 @@ export const A = {
     SET_BUFFERED: "SET_BUFFERED",
     SET_READY: "SET_READY",
     SET_BUFFERING: "SET_BUFFERING",
-    SET_STALLED: "SET_STALLED", // NEW
     SET_SPEED_BOOST: "SET_SPEED_BOOST",
     SET_ERROR: "SET_ERROR",
     RESET: "RESET",
@@ -79,7 +77,7 @@ function playerReducer(state, action) {
         case A.SET_MUTED:
             return { ...state, muted: action.payload };
         case A.SET_BRIGHTNESS:
-            return { ...state, brightness: Math.max(0.2, Math.min(2, action.payload)) };
+            return { ...state, brightness: Math.max(0.5, Math.min(2, action.payload)) };
         case A.SET_PLAYBACK_SPEED:
             return { ...state, playbackSpeed: action.payload };
         case A.SET_FULLSCREEN:
@@ -119,10 +117,7 @@ function playerReducer(state, action) {
         case A.SET_READY:
             return { ...state, isReady: action.payload };
         case A.SET_BUFFERING:
-            // Buffering clears stall state (we know why we're waiting)
-            return { ...state, isBuffering: action.payload, isStalled: action.payload ? false : state.isStalled };
-        case A.SET_STALLED:
-            return { ...state, isStalled: action.payload };
+            return { ...state, isBuffering: action.payload };
         case A.SET_SPEED_BOOST:
             if (action.payload) {
                 return { ...state, speedBoostActive: true, preSpeedBoost: state.playbackSpeed, playbackSpeed: 2 };
@@ -142,6 +137,9 @@ function playerReducer(state, action) {
 
 export const PlayerContext = createContext(null);
 
+/**
+ * PlayerProvider — wraps the player page and provides all state + actions.
+ */
 export function PlayerProvider({ children }) {
     const [state, dispatch] = useReducer(playerReducer, initialState);
 
@@ -170,7 +168,6 @@ export function PlayerProvider({ children }) {
     const setBuffered = useCallback((v) => dispatch({ type: A.SET_BUFFERED, payload: v }), []);
     const setReady = useCallback((v) => dispatch({ type: A.SET_READY, payload: v }), []);
     const setBuffering = useCallback((v) => dispatch({ type: A.SET_BUFFERING, payload: v }), []);
-    const setStalled = useCallback((v) => dispatch({ type: A.SET_STALLED, payload: v }), []);
     const setSpeedBoost = useCallback((v) => dispatch({ type: A.SET_SPEED_BOOST, payload: v }), []);
     const setError = useCallback((v) => dispatch({ type: A.SET_ERROR, payload: v }), []);
     const reset = useCallback(() => dispatch({ type: A.RESET }), []);
@@ -202,7 +199,6 @@ export function PlayerProvider({ children }) {
             setBuffered,
             setReady,
             setBuffering,
-            setStalled,
             setSpeedBoost,
             setError,
             reset,
@@ -233,7 +229,6 @@ export function PlayerProvider({ children }) {
             setBuffered,
             setReady,
             setBuffering,
-            setStalled,
             setSpeedBoost,
             setError,
             reset,
@@ -245,6 +240,9 @@ export function PlayerProvider({ children }) {
     return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }
 
+/**
+ * usePlayerState — consume player state and actions anywhere in the player tree.
+ */
 export function usePlayerState() {
     const ctx = useContext(PlayerContext);
     if (!ctx) throw new Error("usePlayerState must be used within PlayerProvider");

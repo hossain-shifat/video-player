@@ -12,9 +12,9 @@ const Home = () => {
     const animeItems = anime?.items ?? anime ?? [];
 
     const handlePlay = (rawItem) => {
-        if (rawItem?.id) {
-            navigate(`/player/${encodeURIComponent(rawItem.id)}`);
-        }
+        const base = import.meta.env.VITE_API_URL || "http://localhost:5000";
+        const url = rawItem.streamUrl ? `${base}${rawItem.streamUrl}` : null;
+        if (url) window.open(url, "_blank");
     };
 
     const handleTrailer = (normItem) => {
