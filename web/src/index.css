@@ -202,3 +202,9 @@ body {
 .overflow-x-auto::-webkit-scrollbar {
     display: none;
 }
+
+/* ─── Settings active link ───────────────────────────────────────────────── */
+
+.active {
+    @apply bg-primary text-white;
+}
