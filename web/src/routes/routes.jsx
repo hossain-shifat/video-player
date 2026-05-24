@@ -10,6 +10,9 @@ import PlayerPage from "../Pages/Player/PlayerPage";
 import Settings from "../Pages/Settings/Settings";
 import WatchList from "../Pages/WatchList/WatchList";
 import Player from "../Pages/Player/Player";
+import TermsPage from "../Pages/Terms/TermsPage";
+import PrivacyPage from "../Pages/Privacy/PrivacyPage";
+import LicensesPage from "../Pages/Licenses/LicensesPage";
 
 export const router = createBrowserRouter([
     {
@@ -51,6 +54,18 @@ export const router = createBrowserRouter([
             {
                 path: "watchlist",
                 Component: WatchList,
+            },
+            {
+                path: "terms",
+                Component: TermsPage,
+            },
+            {
+                path: "privacy",
+                Component: PrivacyPage,
+            },
+            {
+                path: "licenses",
+                Component: LicensesPage,
             },
         ],
     },

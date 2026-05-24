@@ -6,26 +6,16 @@ function historyHeaders(clientId) {
     return { "X-Flux-Client": clientId || getOrCreateClientId() };
 }
 
-/**
- * @param {object} opts
- * @param {string} opts.mediaId
- * @param {string} [opts.clientId]
- * @param {string} opts.name
- * @param {string} opts.type
- * @param {string} opts.poster
- * @param {string} opts.streamUrl
- * @param {React.RefObject} opts.videoRef
- * @param {boolean} opts.playing
- * @param {number} opts.currentTime
- * @param {number} opts.duration
- */
-export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, videoRef, playing, currentTime, duration }) {
+export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, videoRef, playing, duration }) {
     const [resumePoint, setResumePoint] = useState(null);
     const [showResumeDialog, setShowResumeDialog] = useState(false);
     const [resumeCountdown, setResumeCountdown] = useState(5);
     const intervalRef = useRef(null);
     const countdownRef = useRef(null);
     const resolvedRef = useRef(false);
+    // Track whether onReadyToSeek has fired — prevents double-seek on HLS
+    // which fires canplay multiple times as segments buffer.
+    const seekFiredRef = useRef(false);
     const scopedClientId = clientId || getOrCreateClientId();
 
     const buildPayload = useCallback(
@@ -48,15 +38,21 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
                     headers: historyHeaders(scopedClientId),
                 });
             } catch {
-                // don't disrupt playback
+                // non-fatal
             }
         },
         [mediaId, duration, buildPayload, scopedClientId],
     );
 
+    // ── Load resume point from history ────────────────────────────────────────
     useEffect(() => {
         if (!mediaId) return;
         let cancelled = false;
+        seekFiredRef.current = false;
+        resolvedRef.current = false;
+        setResumePoint(null);
+        setShowResumeDialog(false);
+
         (async () => {
             try {
                 const data = await api.get(`/api/history/${mediaId}`, {
@@ -69,13 +65,16 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
                     resolvedRef.current = false;
                 }
             } catch {
-                // no history for this client
+                // no history
             }
         })();
+
         return () => {
             cancelled = true;
         };
     }, [mediaId, scopedClientId]);
+
+    // ── Resume dialog actions ─────────────────────────────────────────────────
 
     const handleResume = useCallback(() => {
         if (videoRef.current && resumePoint?.position) {
@@ -83,6 +82,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         }
         setShowResumeDialog(false);
         resolvedRef.current = true;
+        seekFiredRef.current = true;
         clearInterval(countdownRef.current);
     }, [videoRef, resumePoint]);
 
@@ -90,12 +90,11 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         if (videoRef.current) videoRef.current.currentTime = 0;
         setShowResumeDialog(false);
         resolvedRef.current = true;
+        seekFiredRef.current = true;
         clearInterval(countdownRef.current);
     }, [videoRef]);
 
-    const handleResumeRef = useRef(handleResume);
-    handleResumeRef.current = handleResume;
-
+    // ── Resume countdown (auto Start Over after 5s) ────────────────────────────
     useEffect(() => {
         if (!showResumeDialog) return undefined;
         setResumeCountdown(5);
@@ -103,9 +102,9 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
             setResumeCountdown((c) => {
                 if (c <= 1) {
                     clearInterval(countdownRef.current);
-                    // Default to Start Over — user must explicitly click Resume
                     setShowResumeDialog(false);
                     resolvedRef.current = true;
+                    seekFiredRef.current = true;
                     if (videoRef.current) videoRef.current.currentTime = 0;
                     return 0;
                 }
@@ -113,8 +112,30 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
             });
         }, 1000);
         return () => clearInterval(countdownRef.current);
-    }, [showResumeDialog]);
+    }, [showResumeDialog]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // ── onReadyToSeek — called from PlayerPage on video canplay ──────────────
+    // FIX: was missing from return → PlayerPage threw "undefined is not a function"
+    //
+    // Purpose: if a resume dialog is pending and the video just became ready to
+    // play, we can auto-seek to the resume position if the user hasn't interacted.
+    // This fires on every canplay (HLS fires it multiple times), so we guard with
+    // seekFiredRef to ensure we only act once per media load.
+    //
+    // If the dialog is showing: let the user choose (handleResume / handleStartOver).
+    // If no resume point: no-op.
+    const onReadyToSeek = useCallback(() => {
+        if (seekFiredRef.current) return;
+        if (showResumeDialog) return; // dialog is showing, let user choose
+        if (!resumePoint?.position) return;
+        // No dialog but we have a resume point (e.g. short session, auto-resume)
+        seekFiredRef.current = true;
+        if (videoRef.current) {
+            videoRef.current.currentTime = resumePoint.position;
+        }
+    }, [showResumeDialog, resumePoint, videoRef]);
+
+    // ── Periodic progress save ────────────────────────────────────────────────
     useEffect(() => {
         if (playing && duration > 0) {
             intervalRef.current = setInterval(() => {
@@ -126,6 +147,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         return () => clearInterval(intervalRef.current);
     }, [playing, duration, saveProgress, videoRef]);
 
+    // ── Save on unmount ───────────────────────────────────────────────────────
     useEffect(() => {
         return () => {
             clearInterval(intervalRef.current);
@@ -135,7 +157,10 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
             const base = import.meta.env.VITE_API_URL || "http://localhost:5000";
             fetch(`${base}/api/history/${mediaId}`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", ...historyHeaders(scopedClientId) },
+                headers: {
+                    "Content-Type": "application/json",
+                    ...historyHeaders(scopedClientId),
+                },
                 body: JSON.stringify(payload),
                 credentials: "omit",
                 keepalive: true,
@@ -149,6 +174,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         resumeCountdown,
         handleResume,
         handleStartOver,
+        onReadyToSeek,
     };
 }
 
