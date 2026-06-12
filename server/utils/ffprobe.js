@@ -19,7 +19,13 @@ function probe(filePath) {
     if (hit && now - hit.ts < CACHE_TTL_MS) return Promise.resolve(hit.data);
 
     return new Promise((resolve, reject) => {
-        execFile("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", filePath], { timeout: 15_000 }, (err, stdout) => {
+        // Derive ffprobe path from FFPROBE_PATH, FFMPEG_PATH (s/ffmpeg/ffprobe/), or bare "ffprobe"
+        let ffprobeBin = process.env.FFPROBE_PATH || process.env.FFMPEG_PATH?.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1") || "ffprobe";
+        // On Windows, ensure .exe extension for spawn() to resolve the binary
+        if (process.platform === "win32" && !ffprobeBin.toLowerCase().endsWith(".exe")) {
+            ffprobeBin = ffprobeBin + ".exe";
+        }
+        execFile(ffprobeBin, ["-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", filePath], { timeout: 20_000, windowsHide: true }, (err, stdout) => {
             if (err) return reject(new Error(`ffprobe failed: ${err.message}`));
             let raw;
             try {

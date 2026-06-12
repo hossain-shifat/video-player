@@ -31,7 +31,7 @@ const CategoryPage = () => {
                         <div className="h-5 w-32 rounded bg-base-300 animate-pulse mb-3" />
                         <div className="flex gap-3 overflow-hidden">
                             {Array.from({ length: 6 }).map((_, i) => (
-                                <div key={i} className="shrink-0 w-32.5 sm:w-37 aspect-2/3 rounded-xl bg-base-300 animate-pulse" />
+                                <div key={i} className="shrink-0 w-32.5 sm:w-37 aspect-[2/3] rounded-xl bg-base-300 animate-pulse" />
                             ))}
                         </div>
                     </div>

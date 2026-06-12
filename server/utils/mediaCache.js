@@ -1,12 +1,17 @@
 "use strict";
 
 const { scanFolder } = require("./scanner");
+const { groupMedia } = require("./grouper");
 
 // TTL in ms — default 5 minutes, override with CACHE_TTL_MS env var
 const TTL = parseInt(process.env.CACHE_TTL_MS || "300000", 10);
 
 // Map<folderId, { files: [], label: string, path: string, scannedAt: number }>
 const cache = new Map();
+
+// Grouped media cache — stores result of groupMedia() until invalidated.
+// Avoids re-grouping the entire library on every /api/media request.
+let _groupedCache = null;
 
 // ─── Fast file-by-ID index ────────────────────────────────────────────────────
 // O(1) lookup for streamController.resolveFileById — avoids full folder re-scan.
@@ -64,12 +69,15 @@ function invalidateFolder(folderId) {
         cache.delete(folderId);
         console.log(`[Cache] Invalidated folder ${folderId}`);
     }
+    // Always clear grouped cache on folder change
+    _groupedCache = null;
 }
 
 // Drops all cache entries (call after bulk changes)
 function invalidateAll() {
     cache.clear();
     fileIndex.clear();
+    _groupedCache = null;
     console.log("[Cache] Full cache invalidated");
 }
 
@@ -104,4 +112,28 @@ async function findById(folders, id) {
     return null;
 }
 
-module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles };
+/**
+ * Returns cached grouped media structure.
+ * Calls groupMedia() only when allMedia changes (cache invalidated).
+ * Returns a shallow clone so request-level filtering never mutates the singleton.
+ */
+async function getGroupedCached(allMedia) {
+    if (_groupedCache) {
+        // Return shallow clone so filters don't mutate the cached object
+        return {
+            movies: [..._groupedCache.movies],
+            series: [..._groupedCache.series],
+            anime:  [..._groupedCache.anime],
+            unknown: [..._groupedCache.unknown],
+        };
+    }
+    _groupedCache = await groupMedia(allMedia);
+    return {
+        movies: [..._groupedCache.movies],
+        series: [..._groupedCache.series],
+        anime:  [..._groupedCache.anime],
+        unknown: [..._groupedCache.unknown],
+    };
+}
+
+module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached };

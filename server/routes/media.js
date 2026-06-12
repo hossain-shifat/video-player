@@ -4,9 +4,15 @@ const express = require("express");
 const router = express.Router();
 const { getAllMedia, getMediaById, searchMedia, getMediaSubtitles } = require("../controllers/mediaController");
 
-router.get("/", getAllMedia); // GET /api/media  (all, grouped, filterable)
-router.get("/search", searchMedia); // GET /api/media/search?q=
-router.get("/:id/subtitles", getMediaSubtitles); // GET /api/media/:id/subtitles
-router.get("/:id", getMediaById); // GET /api/media/:id
+const { optionalJWT } = require("../auth/middleware/authenticateJWT");
+
+// Public browsing — optionalJWT attaches req.user if token present, passes through if absent.
+// No auth required to browse/search media.
+router.use(optionalJWT);
+
+router.get("/", getAllMedia);                    // GET /api/media  (public)
+router.get("/search", searchMedia);              // GET /api/media/search?q=  (public)
+router.get("/:id/subtitles", getMediaSubtitles); // GET /api/media/:id/subtitles (public)
+router.get("/:id", getMediaById);               // GET /api/media/:id  (public)
 
 module.exports = router;

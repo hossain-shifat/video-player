@@ -114,9 +114,13 @@ function runShell(cmd, timeoutMs = 8_000) {
     });
 }
 
-/** FFmpeg shorthand. */
+/** FFmpeg shorthand — uses FFMPEG_PATH env if set (fixes Windows HW detection). */
 function runFFmpeg(args) {
-    return runBin("ffmpeg", args, 12_000);
+    let bin = process.env.FFMPEG_PATH || "ffmpeg";
+    if (process.platform === "win32" && !bin.toLowerCase().endsWith(".exe")) {
+        bin = bin + ".exe";
+    }
+    return runBin(bin, args, 12_000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1037,4 +1041,7 @@ module.exports = {
 
     // Express route
     getSysInfoRoute,
+    getLiveMetrics,
 };
+
+function getLiveMetrics() { return { cpuPercent: _sysInfoCached ? _sysInfoCached.cpu.usagePercent : null, memPercent: _sysInfoCached ? _sysInfoCached.memory.usagePercent : null }; }

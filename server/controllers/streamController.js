@@ -36,7 +36,6 @@ const path = require("path");
 const mime = require("mime-types");
 
 const { readFolders } = require("./libraryController");
-const { scanFolder } = require("../utils/scanner");
 const { sanitizePath, isSubtitleFile } = require("../utils/fileHelpers");
 const mediaCache = require("../utils/mediaCache");
 const { probe } = require("../utils/ffprobe");
@@ -59,14 +58,26 @@ const {
 
 const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB for direct-play range chunks
 
-// Cache ffprobe duration so range requests don't re-probe
+// Cache ffprobe duration so range requests don't re-probe.
+// BUG-09 FIX: proper LRU — on hit, delete+re-insert to update insertion order.
 const durationCache = new Map();
+const MAX_DURATION_CACHE = 1000;
 
 async function getDuration(filePath) {
-    if (durationCache.has(filePath)) return durationCache.get(filePath);
+    if (durationCache.has(filePath)) {
+        // LRU: move to end (most recently used)
+        const val = durationCache.get(filePath);
+        durationCache.delete(filePath);
+        durationCache.set(filePath, val);
+        return val;
+    }
     try {
         const info = await probe(filePath);
         if (info?.duration > 0) {
+            if (durationCache.size >= MAX_DURATION_CACHE) {
+                // Evict LRU entry (first key = oldest insertion = least recently used)
+                durationCache.delete(durationCache.keys().next().value);
+            }
             durationCache.set(filePath, info.duration);
             return info.duration;
         }
@@ -77,21 +88,12 @@ async function getDuration(filePath) {
 // ─── File resolver ────────────────────────────────────────────────────────────
 
 async function resolveFileById(id) {
+    // Fast path: O(1) in-memory index hit
     const cached = mediaCache.getFileById(id);
     if (cached) return cached;
+    // Slow path: async cached folder scan (non-blocking, uses getOrScan per folder)
     const folders = await readFolders();
-    for (const folder of folders) {
-        let files;
-        try {
-            files = await scanFolder(folder.path);
-        } catch {
-            continue;
-        }
-        mediaCache.updateFromFiles(files);
-        const found = files.find((f) => f.id === id);
-        if (found) return found;
-    }
-    return null;
+    return mediaCache.findById(folders, id);
 }
 
 function parseClientCaps(query) {
@@ -152,6 +154,10 @@ async function serveDirectPlay(req, res, filePath, contentType) {
             console.error("[Stream] range error:", err.message);
             stream.destroy();
         });
+        // Cleanup: destroy stream if client disconnects early (prevents handle leaks)
+        res.on("close", () => {
+            if (!stream.destroyed) stream.destroy();
+        });
         return stream.pipe(res);
     }
 
@@ -161,6 +167,10 @@ async function serveDirectPlay(req, res, filePath, contentType) {
     stream.on("error", (err) => {
         console.error("[Stream] full error:", err.message);
         if (!res.headersSent) res.status(500).end();
+    });
+    // Cleanup: destroy stream if client disconnects early
+    res.on("close", () => {
+        if (!stream.destroyed) stream.destroy();
     });
     return stream.pipe(res);
 }
@@ -187,10 +197,27 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
     }
 
     try {
-        await waitForM3U8(session.m3u8Path, 20_000);
-    } catch {
-        await session.kill();
-        return res.status(504).json({ error: "Transcoder startup timeout" });
+        await waitForM3U8(session.m3u8Path, 60_000);
+    } catch (err) {
+        // Timeout — check if FFmpeg has already exited with error.
+        // BUG-12 FIX: poll session.status for up to 1s instead of fixed 300ms yield.
+        // On a busy server the exit event may take > 300ms to reach the handler.
+        let waited = 0;
+        while (waited < 1000 && session.status === "starting") {
+            await new Promise((r) => setTimeout(r, 50));
+            waited += 50;
+        }
+
+        if (session.status === "error" || session.status === "dead") {
+            console.error(`[Stream] FFmpeg failed before manifest was ready — session ${session.id}, status=${session.status}`);
+            try {
+                await session.kill();
+            } catch {}
+            return res.status(503).json({ error: "Transcoder failed to start. Check FFmpeg installation." });
+        }
+        // FFmpeg still starting (e.g. slow Windows HEVC init) — return URL anyway
+        // and let HLS.js retry manifest requests with its own retry logic.
+        console.warn(`[Stream] waitForM3U8 timeout session ${session.id} (status=${session.status}) — returning URL for HLS.js retry`);
     }
 
     const hlsUrl = `/stream/hls/${session.id}/index.m3u8`;
@@ -203,6 +230,10 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
         decision: decision.decision,
         startSegment: startSeg,
         segmentDuration: SEGMENT_DURATION,
+        duration: mediaInfo?.duration || null,
+        // Added: player top-bar title + correct history key
+        title: fileObj.name || null,
+        mediaId: fileObj.id || null,
     });
 }
 
@@ -241,6 +272,8 @@ async function streamVideo(req, res) {
                     streamUrl: `${BASE}/stream/video/${id}`,
                     decision: decision.decision,
                     duration: mediaInfo?.duration || null,
+                    title: fileObj.name || null,
+                    mediaId: fileObj.id || id,
                 });
             }
             return startHLSSession(req, res, fileObj, decision, mediaInfo);
@@ -266,7 +299,41 @@ async function serveHLSFile(req, res) {
         if (Array.isArray(filePart)) filePart = filePart.join("/");
 
         let session = getSession(sessionId);
-        if (!session) return res.status(404).json({ error: "Session not found or expired" });
+
+        // ── Disk fallback: session not in memory (server restarted) ──────────
+        // If HLS files exist on disk for this sessionId, serve them directly.
+        // FFmpeg may have already finished; files are usable even without live session.
+        if (!session) {
+            const diskDir = path.join(TEMP_DIR, sessionId);
+            const diskManifest = path.join(diskDir, "index.m3u8");
+            const diskFile = path.join(diskDir, filePart);
+
+            // Verify the sessionId directory exists and is inside TEMP_DIR
+            const resolvedDisk = path.resolve(diskFile);
+            const resolvedDir = path.resolve(diskDir);
+
+            if (fs.existsSync(diskManifest) && resolvedDisk.startsWith(resolvedDir + path.sep)) {
+                console.log(`[Stream] Ghost serve — session ${sessionId} not in memory but files exist on disk`);
+                const ext2 = path.extname(filePart);
+                if (ext2 === ".m3u8" && fs.existsSync(diskManifest)) {
+                    const content = await fsp.readFile(diskManifest);
+                    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+                    res.setHeader("Cache-Control", "no-cache");
+                    res.setHeader("Access-Control-Allow-Origin", "*");
+                    return res.end(content);
+                }
+                if (ext2 === ".ts" && fs.existsSync(diskFile)) {
+                    res.setHeader("Content-Type", "video/mp2t");
+                    res.setHeader("Cache-Control", "max-age=86400");
+                    res.setHeader("Access-Control-Allow-Origin", "*");
+                    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+                    return fs.createReadStream(diskFile).pipe(res);
+                }
+            }
+
+            console.warn(`[Stream] Session ${sessionId} not found, no disk fallback for: ${filePart}`);
+            return res.status(404).json({ error: "Session not found or expired" });
+        }
 
         session.touch();
 
@@ -288,7 +355,40 @@ async function serveHLSFile(req, res) {
             } catch {
                 return res.status(504).json({ error: "Manifest not ready" });
             }
-            const content = await fsp.readFile(resolved);
+            let content = await fsp.readFile(resolved, "utf-8");
+
+            // FIX (Report-15): Solve the ENDLIST deadlock.
+            //
+            // Problem chain:
+            //   1. -t cap → FFmpeg exits normally → writes #EXT-X-ENDLIST
+            //   2. If we strip ENDLIST → HLS.js treats stream as "live EVENT"
+            //      → only requests segments listed in manifest
+            //      → never requests the next unlisted segment
+            //      → gap detection (which waits for an OOB segment request) never fires
+            //      → deadlock: client waits for manifest update, server waits for client
+            //
+            // Correct fix: strip ENDLIST *and* inject a sentinel segment entry pointing
+            // to the next segment after the last one in the manifest. HLS.js sees this
+            // "pending" segment, requests it, gets a 404 (or gap detection catches it
+            // first), which triggers a session restart from that segment number.
+            //
+            // This mirrors how Jellyfin handles chunked on-demand transcoding:
+            // the manifest always has one entry beyond current transcode position.
+            if (session && session.status !== "dead" && content.includes("#EXT-X-ENDLIST")) {
+                // Find highest segment number in manifest
+                const segNums = [...content.matchAll(/index(\d+)\.ts/g)].map((m) => parseInt(m[1], 10)).filter((n) => !isNaN(n));
+                const lastSeg = segNums.length > 0 ? Math.max(...segNums) : session.startSegment - 1;
+                const nextSeg = lastSeg + 1;
+                const nextSegName = `index${String(nextSeg).padStart(5, "0")}.ts`;
+
+                // Strip ENDLIST
+                content = content.replace(/\n?#EXT-X-ENDLIST\n?/g, "\n");
+
+                // Inject sentinel: a valid HLS entry for the next segment.
+                // HLS.js will request it → gap detection fires → session restarts.
+                content = content.trimEnd() + `\n#EXTINF:${SEGMENT_DURATION}.000,\n${nextSegName}\n`;
+            }
+
             res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
             res.setHeader("Cache-Control", "no-cache");
             res.setHeader("Access-Control-Allow-Origin", "*");
@@ -304,7 +404,7 @@ async function serveHLSFile(req, res) {
 
             // Jellyfin gap detection:
             // If requested segment is behind current OR too far ahead → restart
-            const currentIdx = getCurrentSegmentIndex(session.sessionDir);
+            const currentIdx = await getCurrentSegmentIndex(session.sessionDir);
 
             let needsRestart = false;
             if (currentIdx === null) {
@@ -319,6 +419,23 @@ async function serveHLSFile(req, res) {
                 if (gap > SEGMENT_GAP_RESTART) {
                     needsRestart = true;
                     console.log(`[Stream] Forward gap ${gap} > ${SEGMENT_GAP_RESTART} for seg${requestedSeg} — restart`);
+                } else if (gap < 0) {
+                    // Segment behind current transcode — check if still on disk
+                    const segFileCheck = makeSegPath(session.sessionDir, requestedSeg);
+                    if (!fs.existsSync(segFileCheck)) {
+                        needsRestart = true;
+                        console.log(`[Stream] Seg${requestedSeg} deleted by cleanup (currentIdx=${currentIdx}) — restart`);
+                    }
+                } else if (session.status === "done") {
+                    // FIX (Report-15): Session finished (-t cap). Sentinel entry in manifest
+                    // caused HLS.js to request this segment. It doesn't exist yet on disk →
+                    // restart FFmpeg from this segment. This is the gap detection trigger
+                    // for the ENDLIST-sentinel pattern used in the m3u8 serve block.
+                    const segFileCheck = makeSegPath(session.sessionDir, requestedSeg);
+                    if (!fs.existsSync(segFileCheck)) {
+                        needsRestart = true;
+                        console.log(`[Stream] Session done, sentinel seg${requestedSeg} requested — restarting from seg${requestedSeg}`);
+                    }
                 }
             }
 
@@ -377,6 +494,10 @@ async function serveHLSFile(req, res) {
                 console.error("[Stream] segment read error:", err.message);
                 if (!res.headersSent) res.status(500).end();
             });
+            // Cleanup: destroy segment stream on client disconnect
+            res.on("close", () => {
+                if (!stream.destroyed) stream.destroy();
+            });
             return stream.pipe(res);
         }
 
@@ -434,12 +555,23 @@ async function startTranscode(req, res) {
 
 function pingSessionHandler(req, res) {
     const s = getSession(req.params.sessionId);
-    if (!s) return res.status(404).json({ error: "Session not found" });
+    if (!s) {
+        // Check if disk files exist — server might have restarted but files are still there
+        const diskDir = path.join(TEMP_DIR, req.params.sessionId);
+        if (fs.existsSync(path.join(diskDir, "index.m3u8"))) {
+            return res.json({ ok: true, ghost: true, downloadPositionSec: 0 });
+        }
+        return res.status(404).json({ error: "Session not found" });
+    }
 
-    const posSec = parseFloat(req.body?.positionSec || req.query.pos || "0");
-    if (posSec > 0) {
+    // FIX (Report-08): parseFloat(clientId_string) = NaN → guard explicitly.
+    // Reject any non-finite value so downloadPositionSec is never corrupted.
+    const rawPos = req.body?.positionSec ?? req.query.pos ?? "0";
+    const posSec = parseFloat(rawPos);
+    if (Number.isFinite(posSec) && posSec > 0) {
         s.downloadPositionSec = Math.max(s.downloadPositionSec || 0, posSec);
     }
+    s.touch();
     return res.json({ ok: true, downloadPositionSec: s.downloadPositionSec });
 }
 
@@ -478,7 +610,25 @@ async function streamSubtitle(req, res) {
         res.setHeader("Access-Control-Allow-Origin", "*");
 
         if (ext === ".srt") {
-            const content = await fsp.readFile(safePath, "utf-8");
+            // Read as Buffer so we can detect and handle multi-byte encodings.
+            // UTF-16 LE BOM: 0xFF 0xFE  |  UTF-16 BE BOM: 0xFE 0xFF
+            const rawBuf = await fsp.readFile(safePath);
+            let content;
+            if (rawBuf[0] === 0xff && rawBuf[1] === 0xfe) {
+                content = rawBuf.slice(2).toString("utf16le");
+            } else if (rawBuf[0] === 0xfe && rawBuf[1] === 0xff) {
+                // Swap bytes for UTF-16 BE
+                const swapped = Buffer.alloc(rawBuf.length - 2);
+                for (let i = 2; i < rawBuf.length - 1; i += 2) {
+                    swapped[i - 2] = rawBuf[i + 1];
+                    swapped[i - 1] = rawBuf[i];
+                }
+                content = swapped.toString("utf16le");
+            } else {
+                // UTF-8 (with or without BOM) — strip UTF-8 BOM if present
+                content = rawBuf[0] === 0xef && rawBuf[1] === 0xbb && rawBuf[2] === 0xbf ? rawBuf.slice(3).toString("utf-8") : rawBuf.toString("utf-8");
+            }
+            // SRT → WebVTT: replace comma decimal separator in timestamps
             const vtt = "WEBVTT\n\n" + content.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
             res.setHeader("Content-Type", "text/vtt; charset=utf-8");
             return res.send(vtt);

@@ -1,9 +1,9 @@
 "use strict";
 
-const fs   = require("fs");
+const fs = require("fs");
 const path = require("path");
 
-const HISTORY_FILE  = path.join(__dirname, "../data/history.json");
+const HISTORY_FILE = path.join(__dirname, "../data/history.json");
 const USERDATA_FILE = path.join(__dirname, "../data/userdata.json");
 
 // ─── Safe ID validation ───────────────────────────────────────────────────────
@@ -36,11 +36,18 @@ function readJson(file) {
         if (err.code === "ENOENT") return {};
         throw err; // any other fs error (permissions etc.) should surface
     }
+    // FIX (Report-23): 0-byte or whitespace-only file causes JSON.parse("") to
+    // throw SyntaxError → unhandled 500. Treat empty content as empty store.
+    if (!raw || !raw.trim()) return {};
     // JSON parse errors are not swallowed — they propagate to the caller
     return JSON.parse(raw);
 }
 
 function writeJson(file, data) {
+    // Ensure parent directory exists (handles fresh installs)
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+    } catch {}
     const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
     fs.renameSync(tmp, file);
@@ -91,16 +98,16 @@ function saveProgress(id, data) {
     // New session = previously at 0 (start/reset) and now past the first 3 seconds
     const prevPosition = existing.position ?? 0;
     const isNewSession = !existing.id || (prevPosition === 0 && position > 3);
-    const watchCount   = (existing.watchCount || 0) + (isNewSession ? 1 : 0);
+    const watchCount = (existing.watchCount || 0) + (isNewSession ? 1 : 0);
 
     history[id] = {
         id,
-        name:             data.name      || existing.name      || "",
-        type:             data.type      || existing.type      || "movie",
-        poster:           data.poster    || existing.poster    || null,
-        streamUrl:        data.streamUrl || existing.streamUrl || null,
-        watchedAt:        new Date().toISOString(),
-        position:         completed ? 0 : position,
+        name: data.name || existing.name || "",
+        type: data.type || existing.type || "movie",
+        poster: data.poster || existing.poster || null,
+        streamUrl: data.streamUrl || existing.streamUrl || null,
+        watchedAt: new Date().toISOString(),
+        position: completed ? 0 : position,
         duration,
         completed,
         watchCount,
@@ -127,7 +134,7 @@ function clearHistory() {
 
 function getUserdata() {
     const d = readJson(USERDATA_FILE);
-    if (!d.watchlist)  d.watchlist  = {};
+    if (!d.watchlist) d.watchlist = {};
     if (!d.favourites) d.favourites = {};
     return d;
 }
@@ -135,8 +142,7 @@ function getUserdata() {
 function addToWatchlist(id, data) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
     const ud = getUserdata();
-    ud.watchlist[id] = { id, name: data.name, poster: data.poster || null,
-                         type: data.type || "movie", addedAt: new Date().toISOString() };
+    ud.watchlist[id] = { id, name: data.name, poster: data.poster || null, type: data.type || "movie", addedAt: new Date().toISOString() };
     writeJson(USERDATA_FILE, ud);
     return ud.watchlist[id];
 }
@@ -152,8 +158,7 @@ function removeFromWatchlist(id) {
 function addToFavourites(id, data) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
     const ud = getUserdata();
-    ud.favourites[id] = { id, name: data.name, poster: data.poster || null,
-                          type: data.type || "movie", addedAt: new Date().toISOString() };
+    ud.favourites[id] = { id, name: data.name, poster: data.poster || null, type: data.type || "movie", addedAt: new Date().toISOString() };
     writeJson(USERDATA_FILE, ud);
     return ud.favourites[id];
 }
@@ -167,6 +172,14 @@ function removeFromFavourites(id) {
 }
 
 module.exports = {
-    getHistory, getHistoryEntry, saveProgress, deleteHistoryEntry, clearHistory,
-    getUserdata, addToWatchlist, removeFromWatchlist, addToFavourites, removeFromFavourites,
+    getHistory,
+    getHistoryEntry,
+    saveProgress,
+    deleteHistoryEntry,
+    clearHistory,
+    getUserdata,
+    addToWatchlist,
+    removeFromWatchlist,
+    addToFavourites,
+    removeFromFavourites,
 };

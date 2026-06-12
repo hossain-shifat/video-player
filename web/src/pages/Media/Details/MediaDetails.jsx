@@ -1,11 +1,41 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router";
-import { Play, Eye, Heart, Star, Film, Tv, Clock, Calendar, Globe, Award, Users, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Layers, Info, Hash, Clapperboard, Volume2 } from "lucide-react";
+import {
+    Play,
+    Eye,
+    Heart,
+    Star,
+    Film,
+    Tv,
+    Clock,
+    Calendar,
+    Globe,
+    Award,
+    Users,
+    ChevronDown,
+    ChevronUp,
+    ChevronLeft,
+    ChevronRight,
+    Layers,
+    Info,
+    Hash,
+    Clapperboard,
+    Volume2,
+    BarChart2,
+    MessageSquare,
+    ExternalLink,
+    PlayCircle,
+    ThumbsUp,
+} from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
 import { getMediaById } from "../../../api";
 import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
 import MediaRow from "../../../Components/MediaRow";
+import MediaCard from "../../../Components/MediaCard";
 import SimilarMedia from "../../../Components/SimilarMedia";
+import { assets } from "../../../assets/assets";
+import CastAndCrew from "../../../Components/CastAndCrew";
+import Reviews from "../../../Components/Reviews";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -149,78 +179,6 @@ function RatingBar({ rating }) {
 }
 
 // ─── Cast card ────────────────────────────────────────────────────────────────
-function CastCard({ member }) {
-    const [imgErr, setImgErr] = useState(false);
-    return (
-        <div className="shrink-0 w-20 sm:w-24 text-center">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden bg-base-300 mx-auto ring-2 ring-white/10">
-                {member.photo && !imgErr ? (
-                    <img src={member.photo} alt={member.name} className="w-full h-full object-cover" onError={() => setImgErr(true)} loading="lazy" />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-base-200">
-                        <Users size={24} className="text-base-content/30" />
-                    </div>
-                )}
-            </div>
-            <p className="text-[11px] font-medium text-base-content mt-1.5 leading-tight line-clamp-2">{member.name}</p>
-            <p className="text-[10px] text-base-content/45 leading-tight line-clamp-2">{member.character}</p>
-        </div>
-    );
-}
-
-// ─── Cast carousel ────────────────────────────────────────────────────────────
-function CastCarousel({ cast }) {
-    const scrollRef = useRef(null);
-    const [canLeft, setCanLeft] = useState(false);
-    const [canRight, setCanRight] = useState(false);
-
-    const checkScroll = useCallback(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        setCanLeft(el.scrollLeft > 0);
-        setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
-    }, []);
-
-    useEffect(() => {
-        const t = setTimeout(checkScroll, 50);
-        const el = scrollRef.current;
-        el?.addEventListener("scroll", checkScroll, { passive: true });
-        window.addEventListener("resize", checkScroll);
-        return () => {
-            clearTimeout(t);
-            el?.removeEventListener("scroll", checkScroll);
-            window.removeEventListener("resize", checkScroll);
-        };
-    }, [cast, checkScroll]);
-
-    const scroll = (dir) => scrollRef.current?.scrollBy({ left: dir * 300, behavior: "smooth" });
-
-    return (
-        <div className="relative">
-            {canLeft && (
-                <button
-                    onClick={() => scroll(-1)}
-                    className="absolute -left-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-base-300/90 hover:bg-base-200 border border-white/10 flex items-center justify-center shadow-lg transition-colors"
-                    aria-label="Scroll left">
-                    <ChevronLeft size={16} className="text-base-content/70" />
-                </button>
-            )}
-            <div ref={scrollRef} className="flex gap-4 overflow-x-auto pb-2" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                {cast.map((member, i) => (
-                    <CastCard key={i} member={member} />
-                ))}
-            </div>
-            {canRight && (
-                <button
-                    onClick={() => scroll(1)}
-                    className="absolute -right-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-base-300/90 hover:bg-base-200 border border-white/10 flex items-center justify-center shadow-lg transition-colors"
-                    aria-label="Scroll right">
-                    <ChevronRight size={16} className="text-base-content/70" />
-                </button>
-            )}
-        </div>
-    );
-}
 
 // ─── Episode row ──────────────────────────────────────────────────────────────
 function EpisodeRow({ ep, onPlay }) {
@@ -289,7 +247,7 @@ function SeasonsPanel({ seasons, onPlayEpisode }) {
                                 ))}
                                 {eps.length > 5 && (
                                     <button
-                                        className="w-full text-xs text-primary py-2 hover:underline flex items-center justify-center gap-1"
+                                        className="w-full text-xs text-primary py-2 hover:underline flex items-center justify-center gap-1 cursor-pointer"
                                         onClick={() => setShowAllEps((p) => ({ ...p, [num]: !p[num] }))}>
                                         {showAllEps[num] ? (
                                             <>
@@ -330,6 +288,143 @@ function TrailerModal({ trailerKey, onClose }) {
     );
 }
 
+// ─── Ratings section ──────────────────────────────────────────────────────────
+function RatingsSection({ ratings, imdbId }) {
+    if (!ratings) return null;
+    const { tmdb, tmdbVotes, imdb, imdbVotes, rottenTomatoes, metascore } = ratings;
+    if (!tmdb && !imdb && !rottenTomatoes && !metascore) return null;
+    return (
+        <section className="w-full">
+            <SectionHeading icon={BarChart2}>Ratings</SectionHeading>
+            <div className="flex flex-wrap gap-3">
+                {tmdb != null && (
+                    <div className="flex items-center gap-3 bg-base-200 rounded-xl px-4 py-3 border border-white/5 min-w-7.5rem">
+                        <div className="w-8 h-8 rounded-lg bg-[#01b4e4]/15 flex items-center justify-center shrink-0">
+                            <Star size={15} className="text-[#01b4e4] fill-[#01b4e4]" />
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">TMDB</p>
+                            <p className="text-lg font-bold text-white leading-none">
+                                {tmdb}
+                                <span className="text-xs text-base-content/35 font-normal">/10</span>
+                            </p>
+                            {tmdbVotes > 0 && <p className="text-[10px] text-base-content/35 mt-0.5">{fmtVotes(tmdbVotes)} votes</p>}
+                        </div>
+                    </div>
+                )}
+                {imdb != null && (
+                    <a
+                        href={imdbId ? `https://www.imdb.com/title/${imdbId}` : undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 bg-base-200 rounded-xl px-4 py-3 border border-white/5 min-w-7.5rem hover:border-[#f5c518]/30 transition-colors no-underline">
+                        <div className="w-8 h-8 rounded-lg bg-[#f5c518]/10 flex items-center justify-center shrink-0">
+                            <span className="text-[9px] font-black text-[#f5c518] leading-none">IMDb</span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">IMDb</p>
+                            <p className="text-lg font-bold text-white leading-none">
+                                {imdb}
+                                <span className="text-xs text-base-content/35 font-normal">/10</span>
+                            </p>
+                            {imdbVotes && <p className="text-[10px] text-base-content/35 mt-0.5">{fmtVotes(parseInt(imdbVotes, 10))} votes</p>}
+                        </div>
+                    </a>
+                )}
+                {rottenTomatoes && (
+                    <div className="flex items-center gap-3 bg-base-200 rounded-xl px-4 py-3 border border-white/5 min-w-7.5rem">
+                        <div className="w-8 h-8 rounded-lg bg-[#fa320a]/10 flex items-center justify-center shrink-0 text-base leading-none">🍅</div>
+                        <div>
+                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">Tomatometer</p>
+                            <p className="text-lg font-bold text-white leading-none">{rottenTomatoes}</p>
+                        </div>
+                    </div>
+                )}
+                {metascore != null && (
+                    <div className="flex items-center gap-3 bg-base-200 rounded-xl px-4 py-3 border border-white/5 min-w-7.5rem">
+                        <div
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                            style={{ background: metascore >= 61 ? "rgba(54,135,22,0.18)" : metascore >= 40 ? "rgba(255,178,0,0.18)" : "rgba(220,38,38,0.18)" }}>
+                            <span className="text-xs font-black" style={{ color: metascore >= 61 ? "#4ade80" : metascore >= 40 ? "#fbbf24" : "#f87171" }}>
+                                {metascore}
+                            </span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">Metascore</p>
+                            <p className="text-lg font-bold text-white leading-none">
+                                {metascore}
+                                <span className="text-xs text-base-content/35 font-normal">/100</span>
+                            </p>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
+// ─── Reviews section ──────────────────────────────────────────────────────────
+// Fetches each review by ID from TMDB and shows full cards like Plex/reference UI
+const Profile_IMG = "https://image.tmdb.org/t/p/w45";
+
+function StarRating({ rating, max = 10 }) {
+    // TMDB ratings are /10, display as /5 stars
+    const stars = rating != null ? Math.round((rating / max) * 5) : null;
+    if (stars == null) return null;
+    return (
+        <div className="flex items-center gap-0.5">
+            {Array.from({ length: 5 }).map((_, i) => (
+                <Star key={i} size={13} className={i < stars ? "text-warning fill-warning" : "text-base-content/20 fill-base-content/10"} />
+            ))}
+        </div>
+    );
+}
+
+// ─── Trailers & Extras ────────────────────────────────────────────────────────
+function TrailersSection({ videos, onPlay }) {
+    const scrollRef = useRef(null);
+    if (!videos?.length) return null;
+    const scroll = (dir) => scrollRef.current?.scrollBy({ left: dir * 360, behavior: "smooth" });
+    return (
+        <section className="w-full">
+            <div className="flex items-center justify-between mb-3">
+                <h2 className="text-base sm:text-lg font-semibold text-base-content flex items-center gap-2">
+                    <PlayCircle size={18} className="text-primary" /> Trailers &amp; Extras
+                </h2>
+                <div className="flex gap-1">
+                    <button onClick={() => scroll(-1)} className="w-7 h-7 rounded-full bg-base-300 hover:bg-base-200 flex items-center justify-center transition-colors" aria-label="Scroll left">
+                        <ChevronLeft size={14} className="text-base-content/60" />
+                    </button>
+                    <button onClick={() => scroll(1)} className="w-7 h-7 rounded-full bg-base-300 hover:bg-base-200 flex items-center justify-center transition-colors" aria-label="Scroll right">
+                        <ChevronRight size={14} className="text-base-content/60" />
+                    </button>
+                </div>
+            </div>
+            <div ref={scrollRef} className="flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                {videos.map((v) => (
+                    <button
+                        key={v.key}
+                        onClick={() => onPlay(v.key)}
+                        className="shrink-0 w-52 sm:w-60 group relative rounded-xl overflow-hidden bg-base-300 border border-white/5 hover:border-primary/30 transition-all hover:scale-[1.02] text-left">
+                        <div className="relative aspect-video">
+                            <img src={`https://img.youtube.com/vi/${v.key}/mqdefault.jpg`} alt={v.name} className="w-full h-full object-cover" loading="lazy" />
+                            <div className="absolute inset-0 bg-black/35 group-hover:bg-black/15 transition-colors flex items-center justify-center">
+                                <div className="w-10 h-10 rounded-full bg-black/40 group-hover:bg-primary/80 backdrop-blur-sm flex items-center justify-center transition-all group-hover:scale-110">
+                                    <Play size={16} fill="white" className="text-white ml-0.5" />
+                                </div>
+                            </div>
+                            <span className="absolute top-2 left-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/60 text-white/80">{v.type}</span>
+                        </div>
+                        <div className="px-3 py-2">
+                            <p className="text-xs font-medium text-base-content line-clamp-2 leading-tight">{v.name}</p>
+                        </div>
+                    </button>
+                ))}
+            </div>
+        </section>
+    );
+}
+
 // ─── Detail cell ──────────────────────────────────────────────────────────────
 function DetailCell({ label, value, icon: Icon, iconClass = "text-base-content/40", note }) {
     if (value == null || value === "") return null;
@@ -341,6 +436,55 @@ function DetailCell({ label, value, icon: Icon, iconClass = "text-base-content/4
             </div>
             <p className="text-sm font-semibold text-base-content leading-snug">{value}</p>
             {note && <span className="text-[10px] font-bold text-primary/80 leading-none mt-0.5">{note}</span>}
+        </div>
+    );
+}
+
+// ─── Episodes accordion (old SeasonsPanel style, single season) ──────────────
+function EpisodesAccordion({ season, seasonNum, onPlay }) {
+    const [showAll, setShowAll] = useState(false);
+    const [collapsed, setCollapsed] = useState(false);
+    const eps = season.episodes || [];
+    const visibleEps = showAll ? eps : eps.slice(0, 5);
+
+    return (
+        <div className="bg-base-200 rounded-xl overflow-hidden border border-white/5">
+            <div className="flex items-center gap-3 p-4 border-b border-white/5">
+                {season.poster && <img src={season.poster} alt={season.name} className="w-10 h-14 object-cover rounded shrink-0" loading="lazy" />}
+                <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-base-content">{season.name || `Season ${seasonNum}`}</h3>
+                    <p className="text-xs text-base-content/50 mt-0.5">
+                        {eps.length} episode{eps.length !== 1 ? "s" : ""}
+                    </p>
+                    {season.overview && <p className="text-xs text-base-content/40 line-clamp-2 mt-0.5">{season.overview}</p>}
+                </div>
+                <button
+                    onClick={() => setCollapsed((v) => !v)}
+                    className="shrink-0 w-7 h-7 rounded-full hover:bg-base-300 flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label={collapsed ? "Expand" : "Collapse"}>
+                    {collapsed ? <ChevronDown size={16} className="text-base-content/40" /> : <ChevronUp size={16} className="text-base-content/40" />}
+                </button>
+            </div>
+            {!collapsed && (
+                <div className="px-2 pb-3 space-y-1 pt-1">
+                    {visibleEps.map((ep) => (
+                        <EpisodeRow key={ep.id || ep.episode} ep={ep} onPlay={onPlay} />
+                    ))}
+                    {eps.length > 5 && (
+                        <button className="w-full text-xs text-primary py-2 hover:underline flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowAll((v) => !v)}>
+                            {showAll ? (
+                                <>
+                                    <ChevronUp size={12} /> Show less
+                                </>
+                            ) : (
+                                <>
+                                    <ChevronDown size={12} /> Show all {eps.length} episodes
+                                </>
+                            )}
+                        </button>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
@@ -359,6 +503,9 @@ export default function MediaDetails() {
     const [imgError, setImgError] = useState(false);
     const [resumePos, setResumePos] = useState(null);
     const [showTrailer, setShowTrailer] = useState(false);
+    const [videoModalKey, setVideoModalKey] = useState(null);
+    const [selectedSeasonNum, setSelectedSeasonNum] = useState(null);
+    const episodesRef = useRef(null);
 
     // id from URL is already the raw base64url string — no encode/decode needed.
     // React Router passes :id exactly as typed in the URL.
@@ -410,7 +557,14 @@ export default function MediaDetails() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [decodedId, movies.length, series.length, anime.length]);
 
-    // ── Resume point (movies only) ─────────────────────────────────────────────
+    // ── Reset selected season + resume position when item changes ────────────
+    // FIX (Report-23): resumePos must be cleared synchronously when decodedId
+    // changes so the play button shows "Play" (not stale "Resume") during the
+    // network round-trip for the new item's history entry.
+    useEffect(() => {
+        setSelectedSeasonNum(null);
+        setResumePos(null);
+    }, [decodedId]);
     useEffect(() => {
         if (!item || item.seasons) return;
         let cancelled = false;
@@ -430,10 +584,17 @@ export default function MediaDetails() {
     const mediaType = isAnime ? "anime" : isSeries ? "series" : "movie";
 
     const m = item?.metadata;
-    const title = m?.title || item?.title || item?.name || "Unknown";
-    const originalTitle = m?.originalTitle !== title ? m?.originalTitle : null;
-    const overview = m?.overview;
-    const poster = m?.poster;
+    const seasons = isSeries ? item?.seasons : null;
+
+    // ── Selected season logic ──────────────────────────────────────────────────
+    const seasonEntries = seasons ? Object.entries(seasons).sort(([a], [b]) => Number(a) - Number(b)) : [];
+    const activeSeason = selectedSeasonNum != null && seasons ? seasons[selectedSeasonNum] : null;
+
+    // Hero values — override with season data when a season is selected
+    const title = activeSeason ? activeSeason.name || `Season ${selectedSeasonNum}` : m?.title || item?.title || item?.name || "Unknown";
+    const originalTitle = !activeSeason && m?.originalTitle !== (m?.title || item?.title || item?.name || "Unknown") ? m?.originalTitle : null;
+    const overview = activeSeason ? activeSeason.overview || m?.overview : m?.overview;
+    const poster = activeSeason ? activeSeason.poster || m?.poster : m?.poster;
     const backdrop = m?.backdrop;
     const year = m?.year;
     const rating = m?.rating;
@@ -444,10 +605,16 @@ export default function MediaDetails() {
     const runtime = fmtRuntime(m?.runtime);
     const genres = m?.genres || item?.category || [];
     const cast = m?.cast || [];
+    const crew = m?.crew || [];
     const trailerKey = m?.trailer;
     const tagline = m?.tagline;
-    const seasons = isSeries ? item?.seasons : null;
     const partNum = !isSeries ? (item?.parsed?.part ?? null) : null;
+
+    // ── New: ratings / reviews / videos ───────────────────────────────────────
+    const ratings = m?.ratings ?? null;
+    const imdbId = m?.imdbId ?? null;
+    const reviews = Array.isArray(m?.reviews) ? m.reviews : [];
+    const videos = Array.isArray(m?.videos) ? m.videos : [];
 
     const watchlisted = isInWatchlist(decodedId);
     const favourited = isFavourite(decodedId);
@@ -461,11 +628,43 @@ export default function MediaDetails() {
     const heroLang = langName(m?.language);
 
     const relatedParts = useMemo(() => {
-        if (!item || isSeries || partNum == null) return [];
-        const baseTitle = item.parsed?.title?.toLowerCase();
-        if (!baseTitle) return [];
-        return movies.filter((mv) => mv.id !== item.id && mv.parsed?.title?.toLowerCase() === baseTitle && mv.parsed?.part != null);
-    }, [item, isSeries, partNum, movies]);
+        if (!item || isSeries) return [];
+        const tmdbTitle = m?.title;
+        if (!tmdbTitle) return [];
+
+        // Extract franchise base: strip trailing sequel markers from TMDB title
+        // Handles: "Iron Man 2", "Iron Man 3", "K.G.F: Chapter 2", "Avatar: The Way of Water" etc.
+        // Strategy: normalise to lowercase, strip trailing number / chapter N / part N / colon-suffix
+        function franchiseBase(t) {
+            return (
+                t
+                    .toLowerCase()
+                    // strip ": subtitle" style suffixes (keep only root)
+                    // but only if what remains is >= 3 chars (avoid over-stripping)
+                    .replace(/\s*:\s*.+$/, (m, offset, str) => (str.slice(0, offset).length >= 3 ? "" : m))
+                    // strip trailing "chapter N", "part N", "vol N", "volume N"
+                    .replace(/\s+(chapter|part|vol\.?|volume)\s+[\divxIVX]+\s*$/i, "")
+                    // strip bare trailing number (e.g. "Iron Man 2" → "iron man")
+                    .replace(/\s+\d+\s*$/, "")
+                    .trim()
+            );
+        }
+
+        const base = franchiseBase(tmdbTitle);
+        if (!base || base.length < 3) return [];
+
+        return movies
+            .filter((mv) => {
+                if (mv.id === item.id) return false;
+                if (mv.seasons) return false; // skip series items
+                const otherTitle = mv.metadata?.title;
+                if (!otherTitle) return false;
+                const otherBase = franchiseBase(otherTitle);
+                // match if bases are equal OR one starts with the other (handles subtitle variants)
+                return otherBase === base || otherBase.startsWith(base) || base.startsWith(otherBase);
+            })
+            .sort((a, b) => (a.metadata?.year ?? 0) - (b.metadata?.year ?? 0));
+    }, [item, isSeries, m, movies]);
 
     // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -490,7 +689,15 @@ export default function MediaDetails() {
         navigate(`/player/${encodeURIComponent(epId)}`);
     };
 
-    // ── Loading ────────────────────────────────────────────────────────────────
+    /**
+     * handleSeasonSelect — selects a season, updates hero, scrolls to episodes
+     */
+    const handleSeasonSelect = (seasonNum) => {
+        setSelectedSeasonNum(seasonNum);
+        setTimeout(() => {
+            episodesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 50);
+    };
     if (loading) return <MediaDetailsSkeleton />;
 
     // ── Error ──────────────────────────────────────────────────────────────────
@@ -572,7 +779,21 @@ export default function MediaDetails() {
                             </div>
 
                             {/* Title */}
-                            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-base-content leading-tight mb-1">{title}</h1>
+                            {activeSeason && (
+                                <button onClick={() => setSelectedSeasonNum(null)} className="text-xs text-base-content/40 hover:text-primary transition-colors mb-1 flex items-center gap-1">
+                                    <ChevronLeft size={12} />
+                                    {m?.title || item?.title || item?.name}
+                                </button>
+                            )}
+                            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-base-content leading-tight mb-1">
+                                {activeSeason ? (
+                                    <>
+                                        {m?.title || item?.title || item?.name} <span className="text-base-content/50">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
+                                    </>
+                                ) : (
+                                    title
+                                )}
+                            </h1>
                             {originalTitle && <p className="text-xs text-base-content/35 mb-2 font-medium">{originalTitle}</p>}
                             {tagline && <p className="text-sm text-base-content/50 italic mb-3">{tagline}</p>}
 
@@ -605,9 +826,33 @@ export default function MediaDetails() {
                                 )}
                             </div>
 
+                            {/* Inline rating badges — IMDb / RT / TMDB */}
+                            {ratings && (ratings.tmdb != null || ratings.imdb != null || ratings.rottenTomatoes) && (
+                                <div className="flex flex-wrap items-center gap-2 mb-3">
+                                    {ratings.imdb != null && (
+                                        <div className="flex items-center gap-1.5 px-2.5 py-1 no-underline transition-colors">
+                                            <img src={assets.imdbIcon} className="w-4 md:w-6" alt="IMDb Icon" />
+                                            <span className="text-xs md:text-[0.8rem] font-bold text-[#f5c518]">{ratings.imdb}</span>
+                                        </div>
+                                    )}
+                                    {ratings.rottenTomatoes && (
+                                        <div className="flex items-center gap-1.5 px-2.5 py-1">
+                                            <img src={assets.rottenTomatoes} className="w-4 md:w-4" alt="Rotten Tomatoes Icon" />
+                                            <span className="text-xs md:text-[0.8rem] font-bold text-[#fa320a]">{ratings.rottenTomatoes}</span>
+                                        </div>
+                                    )}
+                                    {ratings.tmdb != null && (
+                                        <div className="flex items-center gap-1.5 rounded-full px-2.5 py-1">
+                                            <img src={assets.tmdbIcon} className="w-4 md:w-6" alt="TMDB Icon" />
+                                            <span className="text-xs md:text-[0.8rem] font-bold text-[#01b4e4]">{ratings.tmdb}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Genre tags */}
                             {genres.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mb-4">
+                                <div className="flex flex-wrap gap-1.5 mb-5">
                                     {genres.map((g) => (
                                         <span key={g} className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-base-300 text-base-content/65 border border-white/5">
                                             {g}
@@ -647,23 +892,10 @@ export default function MediaDetails() {
                                 </button>
                             </div>
 
-                            {/* Overview */}
+                            {/* Overview — always full, toggle only if > 500 chars */}
                             {overview && (
                                 <div>
-                                    <p className={`text-sm sm:text-base text-base-content/70 leading-relaxed ${!overviewExpanded && overviewLong ? "line-clamp-3" : ""}`}>{overview}</p>
-                                    {overviewLong && (
-                                        <button onClick={() => setOverviewExpanded((v) => !v)} className="flex items-center gap-1 text-xs text-primary mt-1.5 cursor-pointer hover:underline">
-                                            {overviewExpanded ? (
-                                                <>
-                                                    <ChevronUp size={13} /> Show less
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <ChevronDown size={13} /> Read more
-                                                </>
-                                            )}
-                                        </button>
-                                    )}
+                                    <p className="text-sm sm:text-base text-base-content/70 leading-relaxed">{overview}</p>
                                 </div>
                             )}
                         </div>
@@ -673,14 +905,58 @@ export default function MediaDetails() {
 
             {/* ── Page body ────────────────────────────────────────────────── */}
             <div className="space-y-8 px-4 sm:px-8 lg:px-12 pb-20">
-                {/* ── Seasons (series / anime) ─────────────────────────────── */}
-                {isSeries && seasons && Object.keys(seasons).length > 0 && (
-                    <section className="max-w-5xl">
+                {/* ── Seasons (card grid using MediaCard) ──────────────────── */}
+                {isSeries && seasonEntries.length > 0 && (
+                    <section className="w-full">
                         <SectionHeading icon={Tv}>
                             Seasons
-                            <span className="ml-1 text-sm font-normal text-base-content/40">({Object.keys(seasons).length})</span>
+                            <span className="ml-1 text-sm font-normal text-base-content/40">({seasonEntries.length})</span>
                         </SectionHeading>
-                        <SeasonsPanel seasons={seasons} onPlayEpisode={handlePlayEpisode} />
+                        <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                            {seasonEntries.map(([num, season]) => {
+                                const seriesTitle = m?.title || item?.title || item?.name || "Unknown";
+                                const seasonName = season.name || `Season ${num}`;
+                                // Shape season into a fake item MediaCard can normalise
+                                const fakeItem = {
+                                    id: `season-${num}`,
+                                    type: "series",
+                                    title: `${seriesTitle} (${seasonName})`,
+                                    metadata: {
+                                        title: `${seriesTitle} (${seasonName})`,
+                                        poster: season.poster || m?.poster || null,
+                                        year: m?.year ?? null,
+                                        rating: null,
+                                    },
+                                    seasons: true, // triggers series branch in normalise
+                                };
+                                return (
+                                    <div
+                                        key={num}
+                                        className="shrink-0 relative cursor-pointer"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            handleSeasonSelect(num);
+                                        }}>
+                                        {/* Capture all child clicks to prevent MediaCard navigation */}
+                                        <div className="pointer-events-none">
+                                            <MediaCard item={fakeItem} />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </section>
+                )}
+
+                {/* ── Episodes accordion (shown only after a season is selected) */}
+                {isSeries && activeSeason && (
+                    <section ref={episodesRef} className="w-full scroll-mt-20">
+                        <SectionHeading icon={Clapperboard}>
+                            {m?.title || item?.title || item?.name} <span className="font-normal text-base-content/50">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
+                            <span className="ml-1 text-sm font-normal text-base-content/40">· {(activeSeason.episodes || []).length} ep</span>
+                        </SectionHeading>
+                        <EpisodesAccordion season={activeSeason} seasonNum={selectedSeasonNum} onPlay={handlePlayEpisode} />
                     </section>
                 )}
 
@@ -688,7 +964,13 @@ export default function MediaDetails() {
                 {relatedParts.length > 0 && (
                     <section>
                         <MediaRow
-                            title={`More of ${item.parsed?.title || title.split(" ")[0]}`}
+                            title={`More ${
+                                m?.title
+                                    ?.replace(/\s*:.*$/, "")
+                                    .replace(/\s+\d+$/, "")
+                                    .replace(/\s+(chapter|part|vol|volume)\s+[\divxIVX]+$/i, "")
+                                    .trim() || "like this"
+                            }`}
                             items={relatedParts}
                             onPlay={(raw) => {
                                 if (raw?.id) navigate(`/media/${encodeURIComponent(raw.id)}`);
@@ -697,19 +979,31 @@ export default function MediaDetails() {
                     </section>
                 )}
 
-                {/* ── Cast ─────────────────────────────────────────────────── */}
-                {cast.length > 0 && (
-                    <section className="max-w-5xl">
-                        <SectionHeading icon={Users}>Cast</SectionHeading>
-                        <CastCarousel cast={cast} />
-                    </section>
+                {/* cast and crew */}
+
+                <CastAndCrew />
+
+                {/* ── Reviews ──────────────────────────────────────────────── */}
+                {reviews.length > 0 && (
+                    <>
+                        <Divider />
+                        <Reviews reviews={reviews} tmdbId={m?.tmdbId} mediaType={mediaType} />
+                    </>
+                )}
+
+                {/* ── Trailers & Extras ─────────────────────────────────────── */}
+                {videos.length > 0 && (
+                    <>
+                        <Divider />
+                        <TrailersSection videos={videos} onPlay={(key) => setVideoModalKey(key)} />
+                    </>
                 )}
 
                 <Divider />
 
                 {/* ── Details grid ─────────────────────────────────────────── */}
                 {m && (
-                    <section className="max-w-5xl">
+                    <section className="w-full">
                         <SectionHeading icon={Info}>Details</SectionHeading>
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                             <DetailCell icon={Calendar} iconClass="text-blue-400" label={releaseDateLabel} value={releaseDateFmt || (year ? String(year) : null)} />
@@ -733,6 +1027,7 @@ export default function MediaDetails() {
 
             {/* ── Trailer modal ─────────────────────────────────────────────── */}
             {showTrailer && trailerKey && <TrailerModal trailerKey={trailerKey} onClose={() => setShowTrailer(false)} />}
+            {videoModalKey && <TrailerModal trailerKey={videoModalKey} onClose={() => setVideoModalKey(null)} />}
         </div>
     );
 }

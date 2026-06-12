@@ -12,10 +12,10 @@ function normalise(item) {
             id: item.id,
             type: "movie",
             // Prefer TMDB title/year; fall back to parsed (pre-enrichment or KGF)
-            title: item.metadata?.title || item.parsed?.title || item.name || "Unknown",
-            year: item.metadata?.year ?? item.parsed?.year ?? null,
-            poster: item.metadata?.poster ?? null,
-            rating: item.metadata?.rating ?? null,
+            title: item.metadata?.title || item.parsed?.title || item.name || item.title || "Unknown",
+            year: item.metadata?.year ?? item.parsed?.year ?? item.year ?? null,
+            poster: item.metadata?.poster ?? item.poster ?? null,
+            rating: item.metadata?.rating ?? item.rating ?? null,
             streamUrl: item.streamUrl,
             raw: item,
         };
@@ -23,10 +23,10 @@ function normalise(item) {
     return {
         id: item.id,
         type: "series",
-        title: item.metadata?.title ?? item.title ?? "Unknown",
-        year: item.metadata?.year ?? null,
-        poster: item.metadata?.poster ?? null,
-        rating: item.metadata?.rating ?? null,
+        title: item.metadata?.title ?? item.title ?? item.name ?? "Unknown",
+        year: item.metadata?.year ?? item.year ?? null,
+        poster: item.metadata?.poster ?? item.poster ?? null,
+        rating: item.metadata?.rating ?? item.rating ?? null,
         streamUrl: null,
         raw: item,
     };
@@ -141,7 +141,7 @@ function PosterFallback({ title, type }) {
 }
 
 // ─── MediaCard ────────────────────────────────────────────────────────────────
-export default function MediaCard({ item, onPlay, onWatchTrailer }) {
+export default function MediaCard({ item, onPlay, onWatchTrailer, isLoading }) {
     const { isInWatchlist, toggleWatchlist, isFavourite, toggleFavourite } = useApi();
     const navigate = useNavigate();
     const media = normalise(item);
@@ -162,7 +162,7 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
 
     const handleAction = (key) => {
         closeMenu();
-        const payload = { name: media.title, poster: media.poster, type: media.type };
+        const payload = { name: media.title, poster: media.poster, type: media.type, year: media.year, rating: media.rating };
         switch (key) {
             case "play":
                 onPlay?.(media.raw);
@@ -238,6 +238,8 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
                                     name: media.title,
                                     poster: media.poster,
                                     type: media.type,
+                                    year: media.year,
+                                    rating: media.rating,
                                 })
                             }
                             className="transition-colors duration-150"
@@ -251,6 +253,8 @@ export default function MediaCard({ item, onPlay, onWatchTrailer }) {
                                     name: media.title,
                                     poster: media.poster,
                                     type: media.type,
+                                    year: media.year,
+                                    rating: media.rating,
                                 })
                             }
                             className="transition-colors duration-150"

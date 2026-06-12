@@ -17,7 +17,10 @@ export default function PlaybackSection({ prefs, setPref }) {
                     <Toggle value={prefs.rememberVolume ?? true} onChange={(v) => setPref("rememberVolume", v)} />
                 </Row>
                 <Row label="Default playback speed" desc="Speed applied automatically when a video starts">
+                    <label htmlFor="playback-speed" className="sr-only">Default playback speed</label>
                     <select
+                        id="playback-speed"
+                        name="speed"
                         value={prefs.speed ?? "1.0"}
                         onChange={(e) => setPref("speed", e.target.value)}
                         className="select select-sm bg-base-300 border-white/10 rounded text-sm min-w-20">

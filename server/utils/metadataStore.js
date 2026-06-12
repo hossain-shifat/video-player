@@ -17,7 +17,10 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //   7   — error swallowing fix (network errors no longer cached as _notFound)
 //   8   — TMDB dual auth (Bearer + api_key), Friends 1x01 title fix,
 //          parsed object no longer stored in cache (cleaner media.json)
-const PARSER_VERSION = 8;
+//   9   — expanded schema: ratings{tmdb,imdb,rt,metascore}, reviews, keywords,
+//          watchProviders, crew, cast.tmdbPersonId, videos[], tmdbEpisodeId,
+//          guestStars, networks, collection, contentRating, imdbId
+const PARSER_VERSION = 10;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
 // from a bad API key or transient network failure blocking real lookups.

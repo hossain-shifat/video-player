@@ -72,8 +72,12 @@ function ColorInput({ value, onChange, label }) {
                 className="w-8 h-8 rounded shrink-0 cursor-pointer"
                 aria-label={`Pick ${label}`}
             />
-            <input ref={inputRef} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
+            <label htmlFor={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} className="sr-only">Pick {label}</label>
+            <input ref={inputRef} id={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} name={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
+            <label htmlFor={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`} className="sr-only">{label} Hex</label>
             <input
+                id={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`}
+                name={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`}
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
@@ -85,9 +89,21 @@ function ColorInput({ value, onChange, label }) {
 }
 
 function SliderInput({ value, onChange, min = 0, max = 1, step = 0.05, label, displayFn }) {
+    const slug = label ? label.toLowerCase().replace(/\s+/g, "-") : "slider";
     return (
         <div className="flex items-center gap-3">
-            <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="flex-1 accent-primary h-1.5 cursor-pointer" />
+            <input
+                id={`appearance-${slug}`}
+                name={`appearance-${slug}`}
+                autoComplete="off"
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(e) => onChange(parseFloat(e.target.value))}
+                className="flex-1 accent-primary h-1.5 cursor-pointer"
+            />
             <span className="text-xs text-base-content/50 w-10 text-right shrink-0 font-mono">{displayFn ? displayFn(value) : value}</span>
         </div>
     );
@@ -187,8 +203,10 @@ function CustomThemeEditor({ initial, onSave, onClose }) {
             {/* Name & scheme */}
             <div className="space-y-3">
                 <div>
-                    <label className="text-xs text-base-content/50 font-medium block mb-1.5">Theme Name</label>
+                    <label htmlFor="theme-name" className="text-xs text-base-content/50 font-medium block mb-1.5">Theme Name</label>
                     <input
+                        id="theme-name"
+                        name="themeName"
                         type="text"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
@@ -198,8 +216,10 @@ function CustomThemeEditor({ initial, onSave, onClose }) {
                     />
                 </div>
                 <div>
-                    <label className="text-xs text-base-content/50 font-medium block mb-1.5">Description</label>
+                    <label htmlFor="theme-desc" className="text-xs text-base-content/50 font-medium block mb-1.5">Description</label>
                     <input
+                        id="theme-desc"
+                        name="themeDesc"
                         type="text"
                         value={desc}
                         onChange={(e) => setDesc(e.target.value)}
@@ -247,8 +267,10 @@ function CustomThemeEditor({ initial, onSave, onClose }) {
                     Import
                 </p>
                 <div>
-                    <label className="text-xs text-base-content/40 block mb-1">Paste DaisyUI v5 Theme Block</label>
+                    <label htmlFor="theme-import" className="text-xs text-base-content/40 block mb-1">Paste DaisyUI v5 Theme Block</label>
                     <textarea 
+                        id="theme-import"
+                        name="themeImport"
                         className="w-full h-24 bg-base-300 border border-white/5 rounded px-3 py-2 text-[10px] font-mono text-base-content/70 focus:outline-none focus:border-primary/40 resize-none"
                         placeholder={'@plugin "daisyui/theme" {\n  name: "mytheme";\n  color-scheme: "dark";\n  --color-base-100: oklch(0% 0 0);\n  ...\n}'}
                         onChange={(e) => {
@@ -445,7 +467,10 @@ export default function AppearanceSection() {
             <SubSection title="Typography" icon={Type}>
                 <Card>
                     <Row label="Font Family" desc="UI font used throughout the app">
+                        <label htmlFor="font-family" className="sr-only">Font Family</label>
                         <select
+                            id="font-family"
+                            name="fontFamily"
                             value={appearance.fontFamily}
                             onChange={(e) => set("fontFamily")(e.target.value)}
                             className="bg-base-300 border border-white/5 rounded px-2.5 py-1.5 text-xs text-base-content focus:outline-none focus:border-primary/40">
@@ -493,7 +518,10 @@ export default function AppearanceSection() {
                     </Row>
 
                     <Row label="Content Width" desc="Maximum width of main content area">
+                        <label htmlFor="content-width" className="sr-only">Content Width</label>
                         <select
+                            id="content-width"
+                            name="contentWidth"
                             value={appearance.contentWidth}
                             onChange={(e) => set("contentWidth")(e.target.value)}
                             className="bg-base-300 border border-white/5 rounded px-2.5 py-1.5 text-xs text-base-content focus:outline-none focus:border-primary/40">

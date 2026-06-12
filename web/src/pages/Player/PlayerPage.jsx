@@ -10,6 +10,7 @@ import SubtitleRenderer from "./SubtitleRenderer";
 import { useProgress } from "./useProgress";
 import { getMediaById, getSubtitles } from "../../api/media";
 import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream";
+import { useAuth } from "../../auth/AuthContext";
 
 // ─── PlayerInner (inside PlayerProvider) ─────────────────────────────────────
 
@@ -20,8 +21,11 @@ function PlayerInner({ mediaId }) {
     const hideTimer = useRef(null);
     const sessionIdRef = useRef(null);
     const clientIdRef = useRef(null);
+    // FIX (Report-25): store ffprobe duration for useProgress unmount save
+    const mediaDurationRef = useRef(null);
 
     const { state, actions } = usePlayerState();
+    const { getToken } = useAuth();
 
     // ── Media + stream state ──────────────────────────────────────────────────
     const [mediaInfo, setMediaInfo] = useState(null);
@@ -30,8 +34,11 @@ function PlayerInner({ mediaId }) {
     const [sessionId, setSessionId] = useState(null);
     const [loadingMedia, setLoadingMedia] = useState(true);
     const [mediaError, setMediaError] = useState(null);
+    // FIX: separate "preparing HLS" state — shows a friendlier buffering message
+    // while backend spins up FFmpeg and generates the first segments (3-5s).
+    const [preparingStream, setPreparingStream] = useState(false);
+    const [prepareLabel, setPrepareLabel] = useState("Preparing stream…");
 
-    // Keep session refs current for use inside intervals / cleanup
     useEffect(() => {
         sessionIdRef.current = sessionId;
     }, [sessionId]);
@@ -91,24 +98,18 @@ function PlayerInner({ mediaId }) {
 
     useEffect(() => () => clearTimeout(hideTimer.current), []);
 
-    // Sync overlay state ← player state
     useEffect(() => {
         setOverlayState((s) => ({ ...s, brightness: state.brightness, volume: state.volume, muted: state.muted }));
     }, [state.brightness, state.volume, state.muted]);
 
     // ── Fullscreen ────────────────────────────────────────────────────────────
-    // FIX: fullscreen implemented here and surfaced via containerRef helper
-    // so PlayerControls can call containerRef.current._toggleFullscreen()
     useEffect(() => {
         const container = containerRef.current;
         if (!container) return;
-
         const onFullscreenChange = () => {
             actions.setFullscreen(!!document.fullscreenElement);
         };
         document.addEventListener("fullscreenchange", onFullscreenChange);
-
-        // Attach helpers to the DOM node so child components can call them
         container._toggleFullscreen = () => {
             if (document.fullscreenElement) {
                 document.exitFullscreen().catch(() => {});
@@ -116,40 +117,31 @@ function PlayerInner({ mediaId }) {
                 container.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
             }
         };
-
         return () => {
             document.removeEventListener("fullscreenchange", onFullscreenChange);
-            if (container) {
-                delete container._toggleFullscreen;
-            }
+            if (container) delete container._toggleFullscreen;
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ── Picture-in-Picture ────────────────────────────────────────────────────
+    // ── PiP ───────────────────────────────────────────────────────────────────
     useEffect(() => {
         const container = containerRef.current;
         if (!container) return;
-
         const onPiPChange = () => {
             actions.setPiP(document.pictureInPictureElement === videoRef.current);
         };
         document.addEventListener("enterpictureinpicture", onPiPChange);
         document.addEventListener("leavepictureinpicture", onPiPChange);
-
         container._togglePiP = async () => {
             const video = videoRef.current;
             if (!video) return;
             try {
-                if (document.pictureInPictureElement) {
-                    await document.exitPictureInPicture();
-                } else {
-                    await video.requestPictureInPicture();
-                }
+                if (document.pictureInPictureElement) await document.exitPictureInPicture();
+                else await video.requestPictureInPicture();
             } catch {
-                // PiP not supported or user denied
+                /* PiP not supported */
             }
         };
-
         return () => {
             document.removeEventListener("enterpictureinpicture", onPiPChange);
             document.removeEventListener("leavepictureinpicture", onPiPChange);
@@ -158,32 +150,29 @@ function PlayerInner({ mediaId }) {
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── HLS session heartbeat ─────────────────────────────────────────────────
-    // Keeps the transcode session alive every 10s + updates download position
-    // so the server's segment cleaner knows what's safe to delete.
+    // FIX (Report-08): was heartbeatSession(sessionId, clientIdRef.current)
+    // which passed clientId string as positionSec → parseFloat("web_xyz") = NaN
+    // → downloadPositionSec never updated → cleanup couldn't track real position.
+    // Correct signature: heartbeatSession(sessionId, positionSec, clientId)
     useEffect(() => {
         if (!sessionId) return;
         const interval = setInterval(() => {
-            heartbeatSession(sessionId, clientIdRef.current);
+            const positionSec = videoRef.current?.currentTime ?? 0;
+            heartbeatSession(sessionId, positionSec, clientIdRef.current);
         }, 10_000);
         return () => clearInterval(interval);
     }, [sessionId]);
 
-    // ── Session cleanup on unmount ────────────────────────────────────────────
+    // ── Cleanup on unmount ────────────────────────────────────────────────────
     useEffect(() => {
         return () => {
-            if (sessionIdRef.current) {
-                stopSession(sessionIdRef.current, clientIdRef.current);
-            }
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            }
-            if (screen.orientation?.unlock) {
-                screen.orientation.unlock();
-            }
+            if (sessionIdRef.current) stopSession(sessionIdRef.current, clientIdRef.current);
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            if (screen.orientation?.unlock) screen.orientation.unlock();
         };
     }, []);
 
-    // ── Load media info + resolve stream ──────────────────────────────────────
+    // ── Load media + resolve stream ───────────────────────────────────────────
     useEffect(() => {
         if (!mediaId) return;
         let cancelled = false;
@@ -191,10 +180,12 @@ function PlayerInner({ mediaId }) {
         setMediaError(null);
         setStreamUrl(null);
         setSessionId(null);
+        setPreparingStream(false);
 
         (async () => {
             try {
-                // 1. Fetch media metadata (title, poster, etc.)
+                // Step 1 — fetch media metadata
+                setPrepareLabel("Loading media info…");
                 const data = await getMediaById(mediaId);
                 if (cancelled) return;
                 const file = data?.file || data;
@@ -210,12 +201,19 @@ function PlayerInner({ mediaId }) {
                     year: metadata?.year || null,
                 });
 
-                // 2. Smart playback decision via /stream/video/:id?info=1
-                //    Returns { mode: "direct"|"hls", streamUrl?, hlsUrl?, sessionId?, clientId }
+                // Step 2 — resolve playback (may take 3-5s for HLS to start FFmpeg)
+                setPreparingStream(true);
+                setPrepareLabel("Preparing stream…");
+
                 const playback = await resolvePlayback(mediaId);
                 if (cancelled) return;
 
                 clientIdRef.current = playback.clientId;
+
+                // FIX (Report-25): capture real ffprobe duration
+                if (playback.duration && playback.duration > 0) {
+                    mediaDurationRef.current = playback.duration;
+                }
 
                 if (playback.mode === "hls") {
                     setSessionId(playback.sessionId);
@@ -225,17 +223,20 @@ function PlayerInner({ mediaId }) {
                     setStreamUrl(playback.streamUrl);
                 }
 
-                // 3. Subtitles (non-fatal)
+                // Step 3 — subtitles (non-fatal)
                 try {
                     const subData = await getSubtitles(mediaId);
                     if (!cancelled) setSubtitles(subData?.subtitles || []);
                 } catch {
-                    /* no subtitles — fine */
+                    /* no subtitles */
                 }
             } catch (err) {
                 if (!cancelled) setMediaError(err.message || "Failed to load media");
             } finally {
-                if (!cancelled) setLoadingMedia(false);
+                if (!cancelled) {
+                    setLoadingMedia(false);
+                    setPreparingStream(false);
+                }
             }
         })();
 
@@ -244,45 +245,74 @@ function PlayerInner({ mediaId }) {
         };
     }, [mediaId]);
 
-    // Lock orientation to landscape on mobile
+    // ── Lock orientation ──────────────────────────────────────────────────────
     useEffect(() => {
-        if (screen.orientation?.lock) {
-            screen.orientation.lock("landscape").catch(() => {});
-        }
+        if (screen.orientation?.lock) screen.orientation.lock("landscape").catch(() => {});
         return () => {
             if (screen.orientation?.unlock) screen.orientation.unlock();
         };
     }, []);
 
-    // ── Progress tracking (resume + history) ──────────────────────────────────
+    // ── Progress tracking ─────────────────────────────────────────────────────
     const progressProps = useProgress({
         mediaId,
         clientId: clientIdRef.current,
         name: mediaInfo?.title,
         type: mediaInfo?.type,
         poster: mediaInfo?.poster,
-        streamUrl,
         videoRef,
         playing: state.playing,
-        currentTime: state.currentTime,
-        duration: state.duration,
+        mediaDuration: mediaDurationRef.current,
+        streamUrl, // FIX (Report-28): needed as dep so timeupdate listener attaches
+        getToken, // FIX (Report-28): auth token for unmount keepalive fetch
     });
 
     const handleBack = () => navigate(-1);
 
-    // ── Loading ───────────────────────────────────────────────────────────────
+    // ── Loading / Preparing screen ────────────────────────────────────────────
     if (loadingMedia) {
         return (
             <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                    <span className="text-white/60 text-sm font-medium tracking-wide">Loading…</span>
+                <div className="flex flex-col items-center gap-5">
+                    {/* Spinner */}
+                    <div className="relative w-16 h-16">
+                        <div className="absolute inset-0 border-4 border-white/10 rounded-full" />
+                        <div className="absolute inset-0 border-4 border-transparent border-t-red-500 rounded-full animate-spin" />
+                    </div>
+
+                    {/* Label */}
+                    <div className="flex flex-col items-center gap-1">
+                        <span className="text-white/80 text-sm font-medium tracking-wide">{prepareLabel}</span>
+                        {preparingStream && <span className="text-white/40 text-xs">Starting transcoder, please wait…</span>}
+                    </div>
+
+                    {/* Dot progress bar */}
+                    {preparingStream && (
+                        <div className="flex gap-1.5">
+                            {[0, 1, 2, 3, 4].map((i) => (
+                                <div
+                                    key={i}
+                                    className="w-1.5 h-1.5 rounded-full bg-red-500/70"
+                                    style={{
+                                        animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+                                    }}
+                                />
+                            ))}
+                        </div>
+                    )}
                 </div>
+
+                <style>{`
+                    @keyframes pulse {
+                        0%, 100% { opacity: 0.3; transform: scale(0.8); }
+                        50%       { opacity: 1;   transform: scale(1.2); }
+                    }
+                `}</style>
             </div>
         );
     }
 
-    // ── Error ─────────────────────────────────────────────────────────────────
+    // ── Error screen ──────────────────────────────────────────────────────────
     if (mediaError) {
         return (
             <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-4 z-50">
@@ -306,7 +336,7 @@ function PlayerInner({ mediaId }) {
             {/* Gesture layer */}
             <PlayerGestures videoRef={videoRef} containerRef={containerRef} overlayTriggers={overlayTriggers} setOverlayState={setOverlayState} showControls={showControls} />
 
-            {/* Visual overlays (brightness / volume / seek feedback) */}
+            {/* Visual overlays */}
             <PlayerOverlays overlayState={overlayState} overlayVis={overlayVis} />
 
             {/* Subtitles */}

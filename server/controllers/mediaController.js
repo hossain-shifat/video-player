@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { readFolders } = require("./libraryController");
-const { getAllCached, findById } = require("../utils/mediaCache");
+const { getAllCached, findById, getGroupedCached } = require("../utils/mediaCache");
 const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
 const { getMetadata } = require("../utils/metadataStore");
 const { groupMedia } = require("../utils/grouper");
@@ -49,7 +49,9 @@ async function getAllMedia(req, res) {
 
         const folders = await readFolders();
         const { allMedia, folderStats } = await getAllCached(folders);
-        const grouped = await groupMedia(allMedia);
+        // Use cached grouped result — avoids recomputing entire library structure per request.
+        // getGroupedCached returns a shallow clone, so filter mutations are safe.
+        const grouped = await getGroupedCached(allMedia);
 
         // ── Category (genre) filter ───────────────────────────────────────────
         if (category) {
@@ -113,7 +115,8 @@ async function getMediaById(req, res) {
         const { id } = req.params;
         const folders = await readFolders();
         const { allMedia } = await getAllCached(folders);
-        const grouped = await groupMedia(allMedia);
+        // Use cached grouped result for ID lookup
+        const grouped = await getGroupedCached(allMedia);
 
         // 1. Check top-level items by id (movies + series-group objects)
         const topLevel = [...grouped.movies, ...grouped.series, ...grouped.anime].find((item) => item.id === id);
