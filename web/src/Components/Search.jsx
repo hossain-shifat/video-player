@@ -291,17 +291,17 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
     const debounceRef = useRef(null);
     const mountedRef = useRef(true);
 
-    // Expose openMobile to parent via ref
-    if (openMobileRef) openMobileRef.current = () => setMobileOpen(true);
-
-    // Clear debounce + mark unmounted on cleanup
+    // Mount/unmount: wire openMobileRef, mark mounted, clear debounce on cleanup
     useEffect(() => {
         mountedRef.current = true;
+        if (openMobileRef) openMobileRef.current = () => setMobileOpen(true);
         return () => {
             mountedRef.current = false;
             clearTimeout(debounceRef.current);
+            if (openMobileRef) openMobileRef.current = null;
         };
-    }, []);
+        // openMobileRef is a stable ref object; setMobileOpen is stable — no extra deps needed
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const runSearch = useCallback(
         (val) => {
