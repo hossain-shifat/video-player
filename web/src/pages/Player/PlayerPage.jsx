@@ -331,7 +331,7 @@ function PlayerInner({ mediaId }) {
     return (
         <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
             {/* Video core */}
-            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} />}
+            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} mediaDuration={mediaDurationRef.current} onReadyToSeek={progressProps.onReadyToSeek} />}
 
             {/* Gesture layer */}
             <PlayerGestures videoRef={videoRef} containerRef={containerRef} overlayTriggers={overlayTriggers} setOverlayState={setOverlayState} showControls={showControls} />

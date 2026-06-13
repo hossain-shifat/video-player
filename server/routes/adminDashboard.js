@@ -17,6 +17,8 @@ const { authenticateJWT } = require("../auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("../auth/middleware/requireApprovedUser");
 const { requireRole } = require("../auth/middleware/requireRole");
 const { getSessionStats } = require("../utils/transcoderService");
+const { setPermission } = require("../utils/permissionsStore");
+const { invalidateAll } = require("../utils/mediaCache");
 const { getSysInfoRoute, getLiveMetrics } = require("../utils/hwAccel");
 
 // All dashboard routes require: authenticated + approved + admin
@@ -265,13 +267,59 @@ router.get("/users", async (req, res) => {
 // ─── PATCH /api/admin-dashboard/users/:id ─────────────────────────────────────
 router.patch("/users/:id", async (req, res) => {
     try {
-        const { status, role } = req.body;
+        const { status, role, accessType, accessExpiresAt, permissions, permissionsJson, allowAdult } = req.body;
         const data = {};
+
         if (status !== undefined) data.status = status;
         if (role !== undefined) data.role = role;
+        if (accessType !== undefined) data.accessType = accessType;
+        if (accessExpiresAt !== undefined) {
+            if (!accessExpiresAt) {
+                data.accessExpiresAt = null;
+            } else {
+                const date = new Date(accessExpiresAt);
+                if (isNaN(date.getTime())) return res.status(400).json({ error: "Invalid accessExpiresAt date" });
+                data.accessExpiresAt = date;
+            }
+        }
+
+        // permissions — store as JSON string in permissionsJson column
+        if (permissionsJson !== undefined) {
+            data.permissionsJson = permissionsJson;
+        } else if (permissions !== undefined) {
+            data.permissionsJson = JSON.stringify(permissions);
+        }
+
+        // allowAdult — merge into existing permissionsJson if only this field changed
+        if (allowAdult !== undefined && permissionsJson === undefined && permissions === undefined) {
+            const existing = await prisma.user.findUnique({ where: { id: req.params.id }, select: { permissionsJson: true } });
+            let parsed = {};
+            try {
+                parsed = JSON.parse(existing?.permissionsJson || "{}");
+            } catch {}
+            parsed.allowAdult = allowAdult;
+            data.permissionsJson = JSON.stringify(parsed);
+        }
 
         const user = await prisma.user.update({ where: { id: req.params.id }, data });
-        res.json({ user: { id: user.id, status: user.status, role: user.role } });
+
+        // Parse permissionsJson back to object for response
+        let parsedPerms = {};
+        try {
+            parsedPerms = JSON.parse(user.permissionsJson || "{}");
+        } catch {}
+
+        res.json({
+            user: {
+                id: user.id,
+                status: user.status,
+                role: user.role,
+                accessType: user.accessType,
+                accessExpiresAt: user.accessExpiresAt,
+                permissions: parsedPerms,
+                permissionsJson: user.permissionsJson,
+            },
+        });
     } catch (err) {
         if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
         res.status(500).json({ error: "Failed to update user" });
@@ -459,6 +507,26 @@ router.get("/activity", async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: "Failed to get activity" });
+    }
+});
+
+// ─── PATCH /api/admin-dashboard/media/:id ─────────────────────────────────────
+router.patch("/media/:id", (req, res) => {
+    try {
+        const { id } = req.params;
+        const { permission } = req.body;
+
+        if (typeof permission !== "boolean") {
+            return res.status(400).json({ error: "permission must be a boolean" });
+        }
+
+        setPermission(id, permission);
+        invalidateAll();
+
+        return res.json({ id, permission });
+    } catch (err) {
+        console.error("[AdminDash] media permission error:", err);
+        return res.status(500).json({ error: "Failed to update permission" });
     }
 });
 

@@ -28,7 +28,6 @@ import {
 import { usePlayerState } from "./UsePlayerState";
 import { useIsMobile } from "./useIsMobile";
 import SeekBar from "./SeekBar";
-import "./player.css";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -267,7 +266,9 @@ function SubtitleSettings({ open, onClose }) {
             <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
                 {/* Font size */}
                 <div>
-                    <label htmlFor="subtitle-size-range" style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                    <label
+                        htmlFor="subtitle-size-range"
+                        style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
                         Size — {state.subtitleFontSize}px
                     </label>
                     <input
@@ -284,7 +285,9 @@ function SubtitleSettings({ open, onClose }) {
                 </div>
                 {/* Delay */}
                 <div>
-                    <label htmlFor="subtitle-delay-range" style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                    <label
+                        htmlFor="subtitle-delay-range"
+                        style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
                         Delay — {(state.subtitleDelay / 1000).toFixed(1)}s
                     </label>
                     <input
@@ -380,7 +383,9 @@ const VolumeControl = memo(function VolumeControl() {
                     width: expanded ? 88 : 0,
                     opacity: expanded ? 1 : 0,
                 }}>
-                <label htmlFor="player-volume-range" className="sr-only">Volume</label>
+                <label htmlFor="player-volume-range" className="sr-only">
+                    Volume
+                </label>
                 <input
                     id="player-volume-range"
                     name="player-volume"

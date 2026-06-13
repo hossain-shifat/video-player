@@ -138,11 +138,17 @@ function getHlsConfig() {
  *  5. Adaptive buffering config for large remux/4K files.
  *  6. Network error auto-retry with exponential backoff.
  */
-const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration }, ref) {
+const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek }, ref) {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const retryCount = useRef(0);
+    const latestOnReadyToSeek = useRef(onReadyToSeek);
     const { state, actions } = usePlayerState();
+
+    // Keep ref current so closed-over handlers always call latest callback
+    useEffect(() => {
+        latestOnReadyToSeek.current = onReadyToSeek;
+    }, [onReadyToSeek]);
 
     // Expose raw video element to parent
     useImperativeHandle(ref, () => videoRef.current, []);
@@ -216,6 +222,7 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                     actions.setError(null);
                     actions.setReady(true);
+                    latestOnReadyToSeek.current?.();
                     actions.setPlaying(true);
                     video.play().catch(() => {});
                 });
@@ -352,6 +359,8 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                     const activeIdx = tracks.findIndex((t) => t.default);
                     actions.setActiveAudioTrack(activeIdx >= 0 ? activeIdx : 0);
                 }
+                // Allow useProgress to seek to resume position before play starts
+                latestOnReadyToSeek.current?.();
                 actions.setReady(true);
             };
 
