@@ -142,7 +142,13 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const retryCount = useRef(0);
+    const latestOnReadyToSeek = useRef(onReadyToSeek);
     const { state, actions } = usePlayerState();
+
+    // Keep ref current so closed-over handlers always call latest callback
+    useEffect(() => {
+        latestOnReadyToSeek.current = onReadyToSeek;
+    }, [onReadyToSeek]);
 
     // Expose raw video element to parent
     useImperativeHandle(ref, () => videoRef.current, []);
@@ -216,8 +222,7 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                     actions.setError(null);
                     actions.setReady(true);
-                    // Allow useProgress to seek to resume position before play starts
-                    onReadyToSeek?.();
+                    latestOnReadyToSeek.current?.();
                     actions.setPlaying(true);
                     video.play().catch(() => {});
                 });
@@ -355,7 +360,7 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                     actions.setActiveAudioTrack(activeIdx >= 0 ? activeIdx : 0);
                 }
                 // Allow useProgress to seek to resume position before play starts
-                onReadyToSeek?.();
+                latestOnReadyToSeek.current?.();
                 actions.setReady(true);
             };
 

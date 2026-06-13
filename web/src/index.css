@@ -466,7 +466,8 @@ body {
     background-clip: text;
     font-weight: 800;
 }
-/* ───────────────────────────────────────────────────────────────────────────
+
+//* ───────────────────────────────────────────────────────────────────────────
    FLUX Player — Premium CSS
    Cinematic overlays, GPU-accelerated animations, seek bar, subtitle styles
    ─────────────────────────────────────────────────────────────────────────── */
@@ -713,9 +714,9 @@ body {
         0 1px 4px rgba(0, 0, 0, 0.95),
         0 0 12px rgba(0, 0, 0, 0.7);
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: break-word;
     font-family:
-        "Inter",
+        Inter,
         -apple-system,
         sans-serif;
     font-weight: 500;

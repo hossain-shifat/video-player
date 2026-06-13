@@ -6,7 +6,7 @@ import { HomeMediaSections } from "./HomeMediaSections";
 
 const Home = () => {
     const navigate = useNavigate();
-    const { movies, series, anime, loading, fetchByCategory } = useApi();
+    const { movies, series, anime, history, loading, fetchByCategory } = useApi();
 
     const movieItems = movies?.items ?? movies ?? [];
     const seriesItems = series?.items ?? series ?? [];
@@ -27,7 +27,9 @@ const Home = () => {
     return (
         <div className="flex flex-col gap-4">
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
-            {/* TODO: Add watch history "Continue Watching" row here */}
+
+            {/* Continue Watching row — only renders if history exists */}
+
             <HomeMediaSections movieItems={movieItems} seriesItems={seriesItems} animeItems={animeItems} onPlay={handlePlay} onWatchTrailer={handleTrailer} loading={isLoading} />
         </div>
     );

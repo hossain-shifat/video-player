@@ -273,7 +273,15 @@ router.patch("/users/:id", async (req, res) => {
         if (status !== undefined) data.status = status;
         if (role !== undefined) data.role = role;
         if (accessType !== undefined) data.accessType = accessType;
-        if (accessExpiresAt !== undefined) data.accessExpiresAt = accessExpiresAt ? new Date(accessExpiresAt) : null;
+        if (accessExpiresAt !== undefined) {
+            if (!accessExpiresAt) {
+                data.accessExpiresAt = null;
+            } else {
+                const date = new Date(accessExpiresAt);
+                if (isNaN(date.getTime())) return res.status(400).json({ error: "Invalid accessExpiresAt date" });
+                data.accessExpiresAt = date;
+            }
+        }
 
         // permissions — store as JSON string in permissionsJson column
         if (permissionsJson !== undefined) {

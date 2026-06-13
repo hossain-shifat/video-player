@@ -36,8 +36,10 @@ export function ApiProvider({ children }) {
     const series = mediaQuery.data?.series?.items ?? [];
     const anime = mediaQuery.data?.anime?.items ?? [];
 
-    // media is considered "loaded" when mediaQuery is settled
-    const [searchResults, setSearchResults] = useState([]);
+    const [rawSearchResults, setRawSearchResults] = useState([]);
+
+    // Derived — re-filters whenever permissions change without re-fetch
+    const searchResults = useMemo(() => (permissions?.allowAdult === false ? rawSearchResults.filter((item) => item.permission !== false) : rawSearchResults), [rawSearchResults, permissions]);
 
     // ─── Library / Folders ────────────────────────────────────────────────────
     const libraryQuery = useLibrary();
@@ -124,16 +126,13 @@ export function ApiProvider({ children }) {
         [qc],
     );
 
-    /** Search media (still uses direct API — not worth caching) */
     const search = useCallback(
         async (q, folderId) => {
             const data = await searchMedia(q, folderId);
-            let results = data?.results ?? [];
-            if (permissions?.allowAdult === false) {
-                results = results.filter((item) => item.permission !== false);
-            }
-            setSearchResults(results);
-            return data;
+            const raw = data?.results ?? [];
+            setRawSearchResults(raw);
+            const filtered = permissions?.allowAdult === false ? raw.filter((item) => item.permission !== false) : raw;
+            return { ...data, results: filtered };
         },
         [permissions],
     );

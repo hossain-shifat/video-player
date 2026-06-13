@@ -24,7 +24,7 @@ function MediaCardSkeleton() {
  *   title          — section heading
  *   items          — array from API (movies | series)
  *   loading        — bool; shows skeletons when true
- *   skeletonCount  — how many skeleton cards to show (default 6)
+ *   skeletonCount  — how many skeleton cards to show (default 7)
  *   onPlay         — (rawItem) => void
  *   onWatchTrailer — (normalisedItem) => void
  *   viewAllTo      — optional route string for "See all" link

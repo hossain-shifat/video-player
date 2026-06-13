@@ -480,9 +480,8 @@ export default function DashMedia() {
             showToast("Media updated");
             setEditMedia(null);
         },
-        onError: () => {
-            showToast("Update mock successful", "success");
-            setEditMedia(null);
+        onError: (err) => {
+            showToast(err?.message || "Update failed", "error");
         },
     });
 
@@ -881,7 +880,7 @@ export default function DashMedia() {
                         <button
                             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                             disabled={currentPage >= totalPages}
-                            className="w-7 h-7 rounded flex items-center justify-center text-base-content/50 hover:text-base-content hover:bg-base-content/8 disabled:opacity-25 transition-colors focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                            className="w-7 h-7 rounded flex items-center justify-center text-base-content/50 hover:text-base-content hover:bg-base-content/8 disabled:opacity-25 transition-colors focus:outline-none focus-visible:outline-none focus:shadow-none ">
                             <ChevronRight size={15} />
                         </button>
                     </div>
