@@ -466,3 +466,619 @@ body {
     background-clip: text;
     font-weight: 800;
 }
+/* ───────────────────────────────────────────────────────────────────────────
+   FLUX Player — Premium CSS
+   Cinematic overlays, GPU-accelerated animations, seek bar, subtitle styles
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Seek Bar ──────────────────────────────────────────────────────────────── */
+
+.flux-seek-root {
+    position: relative;
+    width: 100%;
+    padding: 14px 0 8px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.flux-seek-track {
+    position: relative;
+    width: 100%;
+    height: 4px;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.18);
+    transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: height;
+}
+
+.flux-seek-root:hover .flux-seek-track,
+.flux-seek-track.dragging {
+    height: 6px;
+}
+
+.flux-seek-buffered {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.28);
+    border-radius: 99px;
+    transform-origin: left;
+    will-change: transform;
+}
+
+.flux-seek-played {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #e53e3e 0%, #ff6b35 100%);
+    border-radius: 99px;
+    transform-origin: left;
+    will-change: transform;
+}
+
+.flux-seek-thumb {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.7),
+        0 0 0 2px rgba(229, 62, 62, 0.4);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+    will-change: transform;
+    pointer-events: none;
+}
+
+.flux-seek-root:hover .flux-seek-thumb,
+.flux-seek-track.dragging ~ .flux-seek-thumb,
+.flux-seek-thumb.active {
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.flux-seek-thumb.dragging {
+    width: 18px;
+    height: 18px;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* Time tooltip above seek bar */
+.flux-seek-tooltip {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.92);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, "SF Mono", monospace;
+    padding: 4px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    letter-spacing: 0.5px;
+}
+
+.flux-seek-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: rgba(0, 0, 0, 0.92);
+}
+
+/* ── Controls overlay gradient ─────────────────────────────────────────────── */
+
+.flux-controls-top {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 60%, transparent 100%);
+}
+
+.flux-controls-bottom {
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.6) 50%, rgba(0, 0, 0, 0.2) 80%, transparent 100%);
+}
+
+/* ── Controls fade animation ───────────────────────────────────────────────── */
+
+.flux-controls-overlay {
+    opacity: 0;
+    transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+}
+
+.flux-controls-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ── Gesture overlay pills ─────────────────────────────────────────────────── */
+
+.flux-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 20px;
+    border-radius: 20px;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    min-width: 88px;
+    text-align: center;
+}
+
+/* Seek ripple animations */
+@keyframes flux-ripple-forward {
+    0% {
+        transform: translateX(-50%) scale(0.85);
+        opacity: 0;
+    }
+    25% {
+        transform: translateX(-50%) scale(1);
+        opacity: 1;
+    }
+    75% {
+        transform: translateX(-50%) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translateX(-50%) scale(1.1);
+        opacity: 0;
+    }
+}
+
+@keyframes flux-ripple-backward {
+    0% {
+        transform: translateX(-50%) scale(0.85);
+        opacity: 0;
+    }
+    25% {
+        transform: translateX(-50%) scale(1);
+        opacity: 1;
+    }
+    75% {
+        transform: translateX(-50%) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translateX(-50%) scale(1.1);
+        opacity: 0;
+    }
+}
+
+/* ── Speed boost badge ─────────────────────────────────────────────────────── */
+
+.flux-speed-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 99px;
+    background: rgba(245, 158, 11, 0.95);
+    border: 1px solid rgba(255, 220, 80, 0.5);
+    box-shadow: 0 4px 20px rgba(245, 158, 11, 0.5);
+    font-weight: 900;
+    font-size: 13px;
+    color: #000;
+    letter-spacing: 0.5px;
+}
+
+/* ── Buffering spinner ─────────────────────────────────────────────────────── */
+
+@keyframes flux-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.flux-spinner {
+    width: 52px;
+    height: 52px;
+    border: 3.5px solid rgba(255, 255, 255, 0.15);
+    border-top-color: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    animation: flux-spin 0.8s linear infinite;
+    will-change: transform;
+}
+
+/* ── Subtitle renderer ─────────────────────────────────────────────────────── */
+
+.flux-subtitle-container {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    padding: 0 16px;
+    transition: bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.flux-subtitle-text {
+    max-width: 85%;
+    text-align: center;
+    padding: 6px 14px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    line-height: 1.5;
+    text-shadow:
+        0 1px 4px rgba(0, 0, 0, 0.95),
+        0 0 12px rgba(0, 0, 0, 0.7);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family:
+        "Inter",
+        -apple-system,
+        sans-serif;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+}
+
+/* ── Icon button ───────────────────────────────────────────────────────────── */
+
+.flux-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.75);
+    border-radius: 10px;
+    cursor: pointer;
+    transition:
+        color 0.15s,
+        background 0.15s,
+        transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.flux-icon-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.flux-icon-btn:active {
+    transform: scale(0.88);
+}
+
+.flux-icon-btn.active {
+    color: #e53e3e;
+    background: rgba(229, 62, 62, 0.15);
+}
+
+/* ── Popup menu ────────────────────────────────────────────────────────────── */
+
+.flux-popup {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    right: 0;
+    min-width: 188px;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow:
+        0 20px 60px rgba(0, 0, 0, 0.8),
+        0 4px 16px rgba(0, 0, 0, 0.5);
+    background: rgba(10, 10, 14, 0.97);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 50;
+    padding: 6px 0;
+    animation: flux-popup-in 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform-origin: bottom right;
+}
+
+.flux-popup.align-left {
+    right: auto;
+    left: 0;
+    transform-origin: bottom left;
+}
+
+@keyframes flux-popup-in {
+    from {
+        opacity: 0;
+        transform: scale(0.88) translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.flux-popup-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.flux-popup-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+    transition:
+        background 0.1s,
+        color 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.flux-popup-item:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: #fff;
+}
+
+.flux-popup-item.active {
+    color: #e53e3e;
+    background: rgba(229, 62, 62, 0.1);
+}
+
+.flux-popup-item .check {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* ── Volume slider ─────────────────────────────────────────────────────────── */
+
+.flux-volume-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 88px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 99px;
+    outline: none;
+    cursor: pointer;
+    accent-color: #e53e3e;
+}
+
+.flux-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    transition: transform 0.15s;
+}
+
+.flux-volume-slider:hover::-webkit-slider-thumb {
+    transform: scale(1.2);
+}
+
+/* ── Skip +/- ripple animation ─────────────────────────────────────────────── */
+
+@keyframes flux-skip-flash {
+    0%,
+    100% {
+        opacity: 0;
+    }
+    20%,
+    80% {
+        opacity: 1;
+    }
+}
+
+/* ── Error overlay ─────────────────────────────────────────────────────────── */
+
+.flux-error-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(8px);
+}
+
+/* ── Resume dialog ─────────────────────────────────────────────────────────── */
+
+.flux-resume-dialog {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-radius: 20px;
+    background: rgba(0, 0, 0, 0.88);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+    max-width: 380px;
+    width: 100%;
+}
+
+/* ── Play/pause center button (mobile) ────────────────────────────────────── */
+
+.flux-center-play {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(229, 62, 62, 0.88);
+    box-shadow: 0 0 40px rgba(229, 62, 62, 0.5);
+    border: none;
+    cursor: pointer;
+    transition:
+        transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+        opacity 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    color: #fff;
+}
+
+.flux-center-play:active {
+    transform: scale(0.88);
+}
+
+/* ── Large desktop play button ─────────────────────────────────────────────── */
+
+.flux-play-btn-desktop {
+    width: 66px;
+    height: 66px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(229, 62, 62, 0.92);
+    box-shadow: 0 0 32px rgba(229, 62, 62, 0.45);
+    border: none;
+    cursor: pointer;
+    color: #fff;
+    transition:
+        transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
+        box-shadow 0.2s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.flux-play-btn-desktop:hover {
+    box-shadow: 0 0 48px rgba(229, 62, 62, 0.65);
+    transform: scale(1.05);
+}
+
+.flux-play-btn-desktop:active {
+    transform: scale(0.9);
+}
+
+/* ── Theater / cinematic vignette ──────────────────────────────────────────── */
+
+.flux-vignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.35) 100%);
+}
+
+/* ── HLS quality badge ─────────────────────────────────────────────────────── */
+
+.flux-quality-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: rgba(229, 62, 62, 0.2);
+    color: #e53e3e;
+    border: 1px solid rgba(229, 62, 62, 0.4);
+    letter-spacing: 0.3px;
+}
+
+/* ── Subtitle settings panel ───────────────────────────────────────────────── */
+
+.flux-sub-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+}
+
+.flux-sub-settings label {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+}
+
+.flux-sub-settings input[type="range"] {
+    width: 100%;
+    accent-color: #e53e3e;
+}
+
+/* ── Mobile gesture zones highlight ───────────────────────────────────────── */
+
+.flux-gesture-zone-hint {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    pointer-events: none;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+
+.flux-gesture-zone-hint.active-left {
+    left: 0;
+    background: linear-gradient(90deg, rgba(255, 255, 200, 0.08), transparent);
+}
+
+.flux-gesture-zone-hint.active-right {
+    right: 0;
+    background: linear-gradient(-90deg, rgba(255, 255, 200, 0.08), transparent);
+}
+
+/* ── Smooth transitions ─────────────────────────────────────────────────────── */
+
+* {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.flux-transition-fast {
+    transition-duration: 120ms;
+}
+.flux-transition-mid {
+    transition-duration: 250ms;
+}
+.flux-transition-slow {
+    transition-duration: 400ms;
+}
+
+/* ── Loading skeleton ──────────────────────────────────────────────────────── */
+
+@keyframes flux-shimmer {
+    from {
+        background-position: -200% 0;
+    }
+    to {
+        background-position: 200% 0;
+    }
+}
+
+.flux-skeleton {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.04) 75%);
+    background-size: 200% 100%;
+    animation: flux-shimmer 1.8s infinite;
+}
+
+/* ── Stall recovery indicator ──────────────────────────────────────────────── */
+
+.flux-stall-bar {
+    height: 2px;
+    background: linear-gradient(90deg, #e53e3e, #ff6b35);
+    animation: flux-stall-pulse 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes flux-stall-pulse {
+    from {
+        opacity: 0.5;
+    }
+    to {
+        opacity: 1;
+    }
+}

@@ -1,12 +1,12 @@
 import React from "react";
 import MediaRow from "../../Components/MediaRow";
 
-export const HomeMediaSections = ({ movieItems, seriesItems, animeItems, onPlay, onWatchTrailer }) => {
+export const HomeMediaSections = ({ movieItems, seriesItems, animeItems, onPlay, onWatchTrailer, loading = false }) => {
     return (
         <div className="space-y-5">
-            <div>{movieItems.length > 0 && <MediaRow title="Movies" items={movieItems} onPlay={onPlay} onWatchTrailer={onWatchTrailer} viewAllTo="/movies" />}</div>
-            <div>{seriesItems.length > 0 && <MediaRow title="Series" items={seriesItems} onPlay={onPlay} onWatchTrailer={onWatchTrailer} viewAllTo="/series" />}</div>
-            <div>{animeItems.length > 0 && <MediaRow title="Anime" items={animeItems} onPlay={onPlay} onWatchTrailer={onWatchTrailer} />}</div>
+            <MediaRow title="Movies" items={movieItems} loading={loading} onPlay={onPlay} onWatchTrailer={onWatchTrailer} viewAllTo="/movies" />
+            <MediaRow title="Series" items={seriesItems} loading={loading} onPlay={onPlay} onWatchTrailer={onWatchTrailer} viewAllTo="/series" />
+            <MediaRow title="Anime" items={animeItems} loading={loading} onPlay={onPlay} onWatchTrailer={onWatchTrailer} />
         </div>
     );
 };

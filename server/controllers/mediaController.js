@@ -7,6 +7,7 @@ const { getAllCached, findById, getGroupedCached } = require("../utils/mediaCach
 const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
 const { getMetadata } = require("../utils/metadataStore");
 const { groupMedia } = require("../utils/grouper");
+const { getPermission } = require("../utils/permissionsStore");
 
 // Attaches TMDB metadata and category (genres) to a single file object
 async function enrich(file) {
@@ -14,7 +15,8 @@ async function enrich(file) {
     return {
         ...file,
         metadata,
-        category: metadata?.genres || [], // genres array for direct use by frontend
+        category: metadata?.genres || [],
+        permission: getPermission(file.id),
     };
 }
 
@@ -86,6 +88,11 @@ async function getAllMedia(req, res) {
                 grouped.anime = narrowSeasons(grouped.anime);
             }
         }
+
+        // ── Attach permission field ───────────────────────────────────────────
+        grouped.movies = grouped.movies.map((m) => ({ ...m, permission: getPermission(m.id) }));
+        grouped.series = grouped.series.map((s) => ({ ...s, permission: getPermission(s.id || s.seriesKey) }));
+        grouped.anime = grouped.anime.map((a) => ({ ...a, permission: getPermission(a.id || a.seriesKey) }));
 
         // ── Build response ────────────────────────────────────────────────────
         const response = {

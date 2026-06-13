@@ -379,7 +379,7 @@ function InfoModal({ user, onClose }) {
                         <dl className="space-y-0">
                             <FieldRow label="Type" value={<span className="capitalize">{user.accessType || "Permanent"}</span>} />
                             {user.accessType === "temporary" && <FieldRow label="Expires" value={<span className={expired ? "text-error" : ""}>{fmtDate(user.accessExpiresAt)}</span>} />}
-                            <FieldRow label="Content" value={user.allowAdultContent ? <span className="text-warning">18+ Allowed</span> : "Restricted"} />
+                            <FieldRow label="Content" value={user.permissions?.allowAdult ? <span className="text-warning">18+ Allowed</span> : "Restricted"} />
                             <FieldRow label="Last IP" value={<span className="font-mono text-xs text-white/60">{user.lastIp || "—"}</span>} />
                         </dl>
                     </Section>
@@ -575,7 +575,6 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
         setRole(user.role || "user");
         setStatus(user.status || "pending");
         setAccessType(user.accessType || "permanent");
-        setAllowAdult(user.allowAdultContent ?? false);
         // Parse permissions — support both permissionsJson (string) and permissions (obj)
         let parsed = {};
         try {
@@ -584,6 +583,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
         } catch {
             /* ignore */
         }
+        setAllowAdult(parsed?.allowAdult ?? false);
         const map = {};
         libraries.forEach((l) => {
             map[l.id] = parsed?.libraries?.[l.id] ?? true;
@@ -612,14 +612,14 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                 accessExpiresAt = d.toISOString();
             }
             // Send both formats so backend can pick what it needs
-            const permissions = { libraries: libPerms, allowAdultContent: allowAdult };
+            const permissions = { libraries: libPerms, allowAdult: allowAdult };
             const permissionsJson = JSON.stringify(permissions);
             await onSave(user, {
                 role,
                 status,
                 accessType,
                 accessExpiresAt,
-                allowAdultContent: allowAdult,
+                allowAdult: allowAdult,
                 permissions,
                 permissionsJson,
             });

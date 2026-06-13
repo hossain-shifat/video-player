@@ -176,9 +176,10 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
     const [title, setTitle] = useState(media._title || "");
     const [year, setYear] = useState(media._year || "");
     const [type, setType] = useState(media._type || "movie");
+    const [permission, setPermission] = useState(media.permission !== false);
 
     const handleSubmit = () => {
-        onSave({ id: media._id, payload: { title, year: Number(year), type } });
+        onSave({ id: media._id, payload: { title, year: Number(year), type, permission } });
     };
 
     return (
@@ -236,6 +237,14 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                         <span className="text-[10px] font-mono text-base-content/40 truncate flex-1">{media._id}</span>
                         <CopyBtn text={media._id} title="Copy ID" />
                     </div>
+                </div>
+
+                <div className="space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Permission Control</p>
+                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input type="checkbox" className="checkbox checkbox-sm checkbox-error" checked={!permission} onChange={(e) => setPermission(!e.target.checked)} />
+                        <span className="text-xs text-base-content/70">Restricted (mark as restricted)</span>
+                    </label>
                 </div>
             </div>
 
@@ -461,7 +470,11 @@ export default function DashMedia() {
     });
 
     const updateMutation = useMutation({
-        mutationFn: (data) => api.patch(`/api/media/${data.id}`, data.payload),
+        mutationFn: async (data) => {
+            const { permission, ...rest } = data.payload;
+            await api.patch(`/api/admin-dashboard/media/${data.id}`, { permission: permission === true });
+            return api.patch(`/api/media/${data.id}`, rest);
+        },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
             showToast("Media updated");
@@ -696,6 +709,7 @@ export default function DashMedia() {
                                 <th className="px-3 py-3.5 hidden md:table-cell text-right">Size</th>
                                 <th className="px-3 py-3.5 hidden lg:table-cell">Library</th>
                                 <th className="px-3 py-3.5 hidden xl:table-cell">Added</th>
+                                <th className="px-3 py-3.5 hidden lg:table-cell text-center">Permission</th>
                                 <th className="pl-3 pr-5 py-3.5 text-right">Actions</th>
                             </tr>
                         </thead>
@@ -805,6 +819,15 @@ export default function DashMedia() {
                                             {/* Added */}
                                             <td className="px-3 py-3 hidden xl:table-cell">
                                                 <span className="text-[11px] text-base-content/40 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
+                                            </td>
+
+                                            {/* Permission Control */}
+                                            <td className="px-3 py-3 hidden lg:table-cell text-center">
+                                                {!item.permission ? (
+                                                    <span className="px-1.5 py-0.5 rounded bg-error/15 text-error text-[9px] font-bold uppercase tracking-wider">Restricted</span>
+                                                ) : (
+                                                    <span className="px-1.5 py-0.5 rounded bg-base-content/8 text-base-content/40 text-[9px] font-bold uppercase tracking-wider">Normal</span>
+                                                )}
                                             </td>
 
                                             {/* Actions */}

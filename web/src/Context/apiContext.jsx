@@ -11,6 +11,7 @@
 
 import { createContext, useContext, useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../auth/AuthContext";
 
 // TanStack Query hooks
 import { useMedia, MEDIA_KEYS } from "../hooks/useMedia";
@@ -27,6 +28,7 @@ const ApiContext = createContext(null);
 
 export function ApiProvider({ children }) {
     const qc = useQueryClient();
+    const { permissions } = useAuth();
 
     // ─── Media ────────────────────────────────────────────────────────────────
     const mediaQuery = useMedia();
@@ -123,11 +125,18 @@ export function ApiProvider({ children }) {
     );
 
     /** Search media (still uses direct API — not worth caching) */
-    const search = useCallback(async (q, folderId) => {
-        const data = await searchMedia(q, folderId);
-        setSearchResults(data?.results ?? []);
-        return data;
-    }, []);
+    const search = useCallback(
+        async (q, folderId) => {
+            const data = await searchMedia(q, folderId);
+            let results = data?.results ?? [];
+            if (permissions?.allowAdult === false) {
+                results = results.filter((item) => item.permission !== false);
+            }
+            setSearchResults(results);
+            return data;
+        },
+        [permissions],
+    );
 
     /** Refetch folders */
     const fetchFolders = useCallback(() => {
