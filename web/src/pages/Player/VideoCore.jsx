@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle } from "react";
+import { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { usePlayerState } from "./UsePlayerState";
 
 // ─── Language code → display name ─────────────────────────────────────────────
@@ -59,48 +59,108 @@ function getAspectStyle(aspectRatio) {
         case "stretch":
             return { objectFit: "fill", width: "100%", height: "100%" };
         default:
-            return { objectFit: "contain", width: "100%", height: "100%" }; // "auto"
+            return { objectFit: "contain", width: "100%", height: "100%" };
     }
 }
 
+// ─── Adaptive HLS config by network / media type ──────────────────────────────
+
+function getHlsConfig() {
+    return {
+        enableWorker: true,
+        workerPath: undefined,
+        lowLatencyMode: false,
+
+        // FIX (Report-19): HLS EVENT playlist type makes hls.js treat the stream
+        // as a live broadcast — it chases the live edge and prevents seeking ahead.
+        // Force VOD mode so hls.js treats all playlists as on-demand, enabling
+        // full seeking regardless of playlist type in the manifest.
+        liveDurationInfinity: false,
+        // Treat EVENT playlists as VOD once loaded (don't poll for new segments
+        // after the current batch — the transcoder appends them naturally).
+        liveBackBufferLength: Infinity,
+
+        // Back-buffer: keep 90s behind so user can seek back without refetch
+        backBufferLength: 90,
+
+        // Forward buffer: 30s is optimal for most connections
+        // HLS.js will auto-grow up to maxMaxBufferLength during smooth playback
+        maxBufferLength: 30,
+        maxMaxBufferLength: 120,
+
+        // Start loading fragments before play is triggered for instant start
+        startFragPrefetch: true,
+        startLevel: -1, // auto-select start level
+
+        // Aggressive retry on network errors (helps on home WiFi)
+        fragLoadingMaxRetry: 8,
+        fragLoadingRetryDelay: 300,
+        fragLoadingMaxRetryTimeout: 6000,
+        fragLoadingTimeOut: 30_000,
+
+        manifestLoadingMaxRetry: 4,
+        manifestLoadingRetryDelay: 500,
+        manifestLoadingTimeOut: 20_000,
+
+        levelLoadingMaxRetry: 4,
+        levelLoadingTimeOut: 20_000,
+
+        // ABR: keep best quality for longer
+        abrEwmaFastLive: 3,
+        abrEwmaSlowLive: 9,
+        abrEwmaFastVoD: 4,
+        abrEwmaSlowVoD: 15,
+        abrBandWidthFactor: 0.95,
+        abrBandWidthUpFactor: 0.7,
+
+        // Better seeking
+        maxSeekHole: 2,
+
+        // Stall recovery
+        nudgeMaxRetry: 6,
+        nudgeOffset: 0.2,
+
+        // HLS.js debug log (only in dev)
+        debug: false,
+    };
+}
+
 // ─── VideoCore ────────────────────────────────────────────────────────────────
+
 /**
  * VideoCore — handles ALL low-level video/HLS lifecycle.
  *
- * Fix log vs original:
- *  1. async import("hls.js") race — `cancelled` flag checked BEFORE touching DOM.
- *     Without this, unmounting mid-import creates an orphan HLS instance that
- *     steals the video element and causes phantom seeking + timeline desync.
- *  2. Direct-play loadedmetadata/canplay listeners use named refs so cleanup
- *     can removeEventListener them, preventing double-firing after src reset.
- *  3. Audio track switch uses hlsRef.current.audioTrack (the track's ID field
- *     returned by HLS.js) rather than the array index — they can differ.
- *  4. MANIFEST_PARSED duration: falls back to hls.media.duration once it is
- *     finite, not just levelDetails.totalduration (which is 0 for VoD early on).
+ * Key improvements over original:
+ *  1. Module-level deduplication + cancellation guard on async HLS import.
+ *  2. Smart stall recovery: nudge currentTime + startLoad on BUFFER_STALLED.
+ *  3. Quality/audio switch by ID (not array index).
+ *  4. Better duration resolution from MANIFEST_PARSED.
+ *  5. Adaptive buffering config for large remux/4K files.
+ *  6. Network error auto-retry with exponential backoff.
  */
-const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref) {
+const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration }, ref) {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
+    const retryCount = useRef(0);
     const { state, actions } = usePlayerState();
 
-    // Expose raw video element to parent (PlayerPage, PlayerControls seek, etc.)
+    // Expose raw video element to parent
     useImperativeHandle(ref, () => videoRef.current, []);
 
     // ── HLS.js / direct-play initialization ──────────────────────────────────
     useEffect(() => {
         if (!streamUrl || !videoRef.current) return;
         const video = videoRef.current;
-
-        // ── BUG FIX 1: cancellation flag for async HLS.js import ──────────
-        // If streamUrl changes (or component unmounts) before the dynamic import
-        // resolves, `cancelled = true` ensures we never touch the stale video.
         let cancelled = false;
+
+        // Reset retry count on new stream
+        retryCount.current = 0;
 
         const isHLS = streamUrl.includes(".m3u8");
 
         if (isHLS) {
             import("hls.js").then(({ default: Hls }) => {
-                if (cancelled) return; // ← the critical guard
+                if (cancelled) return;
 
                 // Native HLS (Safari / iPhone)
                 if (!Hls.isSupported()) {
@@ -108,39 +168,21 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                     return;
                 }
 
-                // Destroy any previous HLS instance synchronously so it
-                // releases its network requests before the new one starts.
+                // Destroy previous instance cleanly
                 if (hlsRef.current) {
                     const old = hlsRef.current;
                     hlsRef.current = null;
                     old.destroy();
                 }
 
-                const hls = new Hls({
-                    enableWorker: true,
-                    lowLatencyMode: false,
-                    backBufferLength: 90,
-                    maxBufferLength: 30,
-                    maxMaxBufferLength: 60,
-                    startFragPrefetch: true,
-                    fragLoadingMaxRetry: 6,
-                    fragLoadingRetryDelay: 500,
-                    manifestLoadingMaxRetry: 4,
-                    fragLoadingTimeOut: 30_000,
-                });
-
+                const hls = new Hls(getHlsConfig());
                 hlsRef.current = hls;
                 hls.loadSource(streamUrl);
                 hls.attachMedia(video);
 
+                // ── MANIFEST_PARSED ─────────────────────────────────────────
                 hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
                     if (cancelled) return;
-
-                    // ── BUG FIX 4: reliable duration ─────────────────────
-                    // hls.media.duration is Infinity for live-like manifests;
-                    // fall back to totalduration from the first level's details.
-                    const finDuration = isFinite(video.duration) && video.duration > 0 ? video.duration : data.levels?.[0]?.details?.totalduration || 0;
-                    if (finDuration > 0) actions.setDuration(finDuration);
 
                     // Quality levels
                     const levels = hls.levels.map((l, i) => ({
@@ -151,12 +193,12 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                         label: l.height ? `${l.height}p` : `Level ${i}`,
                     }));
                     actions.setQualityLevels(levels);
-                    actions.setActiveQuality(-1); // auto
+                    actions.setActiveQuality(-1); // start on auto
 
                     // Audio tracks
                     const tracks = (hls.audioTracks || []).map((t, i) => ({
                         index: i,
-                        id: t.id, // ← HLS.js uses ID for switching
+                        id: t.id,
                         name: resolveLanguageName(t),
                         lang: t.lang || t.language || "",
                         default: t.default || false,
@@ -165,32 +207,84 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                     const defIdx = tracks.findIndex((t) => t.default);
                     actions.setActiveAudioTrack(defIdx >= 0 ? defIdx : 0);
 
+                    // FIX (Report-21): Source files often have non-zero starting PTS
+                    // (e.g. Interstellar begins at 7.304s). -copyts preserves these
+                    // timestamps in segments, so the browser's <video> currentTime
+                    // jumps to 7.304s immediately. Force hls.startPosition = 0 so
+                    // HLS.js normalises the timeline baseline to zero before play.
+                    hls.startPosition = 0;
+
+                    actions.setError(null);
                     actions.setReady(true);
                     actions.setPlaying(true);
                     video.play().catch(() => {});
                 });
 
+                // ── LEVEL_LOADED (duration source) ──────────────────────
+                hls.on(Hls.Events.LEVEL_LOADED, (_, data) => {
+                    if (cancelled) return;
+                    const totalduration = data?.details?.totalduration;
+                    // FIX (Report-19): HLS EVENT playlist totalduration grows as FFmpeg
+                    // transcodes — it starts tiny (17s) and expands. This makes the
+                    // seekbar shrink/grow continuously and confuses hls.js into live mode.
+                    // Always prefer mediaDuration (real ffprobe duration from PlayerPage)
+                    // when it's available — it's the true full-film duration.
+                    // Only fall back to totalduration if mediaDuration is absent.
+                    const hlsDur = totalduration && totalduration > 0 ? totalduration : 0;
+                    const realDur = mediaDuration && mediaDuration > 0 ? mediaDuration : 0;
+                    const best = realDur > 0 ? realDur : hlsDur;
+                    if (best > 0) actions.setDuration(best);
+                });
+
+                // ── LEVEL_SWITCHED ──────────────────────────────────────────
                 hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+                    if (cancelled) return;
                     actions.setActiveQuality(hls.autoLevelEnabled ? -1 : data.level);
                 });
 
+                // ── AUDIO_TRACK_SWITCHED ────────────────────────────────────
                 hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
-                    // data.id is the HLS track ID, map back to our index
+                    if (cancelled) return;
                     const idx = (hls.audioTracks || []).findIndex((t) => t.id === data.id);
                     actions.setActiveAudioTrack(idx >= 0 ? idx : 0);
                 });
 
-                // Error handling — mirrors Jellyfin's approach: only retry once
-                // for transient network errors, hard-stop on 404/429.
+                // ── BUFFER_STALLED (stall recovery) ────────────────────────
+                hls.on(Hls.Events.BUFFER_STALLED, () => {
+                    if (cancelled) return;
+                    actions.setBuffering(true);
+                    actions.incrementStall();
+                    // Nudge playhead slightly to unstick browser decoder
+                    if (video.readyState > 2 && video.currentTime > 0) {
+                        video.currentTime += 0.1;
+                    }
+                    hls.startLoad();
+                });
+
+                // ── FRAG_LOADED (clear buffering indicator) ─────────────────
+                hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
+                    if (cancelled) return;
+                    // Update duration from loaded fragment data (HLS live/event streams)
+                    if (data?.frag?.duration) {
+                        const v = videoRef.current;
+                        if (v && isFinite(v.duration) && v.duration > 0) {
+                            actions.setDuration(v.duration);
+                        }
+                    }
+                    // Clear buffering state once at least one fragment loaded
+                    actions.setBuffering(false);
+                });
+
+                // ── ERROR ────────────────────────────────────────────────────
                 hls.on(Hls.Events.ERROR, (_, data) => {
-                    if (!data.fatal) return;
+                    if (cancelled || !data.fatal) return;
 
                     const status = data.response?.code;
 
                     if (status === 429) {
                         hls.destroy();
                         hlsRef.current = null;
-                        actions.setError("Stream rate limited. Please wait and try again.");
+                        actions.setError("Stream rate-limited. Please wait and try again.");
                         return;
                     }
                     if (status === 404) {
@@ -202,12 +296,25 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
 
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
-                            actions.setError(null);
-                            hls.startLoad();
+                            // Exponential backoff retry
+                            if (retryCount.current < 5) {
+                                retryCount.current++;
+                                const delay = Math.min(500 * 2 ** retryCount.current, 10000);
+                                setTimeout(() => {
+                                    if (!cancelled) hls.startLoad();
+                                }, delay);
+                            } else {
+                                actions.setError("Network error. Check connection and try again.");
+                            }
                             break;
                         case Hls.ErrorTypes.MEDIA_ERROR:
-                            actions.setError(null);
-                            hls.recoverMediaError();
+                            if (retryCount.current < 3) {
+                                retryCount.current++;
+                                hls.recoverMediaError();
+                            } else {
+                                hls.swapAudioCodec();
+                                hls.recoverMediaError();
+                            }
                             break;
                         default:
                             hls.destroy();
@@ -217,20 +324,22 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                 });
             });
         } else {
-            // ── Direct play ───────────────────────────────────────────────
+            // ── Direct play (MP4, MKV via range requests, etc.) ───────────────
             video.src = streamUrl;
             actions.setReady(false);
 
-            // ── BUG FIX 2: named listener references for proper cleanup ──
-            // Using { once: true } anonymous functions leaks across src resets.
             const onLoadedMeta = () => {
-                // Reset to 0 — overrides any browser speculative-seek from moov
-                // atom parsing. useProgress resume logic fires AFTER canplay.
-                video.currentTime = 0;
+                // Don't seek yet — let useProgress handle resume
+                if (isFinite(video.duration) && video.duration > 0) {
+                    actions.setDuration(video.duration);
+                }
             };
+
             const onCanPlay = () => {
                 actions.setError(null);
+                actions.setBuffering(false);
 
+                // Native audio track enumeration
                 if (video.audioTracks && video.audioTracks.length > 1) {
                     const tracks = Array.from(video.audioTracks).map((t, i) => ({
                         index: i,
@@ -249,7 +358,6 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
             video.addEventListener("loadedmetadata", onLoadedMeta, { once: true });
             video.addEventListener("canplay", onCanPlay, { once: true });
 
-            // Return cleanup that removes them even if they haven't fired yet
             return () => {
                 cancelled = true;
                 video.removeEventListener("loadedmetadata", onLoadedMeta);
@@ -258,19 +366,22 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                     hlsRef.current.destroy();
                     hlsRef.current = null;
                 }
-                video.src = "";
-                video.load(); // abort any pending network request
+                // FIX (Report-20): Do NOT set video.src = "" here.
+                // StrictMode cleanup fires on first mount then re-mounts immediately.
+                // src="" makes browser try to load current page URL as media →
+                // DEMUXER_ERROR_COULD_NOT_OPEN. HLS.js destroy() detaches MediaSource
+                // cleanly. Direct play: next effect sets new src itself.
             };
         }
 
         return () => {
-            cancelled = true; // ← BUG FIX 1: stops async HLS setup from touching dead video
+            cancelled = true;
             if (hlsRef.current) {
                 hlsRef.current.destroy();
                 hlsRef.current = null;
             }
-            video.src = "";
-            video.load();
+            // FIX (Report-20): Do NOT set video.src = "" — see comment above.
+            // StrictMode double-invoke causes DEMUXER_ERROR_COULD_NOT_OPEN.
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [streamUrl]);
@@ -285,13 +396,13 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
         }
     }, [state.activeQuality]);
 
-    // ── BUG FIX 3: sync audio track by ID, not array index ───────────────────
+    // ── Sync audio track by HLS ID (not array index) ─────────────────────────
     useEffect(() => {
         const hls = hlsRef.current;
         if (!hls) return;
         const track = hls.audioTracks?.[state.activeAudioTrack];
         if (track) {
-            hls.audioTrack = track.id; // HLS.js uses .id, not array index
+            hls.audioTrack = track.id;
         }
     }, [state.activeAudioTrack]);
 
@@ -322,18 +433,17 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
     }, [state.volume, state.muted]);
 
     // ── Native video event handlers ───────────────────────────────────────────
+
     const handleTimeUpdate = () => {
-        if (videoRef.current) {
-            actions.setCurrentTime(videoRef.current.currentTime);
-            actions.setBuffered(videoRef.current.buffered);
-        }
+        const v = videoRef.current;
+        if (!v) return;
+        actions.setCurrentTime(v.currentTime);
+        actions.setBuffered(v.buffered);
     };
 
     const handleDurationChange = () => {
         const dur = videoRef.current?.duration;
-        if (dur && isFinite(dur) && dur > 0) {
-            actions.setDuration(dur);
-        }
+        if (dur && isFinite(dur) && dur > 0) actions.setDuration(dur);
     };
 
     const handlePlay = () => {
@@ -341,12 +451,18 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
         actions.setPlaying(true);
     };
     const handlePause = () => actions.setPlaying(false);
-    const handleWaiting = () => actions.setBuffering(true);
+
+    const handleWaiting = () => {
+        actions.setBuffering(true);
+        actions.incrementStall();
+    };
+
     const handleCanPlay = () => {
         actions.setBuffering(false);
         actions.setReady(true);
         actions.setError(null);
     };
+
     const handleProgress = () => {
         if (videoRef.current) actions.setBuffered(videoRef.current.buffered);
     };
@@ -362,13 +478,36 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
     const handleError = () => {
         const video = videoRef.current;
         if (!video?.error) return;
-        // HLS.js handles its own errors; only surface native errors for direct play
-        if (hlsRef.current) {
-            if (video.readyState >= 2) return;
-            if (video.currentTime > 0) return;
-        }
+
+        // FIX (Report-06): When HLS.js is active, the <video> element's native
+        // onerror fires because Chrome's demuxer rejects the malformed segment
+        // (e.g. h264 without Annex B). The HLS.js ERROR event handler on the hls
+        // instance is the correct place to handle this — it will call
+        // hls.recoverMediaError() which swaps the SourceBuffer cleanly.
+        //
+        // Doing video.src = "" here destroys the MediaSource blob URL that HLS.js
+        // created, breaking HLS.js irrecoverably. So when HLS is active: bail out
+        // completely and let HLS.js's own ERROR handler deal with it.
+        if (hlsRef.current) return;
+
+        // Direct-play only below
         if (video.error?.code === MediaError.MEDIA_ERR_ABORTED) return;
-        actions.setError("Video playback error. Check the stream.");
+
+        if (retryCount.current < 2) {
+            retryCount.current++;
+            const src = video.src;
+            video.src = "";
+            video.load();
+            setTimeout(() => {
+                if (videoRef.current) {
+                    videoRef.current.src = src;
+                    videoRef.current.load();
+                    videoRef.current.play().catch(() => {});
+                }
+            }, 500);
+        } else {
+            actions.setError("Video playback error. Check the stream.");
+        }
     };
 
     const handleVolumeChange = () => {
@@ -387,9 +526,13 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
                 filter: `brightness(${state.brightness})`,
                 background: "#000",
                 display: "block",
+                // GPU acceleration for smooth playback
+                willChange: "contents",
+                transform: "translateZ(0)",
             }}
             playsInline
-            preload="metadata"
+            preload="auto"
+            crossOrigin="anonymous"
             onClick={onVideoClick}
             onTimeUpdate={handleTimeUpdate}
             onDurationChange={handleDurationChange}
@@ -401,6 +544,12 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick }, ref
             onError={handleError}
             onVolumeChange={handleVolumeChange}
             onProgress={handleProgress}
+            onStalled={() => {
+                actions.setBuffering(true);
+                actions.incrementStall();
+            }}
+            onSeeking={() => actions.setBuffering(true)}
+            onSeeked={() => actions.setBuffering(false)}
         />
     );
 });

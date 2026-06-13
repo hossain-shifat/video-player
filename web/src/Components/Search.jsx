@@ -387,7 +387,10 @@ export default function Search({ className = "" }) {
                     className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 w-full
                                  transition-all duration-200 ${open ? "ring-1 ring-white/30 brightness-110" : ""}`}>
                     {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
+                    <label htmlFor="desktop-search" className="sr-only">Search</label>
                     <input
+                        id="desktop-search"
+                        name="q"
                         ref={inputRef}
                         type="text"
                         placeholder="Search movies, series, anime..."
@@ -425,7 +428,7 @@ export default function Search({ className = "" }) {
             <button
                 onClick={() => setMobileOpen(true)}
                 className="sm:hidden inline-flex items-center justify-center w-9 h-9
-                           rounded-md bg-white/10 hover:bg-white/15 transition-colors text-base-content"
+                           rounded-md hover:bg-white/15 transition-colors text-base-content"
                 aria-label="Search">
                 <SearchIcon size={18} />
             </button>
@@ -446,7 +449,10 @@ export default function Search({ className = "" }) {
                         </button>
                         <div className={`flex-1 flex items-center gap-2 bg-base-300 rounded-md px-3 h-9`}>
                             {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
+                            <label htmlFor="mobile-search" className="sr-only">Search</label>
                             <input
+                                id="mobile-search"
+                                name="q"
                                 ref={mobileInputRef}
                                 type="text"
                                 placeholder="Search movies, series, anime..."

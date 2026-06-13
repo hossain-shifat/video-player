@@ -4,7 +4,8 @@ import { api } from "./client";
 
 /** GET /api/history — full watch history sorted by most recent */
 export function getHistory() {
-    return api.get("/api/history");
+    // skipAuthHandler: background fetch — don't open modal on 401
+    return api.get("/api/history", { skipAuthHandler: true });
 }
 
 /**
@@ -13,12 +14,12 @@ export function getHistory() {
  */
 export async function getResumePoint(id) {
     try {
-        const data = await api.get(`/api/history/${id}`);
+        const data = await api.get(`/api/history/${id}`, { skipAuthHandler: true });
         // FIX: handle new 200+null pattern (exists:false) and old 404 pattern
         if (!data || data.position === null || data.position === undefined) return null;
         return data;
     } catch (err) {
-        if (err.status === 404) return null; // backwards compat
+        if (err.status === 404 || err.status === 401) return null;
         throw err;
     }
 }
@@ -37,7 +38,7 @@ export async function getResumePoint(id) {
  * @param {number}  data.duration   — total duration in seconds
  */
 export function saveProgress(id, data) {
-    return api.post(`/api/history/${id}`, data);
+    return api.post(`/api/history/${id}`, data, { skipAuthHandler: true });
 }
 
 /** DELETE /api/history/:id — remove one entry from history */

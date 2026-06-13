@@ -254,6 +254,25 @@ const ADV_TOKENS = {
 const DAILY_SHOW_RE = /\b((?:19|20)\d{2})[. -](0[1-9]|1[0-2])[. -](0[1-9]|[12][0-9]|3[01])\b/;
 const ABSOLUTE_ANIME_RE = /^\[([^\]]+)\]\s+(.+?)\s+-\s+(\d{1,4})(?:\s+v\d)?\s*(?:\[|\()/;
 
+// ── NEW: Release-site/folder prefix pattern ───────────────────────────────────
+// Matches "SiteName - Title.S01..." or "GroupName - Title.2023..."
+// e.g. "TheMoviesBoss - Wednesday.S01E01..."
+// Condition: token before " - " is CamelCase/PascalCase with no spaces (looks like a group/site)
+const SITE_PREFIX_RE = /^([A-Za-z0-9]{3,30})\s+-\s+(.+)$/;
+
+// ── NEW: Device/camera filename pattern ──────────────────────────────────────
+// VID_20240312_123456, IMG_20240312, MVI_1234, DCIM_001, etc.
+const DEVICE_FILE_RE = /^(?:VID|IMG|MVI|DCIM|MOV|DSC|GOPR|GH\d+|P\d{7}|SNAP)[-_]\d{4,}/i;
+
+// ── NEW: Pure garbage title patterns ─────────────────────────────────────────
+// Titles that are just season/episode codes, copy markers, or empty after cleaning
+const GARBAGE_TITLE_RE = /^(?:S\d{1,2}(?:E\d{1,3})?|EP?\d{1,3}|Episode\s*\d+|New\s+Folder.*|Copy\s*\(\d+\)|Untitled.*)$/i;
+
+// ── NEW: Bangla/regional language detection ──────────────────────────────────
+// "bangla" already stripped from title but not detected as language code
+// Add to LANG_TAG_MAP equivalent — handled in post-processing
+const BANGLA_RE = /\bbangla\b/i;
+
 // ── FIX: FORMAT_1x01_RE now used to TRIM title only, not after the fact ───────
 // "Friends.1x01.The.One.Where..." → season=1, ep=1, title="Friends" (not "Friends 1x01 The One...")
 const FORMAT_1x01_RE = /\b(\d{1,2})x(\d{2})\b/i;
@@ -438,6 +457,81 @@ function parseFilenameAdvanced(filename) {
     }
 
     adv.title = extractSmartTitle(raw, adv);
+
+    // ── NEW: Site/folder prefix stripping ────────────────────────────────────
+    // "TheMoviesBoss - Wednesday.S01..." → title becomes "Wednesday"
+    // Only strip when prefix looks like CamelCase site/group name (no spaces)
+    if (adv.title) {
+        const sitePrefixMatch = adv.title.match(SITE_PREFIX_RE);
+        if (sitePrefixMatch) {
+            const prefix = sitePrefixMatch[1];
+            const rest = sitePrefixMatch[2].trim();
+            const isSitePattern = prefix.length >= 5 && /[A-Z][a-z]/.test(prefix) && rest.length > 0 && !/^(Part|Chapter|Volume|Season)$/i.test(prefix);
+            if (isSitePattern) {
+                const restNorm = rest
+                    .replace(/[._]/g, " ")
+                    .replace(/\s{2,}/g, " ")
+                    .trim();
+                const restClean = restNorm
+                    .replace(/[-\u2013\u2014:,~+]+$/, "")
+                    .replace(/^\s*[-\u2013\u2014:,~+]+/, "")
+                    .trim();
+                if (restClean.length > 0) adv.title = restClean;
+            }
+        }
+    }
+
+    // ── NEW: Bracket-group anime detection ───────────────────────────────────
+    // "[EMBER] Attack on Titan", "[BakedFish] Naruto..." — bracket prefix = fansub = anime
+    if ((adv.type === "series" || adv.type === "movie") && /^\[([^\]]+)\]/.test(raw)) {
+        adv.type = "anime";
+    }
+
+    // ── NEW: Anime "- NNN END" episode extraction ────────────────────────────
+    // "[BakedFish] Naruto Shippuden - 500 END 1080p" → episode=500, type=anime
+    if (adv.type === "anime" && (!adv.episodes || adv.episodes.length === 0)) {
+        const endEpMatch = raw.match(/[-\u2013]\s*(\d{2,4})\s+END\b/i);
+        if (endEpMatch) {
+            adv.episodes = [parseInt(endEpMatch[1], 10)];
+            adv.title = adv.title.replace(/\s*-\s*\d+(?:\s+END)?\s*$/i, "").trim();
+        }
+    }
+
+    // ── NEW: Anime title cleanup — strip leading bracket group + trailing ep number ──
+    // "[SubsPlease] One Piece - 1108" → "One Piece"
+    // "[Group] Title - 076" → "Title"
+    if (adv.type === "anime" && adv.title) {
+        // Strip leading [Group] prefix from title if it leaked in
+        adv.title = adv.title.replace(/^\[[^\]]+\]\s*/, "").trim();
+        // Strip trailing "- NNN" episode number bleed
+        adv.title = adv.title.replace(/\s*-\s*\d{1,4}\s*$/, "").trim();
+        // Strip trailing " NNN" bare episode bleed (e.g. "Naruto Shippuden 500")
+        // Only if episodes array already has a value matching that number
+        if (adv.episodes && adv.episodes.length > 0) {
+            const lastEp = adv.episodes[adv.episodes.length - 1];
+            adv.title = adv.title.replace(new RegExp("\\s+" + lastEp + "\\s*$"), "").trim();
+        }
+    }
+
+    // ── NEW: Device/camera file detection ────────────────────────────────────
+    // VID_20240312_123456, IMG_20240312 etc → blank title, low confidence
+    if (DEVICE_FILE_RE.test(raw)) {
+        adv.title = "";
+        adv.isDeviceFile = true;
+        adv.confidence = 10;
+    }
+
+    // ── NEW: Garbage title cleanup ────────────────────────────────────────────
+    // "S01E01.mp4" → title would be "S01", clear it
+    if (adv.title && GARBAGE_TITLE_RE.test(adv.title.trim())) {
+        adv.title = "";
+    }
+
+    // ── NEW: Bangla language code ─────────────────────────────────────────────
+    // Original LANG_TAG_MAP doesn't include "bangla" keyword → add "bn"
+    if (BANGLA_RE.test(raw) && adv.languages && !adv.languages.includes("bn")) {
+        adv.languages = [...(adv.languages || []), "bn"];
+    }
 
     // Confidence scoring
     if (adv.year) adv.confidence += 10;

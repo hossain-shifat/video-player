@@ -29,10 +29,12 @@ export default function AddFolderModal({ open, onClose, onAdd }) {
             <div className="space-y-4">
                 {/* Label — required */}
                 <div>
-                    <label className="text-xs font-medium text-white/70 mb-1.5 block">
+                    <label htmlFor="settings-folder-label" className="text-xs font-medium text-white/70 mb-1.5 block">
                         Display Label <span className="text-error">*</span>
                     </label>
                     <input
+                        id="settings-folder-label"
+                        name="label"
                         autoFocus
                         value={label}
                         onChange={(e) => setLabel(e.target.value)}
@@ -44,12 +46,14 @@ export default function AddFolderModal({ open, onClose, onAdd }) {
 
                 {/* Folder path — picker button fused to input end */}
                 <div>
-                    <label className="text-xs font-medium text-white/70 mb-1.5 block">
+                    <label htmlFor="settings-folder-path" className="text-xs font-medium text-white/70 mb-1.5 block">
                         Folder Path <span className="text-error">*</span>
                     </label>
 
                     <div className="flex items-center gap-0 rounded overflow-hidden border border-white/10 bg-base-300 focus-within:border-primary/40 transition-colors">
                         <input
+                            id="settings-folder-path"
+                            name="path"
                             value={path}
                             onChange={(e) => setPath(e.target.value)}
                             placeholder="D:\Movies  or  /media/movies"
@@ -70,7 +74,10 @@ export default function AddFolderModal({ open, onClose, onAdd }) {
                     </div>
 
                     {/* Hidden directory picker */}
+                    <label htmlFor="settings-folder-picker" className="sr-only">Directory picker</label>
                     <input
+                        id="settings-folder-picker"
+                        name="folderPicker"
                         ref={fileInputRef}
                         type="file"
                         /* @ts-ignore */
@@ -87,11 +94,7 @@ export default function AddFolderModal({ open, onClose, onAdd }) {
                 <button onClick={onClose} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-ghost flex-1 rounded focus:outline-none focus-visible:outline-none">
                     Cancel
                 </button>
-                <button
-                    onClick={submit}
-                    disabled={!path.trim() || !label.trim()}
-                    style={{ outline: "none", boxShadow: "none" }}
-                    className="btn btn-sm btn-primary flex-1 rounded gap-1.5 border-none">
+                <button onClick={submit} disabled={!path.trim() || !label.trim()} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-primary flex-1 rounded gap-1.5 border-none">
                     <FolderPlus size={13} /> Add Folder
                 </button>
             </div>

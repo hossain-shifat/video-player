@@ -184,8 +184,16 @@ body {
     font-family: "IBM Plex Sans", sans-serif;
 }
 
+@font-face {
+    font-family: "CircularStd";
+    src: url("/fonts/circular-std-medium-500.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
 .font-circular {
-    font-family: "CircularStd", sans-serif;
+    font-family: "CircularStd";
 }
 
 /* ─── Scrollbar hide ─────────────────────────────────────────────────────── */
@@ -201,4 +209,260 @@ body {
 
 .overflow-x-auto::-webkit-scrollbar {
     display: none;
+}
+
+/* web/src/dashboard/dashboard.css */
+/* Dashboard styles — inherits global theme via DaisyUI + CSS variables */
+/* NO hardcoded colors. All values use theme tokens. */
+
+/* ── Sidebar (legacy compat — prefer DashboardLayout Tailwind classes) ── */
+.dash-sidebar {
+    background: hsl(var(--b2));
+    border-right: 1px solid hsl(var(--bc) / 0.08);
+    height: 100vh;
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 50;
+    transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.dash-sidebar.collapsed {
+    width: 60px;
+}
+.dash-sidebar.expanded {
+    width: 240px;
+}
+
+.dash-sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin: 2px 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: hsl(var(--bc) / 0.45);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    text-decoration: none;
+    border: 1px solid transparent;
+}
+
+.dash-sidebar-item:hover {
+    color: hsl(var(--bc) / 0.85);
+    background: hsl(var(--bc) / 0.06);
+}
+
+.dash-sidebar-item.active {
+    color: hsl(var(--p));
+    background: hsl(var(--p) / 0.1);
+    border-color: hsl(var(--p) / 0.2);
+}
+
+.dash-sidebar-item .icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.dash-sidebar-item.active .icon {
+    opacity: 1;
+}
+
+/* ── Main content ── */
+.dash-main {
+    transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    min-height: 100vh;
+    background: hsl(var(--b1));
+}
+
+.dash-main.sidebar-expanded {
+    margin-left: 240px;
+}
+.dash-main.sidebar-collapsed {
+    margin-left: 60px;
+}
+
+@media (max-width: 768px) {
+    .dash-sidebar {
+        display: none;
+    }
+    .dash-main {
+        margin-left: 0 !important;
+        padding-bottom: 70px;
+    }
+    .dash-mobile-nav {
+        display: flex !important;
+    }
+}
+
+.dash-mobile-nav {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: hsl(var(--b2));
+    border-top: 1px solid hsl(var(--bc) / 0.06);
+    padding: 4px 0 8px;
+}
+
+/* ── Stat card ── */
+.dash-stat-card {
+    background: hsl(var(--b2));
+    border: 1px solid hsl(var(--bc) / 0.08);
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.2s ease;
+    cursor: default;
+}
+
+.dash-stat-card:hover {
+    border-color: hsl(var(--p) / 0.25);
+    transform: translateY(-1px);
+}
+
+/* ── Table ── */
+.dash-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.dash-table th {
+    text-align: left;
+    padding: 10px 14px;
+    color: hsl(var(--bc) / 0.35);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid hsl(var(--bc) / 0.07);
+}
+
+.dash-table td {
+    padding: 12px 14px;
+    color: hsl(var(--bc) / 0.7);
+    border-bottom: 1px solid hsl(var(--bc) / 0.04);
+    vertical-align: middle;
+}
+
+.dash-table tr:hover td {
+    background: hsl(var(--bc) / 0.03);
+}
+.dash-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* ── Badges ── */
+.dash-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+/* Status */
+.dash-badge.approved,
+.dash-badge.completed,
+.dash-badge.online {
+    background: hsl(var(--su, 142 71% 45%) / 0.12);
+    color: hsl(var(--su, 142 71% 45%));
+}
+
+.dash-badge.pending,
+.dash-badge.warn {
+    background: hsl(var(--wa, 37 91% 55%) / 0.12);
+    color: hsl(var(--wa, 37 91% 55%));
+}
+
+.dash-badge.blocked,
+.dash-badge.rejected,
+.dash-badge.failed,
+.dash-badge.error,
+.dash-badge.offline {
+    background: hsl(var(--er, 0 72% 51%) / 0.12);
+    color: hsl(var(--er, 0 72% 51%));
+}
+
+.dash-badge.admin,
+.dash-badge.auth {
+    background: hsl(var(--p) / 0.15);
+    color: hsl(var(--p));
+}
+
+.dash-badge.user,
+.dash-badge.system {
+    background: hsl(var(--bc) / 0.08);
+    color: hsl(var(--bc) / 0.5);
+}
+
+.dash-badge.processing,
+.dash-badge.info,
+.dash-badge.stream {
+    background: hsl(var(--in, 198 93% 60%) / 0.12);
+    color: hsl(var(--in, 198 93% 60%));
+}
+
+/* ── Progress bar ── */
+.dash-progress-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: hsl(var(--bc) / 0.08);
+    overflow: hidden;
+}
+
+.dash-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+}
+
+/* ── Topbar ── */
+.dash-topbar {
+    background: hsl(var(--b2) / 0.9);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid hsl(var(--bc) / 0.07);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+}
+
+.dash-page-content {
+    padding: 24px;
+    max-width: 1400px;
+}
+
+.dash-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: hsl(var(--bc) / 0.28);
+    padding: 16px 14px 6px;
+}
+
+/* Glow text: uses primary gradient */
+.dash-logo-glow {
+    background: linear-gradient(135deg, hsl(var(--p)) 0%, hsl(var(--s, var(--p))) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 800;
 }

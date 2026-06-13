@@ -1,0 +1,14 @@
+{
+  "watch": ["*.js", "auth", "controllers", "routes", "utils"],
+  "ext": "js,json",
+  "ignore": [
+    "data/*",
+    "temp/*",
+    "logs/*",
+    "*.db",
+    "*.db-journal",
+    "*.db-wal",
+    "*.db-shm",
+    "prisma/migrations/*"
+  ]
+}

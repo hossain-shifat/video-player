@@ -3,28 +3,28 @@ import { useSearchParams } from "react-router";
 import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck, ChevronRight } from "lucide-react";
 import { useTheme } from "../../Context/themeContext";
 import { useApi } from "../../Context/apiContext";
+import { useAuth } from "../../auth/AuthContext";
+import { useAuthModal } from "../../auth/AuthModalContext";
 
-import ProfileSection   from "./ProfileSection";
+import ProfileSection from "./ProfileSection";
 import AppearanceSection from "./AppearanceSection";
-import LibrarySection   from "./LibrarySection";
-import PlaybackSection  from "./PlaybackSection";
+import LibrarySection from "./LibrarySection";
+import PlaybackSection from "./PlaybackSection";
 import SubtitlesSection from "./SubtitlesSection";
-import ServerSection    from "./ServerSection";
-import PrivacySection   from "./PrivacySection";
-import AboutSection     from "./AboutSection";
-import LoginModal       from "./LoginModal";
-import SignupModal      from "./SignupModal";
-import AddFolderModal   from "./AddFolderModal";
+import ServerSection from "./ServerSection";
+import PrivacySection from "./PrivacySection";
+import AboutSection from "./AboutSection";
+import AddFolderModal from "./AddFolderModal";
 
 const NAV_ITEMS = [
-    { id: "profile",    label: "Profile",       icon: User },
-    { id: "appearance", label: "Appearance",    icon: Palette },
-    { id: "library",    label: "Media Library", icon: Database },
-    { id: "playback",   label: "Playback",      icon: Play },
-    { id: "subtitles",  label: "Subtitles",     icon: Captions },
-    { id: "server",     label: "Server",        icon: Server },
-    { id: "privacy",    label: "Privacy",       icon: ShieldCheck },
-    { id: "about",      label: "About",         icon: Info },
+    { id: "profile", label: "Profile", icon: User },
+    { id: "appearance", label: "Appearance", icon: Palette },
+    { id: "library", label: "Media Library", icon: Database },
+    { id: "playback", label: "Playback", icon: Play },
+    { id: "subtitles", label: "Subtitles", icon: Captions },
+    { id: "server", label: "Server", icon: Server },
+    { id: "privacy", label: "Privacy", icon: ShieldCheck },
+    { id: "about", label: "About", icon: Info },
 ];
 
 const VALID_TABS = NAV_ITEMS.map((n) => n.id);
@@ -52,52 +52,44 @@ export default function Settings() {
     };
 
     // ── Modals ────────────────────────────────────────────────────────────────
-    const [loginOpen,     setLoginOpen]     = useState(false);
-    const [signupOpen,    setSignupOpen]    = useState(false);
     const [addFolderOpen, setAddFolderOpen] = useState(false);
 
-    // ── Auth ──────────────────────────────────────────────────────────────────
-    const [user, setUser] = useState(() => {
-        try { return JSON.parse(localStorage.getItem("flux-user") || "null"); } catch { return null; }
-    });
+    // ── Auth (from real AuthContext) ──────────────────────────────────────────
+    const { user, logout } = useAuth();
+    const { openAuthModal } = useAuthModal();
     const [editingName, setEditingName] = useState(false);
-    const [draftName,   setDraftName]   = useState(user?.username ?? "");
+    const [draftName, setDraftName] = useState(user?.name ?? "");
 
-    const handleLogin = (data) => {
-        try { localStorage.setItem("flux-user", JSON.stringify(data)); } catch {}
-        setUser(data);
-        setDraftName(data.username);
-    };
+    // Sync draftName when user changes
+    useEffect(() => {
+        setDraftName(user?.name ?? "");
+    }, [user?.name]);
 
     const handleLogout = () => {
-        try { localStorage.removeItem("flux-user"); } catch {}
-        setUser(null);
-        setDraftName("");
+        logout();
     };
 
-    const handleSignup = (data) => {
-        try { localStorage.setItem("flux-user", JSON.stringify(data)); } catch {}
-        setUser(data);
-        setDraftName(data.username);
-    };
-
+    // Name editing is local-only for now (profile update API can be added later)
     const saveName = () => {
-        if (!draftName.trim()) return;
-        const updated = { ...user, username: draftName.trim() };
-        try { localStorage.setItem("flux-user", JSON.stringify(updated)); } catch {}
-        setUser(updated);
+        // TODO: call PATCH /api/profile when profile edit API is wired
         setEditingName(false);
     };
 
     // ── Prefs ─────────────────────────────────────────────────────────────────
     const [prefs, setPrefsState] = useState(() => {
-        try { return JSON.parse(localStorage.getItem("flux-prefs") || "{}"); } catch { return {}; }
+        try {
+            return JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+        } catch {
+            return {};
+        }
     });
 
     const setPref = (key, val) => {
         setPrefsState((p) => {
             const next = { ...p, [key]: val };
-            try { localStorage.setItem("flux-prefs", JSON.stringify(next)); } catch {}
+            try {
+                localStorage.setItem("flux-prefs", JSON.stringify(next));
+            } catch {}
             return next;
         });
     };
@@ -106,42 +98,28 @@ export default function Settings() {
     const renderSection = () => {
         switch (active) {
             case "profile":
-                return (
-                    <ProfileSection
-                        user={user}
-                        editingName={editingName}
-                        draftName={draftName}
-                        setDraftName={setDraftName}
-                        setEditingName={setEditingName}
-                        saveName={saveName}
-                        handleLogout={handleLogout}
-                        setLoginOpen={setLoginOpen}
-                    />
-                );
+                return <ProfileSection handleLogout={handleLogout} setLoginOpen={() => openAuthModal({ view: "login" })} />;
             case "appearance":
                 return <AppearanceSection theme={theme} setTheme={setTheme} themes={themes} />;
             case "library":
-                return (
-                    <LibrarySection
-                        folders={folders}
-                        removeLibraryFolder={removeLibraryFolder}
-                        setAddFolderOpen={setAddFolderOpen}
-                        refreshAll={refreshAll}
-                        loading={loading}
-                    />
-                );
-            case "playback":  return <PlaybackSection prefs={prefs} setPref={setPref} />;
-            case "subtitles": return <SubtitlesSection prefs={prefs} setPref={setPref} />;
-            case "server":    return <ServerSection prefs={prefs} setPref={setPref} />;
-            case "privacy":   return <PrivacySection prefs={prefs} setPref={setPref} />;
-            case "about":     return <AboutSection setPrefs={setPrefsState} />;
-            default:          return null;
+                return <LibrarySection folders={folders} removeLibraryFolder={removeLibraryFolder} setAddFolderOpen={setAddFolderOpen} refreshAll={refreshAll} loading={loading} />;
+            case "playback":
+                return <PlaybackSection prefs={prefs} setPref={setPref} />;
+            case "subtitles":
+                return <SubtitlesSection prefs={prefs} setPref={setPref} />;
+            case "server":
+                return <ServerSection prefs={prefs} setPref={setPref} />;
+            case "privacy":
+                return <PrivacySection prefs={prefs} setPref={setPref} />;
+            case "about":
+                return <AboutSection setPrefs={setPrefsState} />;
+            default:
+                return null;
         }
     };
 
     return (
         <div className="-m-4 sm:-m-6 lg:-m-8 min-h-screen flex flex-col">
-
             {/* ── Header ── */}
             <div className="px-4 sm:px-6 py-4 border-b border-white/5 bg-base-200/30 shrink-0">
                 <h1 className="text-xl sm:text-2xl font-bold text-white">Settings</h1>
@@ -150,7 +128,6 @@ export default function Settings() {
 
             {/* ── Body ── */}
             <div className="flex flex-1 min-h-0 overflow-hidden">
-
                 {/* Sidebar — desktop */}
                 <aside className="hidden sm:flex flex-col shrink-0 border-r border-white/5 bg-base-200/20" style={{ width: "var(--flux-sidebar-width, 14rem)" }}>
                     <nav className="p-2 space-y-0.5 flex-1">
@@ -162,18 +139,9 @@ export default function Settings() {
                                     onClick={() => switchTab(id)}
                                     style={{ outline: "none", boxShadow: "none" }}
                                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150 cursor-pointer group focus:outline-none focus-visible:outline-none ${
-                                        isActive
-                                            ? "bg-primary/15 text-primary"
-                                            : "text-white/60 hover:text-white hover:bg-white/[0.04]"
+                                        isActive ? "bg-primary/15 text-primary" : "text-white/60 hover:text-white hover:bg-white/0.04"
                                     }`}>
-                                    <Icon
-                                        size={15}
-                                        className={
-                                            isActive
-                                                ? "text-primary"
-                                                : "text-white/35 group-hover:text-white/70 transition-colors"
-                                        }
-                                    />
+                                    <Icon size={15} className={isActive ? "text-primary" : "text-white/35 group-hover:text-white/70 transition-colors"} />
                                     <span className="text-sm font-medium flex-1">{label}</span>
                                     {isActive && <ChevronRight size={12} className="text-primary/40" />}
                                 </button>
@@ -186,21 +154,15 @@ export default function Settings() {
                 </aside>
 
                 {/* Mobile tab bar */}
-                <div
-                    className="sm:hidden absolute left-0 right-0 z-10"
-                    style={{ top: "calc(var(--navbar-height, 56px) + 73px)" }}>
-                    <div
-                        className="flex overflow-x-auto bg-base-100/95 backdrop-blur-sm border-b border-white/5 px-2 py-1.5 gap-1"
-                        style={{ scrollbarWidth: "none" }}>
+                <div className="sm:hidden absolute left-0 right-0 z-10" style={{ top: "calc(var(--navbar-height, 56px) + 73px)" }}>
+                    <div className="flex overflow-x-auto bg-base-100/95 backdrop-blur-sm border-b border-white/5 px-2 py-1.5 gap-1" style={{ scrollbarWidth: "none" }}>
                         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
                             <button
                                 key={id}
                                 onClick={() => switchTab(id)}
                                 style={{ outline: "none", boxShadow: "none" }}
                                 className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap focus:outline-none focus-visible:outline-none ${
-                                    active === id
-                                        ? "bg-primary text-primary-content"
-                                        : "text-white/50 hover:text-white hover:bg-base-300"
+                                    active === id ? "bg-primary text-primary-content" : "text-white/50 hover:text-white hover:bg-base-300"
                                 }`}>
                                 <Icon size={13} />
                                 {label}
@@ -218,23 +180,8 @@ export default function Settings() {
             </div>
 
             {/* Modals */}
-            <AddFolderModal
-                open={addFolderOpen}
-                onClose={() => setAddFolderOpen(false)}
-                onAdd={addLibraryFolder}
-            />
-            <LoginModal
-                open={loginOpen}
-                onClose={() => setLoginOpen(false)}
-                onLogin={handleLogin}
-                onOpenSignup={() => { setLoginOpen(false); setSignupOpen(true); }}
-            />
-            <SignupModal
-                open={signupOpen}
-                onClose={() => setSignupOpen(false)}
-                onSignup={handleSignup}
-                onOpenLogin={() => { setSignupOpen(false); setLoginOpen(true); }}
-            />
+            <AddFolderModal open={addFolderOpen} onClose={() => setAddFolderOpen(false)} onAdd={addLibraryFolder} />
+            {/* Auth is handled globally via AuthModal — no local LoginModal needed */}
         </div>
     );
 }

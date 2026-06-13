@@ -11,7 +11,10 @@ export default function SubtitlesSection({ prefs, setPref }) {
                     <Toggle value={prefs.subtitles ?? false} onChange={(v) => setPref("subtitles", v)} />
                 </Row>
                 <Row label="Subtitle font size" desc="Scale the size of subtitle text">
+                    <label htmlFor="subtitle-size" className="sr-only">Subtitle font size</label>
                     <select
+                        id="subtitle-size"
+                        name="subSize"
                         value={prefs.subSize ?? "medium"}
                         onChange={(e) => setPref("subSize", e.target.value)}
                         className="select select-sm bg-base-300 border-white/10 rounded text-sm">

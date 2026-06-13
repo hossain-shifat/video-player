@@ -1,0 +1,103 @@
+// FLUX Auth — Prisma Schema (Prisma v7 format)
+// DB: SQLite (auth/session only — media stays filesystem-based)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── User ──────────────────────────────────────────────────────────────────────
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String?   // null for OAuth-only accounts
+  googleId       String?   @unique
+  name           String
+  username       String?   @unique  // optional display handle
+  avarter        String?
+  role           String    @default("user")   // "user" | "admin"
+  status         String    @default("pending") // "pending" | "approved" | "blocked" | "rejected"
+  emailVerified  Boolean   @default(false)
+
+  // Access control
+  accessType     String    @default("permanent") // "permanent" | "temporary"
+  accessExpiresAt DateTime?
+
+  // Granular permissions (JSON stored as string)
+  permissionsJson String   @default("{\"libraries\":[],\"allowAdult\":false,\"canDownload\":false,\"canLiveTV\":true,\"maxQuality\":\"1080p\"}")
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sessions       Session[]
+  otps           OTP[]
+  streamTokens   StreamToken[]
+
+  @@map("users")
+}
+
+// ─── Session (device tracking) ────────────────────────────────────────────────
+model Session {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash String   // argon2 hash of refresh token
+  deviceName       String   @default("Unknown Device")
+  deviceFingerprint String  @default("")
+  
+  deviceType       String   @default("desktop")
+  deviceModel      String   @default("")
+  deviceVendor     String   @default("")
+  browser          String   @default("")
+  browserVersion   String   @default("")
+  os               String   @default("")
+  osVersion        String   @default("")
+  userAgent        String   @default("")
+  
+  ip               String   @default("")
+  isActive         Boolean  @default(true)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  lastSeenAt       DateTime @default(now())
+  revokedAt        DateTime?
+
+  @@unique([userId, deviceFingerprint])
+  @@map("sessions")
+}
+
+// ─── OTP ─────────────────────────────────────────────────────────────────────
+model OTP {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  codeHash   String   // argon2 hash of 6-digit code
+  expiresAt  DateTime
+  used       Boolean  @default(false)
+
+  createdAt  DateTime @default(now())
+
+  @@map("otps")
+}
+
+// ─── Stream Token ─────────────────────────────────────────────────────────────
+// Short-lived token issued at POST /stream/start/:id
+// Allows HLS segment fetches without requiring Authorization header per segment
+model StreamToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  mediaId   String   // the media item ID being streamed
+  token     String   @unique  // random secure token
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@map("stream_tokens")
+}

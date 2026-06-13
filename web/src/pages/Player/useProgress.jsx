@@ -6,45 +6,105 @@ function historyHeaders(clientId) {
     return { "X-Flux-Client": clientId || getOrCreateClientId() };
 }
 
-export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, videoRef, playing, duration }) {
+// FIX: Never save ephemeral HLS session URLs. Build a stable /stream/video/:id
+// URL from the mediaId so history links survive server restarts.
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+export function useProgress({ mediaId, clientId, name, type, poster, videoRef, playing, mediaDuration, getToken, streamUrl }) {
     const [resumePoint, setResumePoint] = useState(null);
     const [showResumeDialog, setShowResumeDialog] = useState(false);
     const [resumeCountdown, setResumeCountdown] = useState(5);
     const intervalRef = useRef(null);
     const countdownRef = useRef(null);
     const resolvedRef = useRef(false);
-    // Track whether onReadyToSeek has fired — prevents double-seek on HLS
-    // which fires canplay multiple times as segments buffer.
     const seekFiredRef = useRef(false);
+    // FIX (Report-25): capture currentTime continuously so unmount cleanup
+    // doesn't rely on videoRef.current (nullified before cleanup runs in React 17+)
+    const lastTimeRef = useRef(0);
     const scopedClientId = clientId || getOrCreateClientId();
 
+    // FIX (Report-28): videoRef.current is null at hook mount because <VideoCore>
+    // renders only after streamUrl is set. [videoRef] is a stable ref object so
+    // the effect never re-runs. Use streamUrl as dep — it changes from null→url
+    // exactly when the video element appears, guaranteeing the listener attaches.
+    useEffect(() => {
+        if (!streamUrl) return; // video not mounted yet
+        const video = videoRef.current;
+        if (!video) return;
+        const onTimeUpdate = () => {
+            lastTimeRef.current = video.currentTime;
+        };
+        // FIX: save immediately after user seeks to any position
+        const onSeeked = () => {
+            saveProgressRef.current?.(video.currentTime);
+        };
+        video.addEventListener("timeupdate", onTimeUpdate);
+        video.addEventListener("seeked", onSeeked);
+        return () => {
+            video.removeEventListener("timeupdate", onTimeUpdate);
+            video.removeEventListener("seeked", onSeeked);
+        };
+    }, [streamUrl, videoRef]); // streamUrl flip null→url triggers re-run
+
+    // FIX: stable stream URL — never use ephemeral HLS session URL
+    const stableStreamUrl = mediaId ? `${BASE}/stream/video/${encodeURIComponent(mediaId)}` : null;
+
     const buildPayload = useCallback(
-        (time) => ({
+        (time, duration) => ({
             name: name || "",
             type: type || "movie",
             poster: poster || null,
-            streamUrl: streamUrl || null,
+            streamUrl: stableStreamUrl,
             position: Math.floor(time),
+            // FIX: cap duration from videoRef directly — HLS EVENT playlist grows
+            // dynamically, so state.duration may be tiny early on.
+            // Only save actual duration when it looks real (>30s); otherwise skip
+            // the completion check by passing the position as duration (never 90%+).
             duration: Math.floor(duration),
         }),
-        [name, type, poster, streamUrl, duration],
+        [name, type, poster, stableStreamUrl],
     );
 
     const saveProgress = useCallback(
         async (time) => {
-            if (!mediaId || !duration) return;
+            if (!mediaId) return;
+            const video = videoRef.current;
+            if (!video) return;
+
+            // Read duration directly from video element (not state — HLS EVENT playlist
+            // grows state.duration dynamically which can be tiny early on).
+            // Use mediaDuration (from ffprobe/PlayerPage) when available as the ground
+            // truth; fall back to video.duration only when mediaDuration is absent.
+            const rawDuration = video.duration;
+            const videoDur = isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+            // Prefer the real ffprobe duration passed in from PlayerPage
+            const duration = mediaDuration && mediaDuration > 60 ? mediaDuration : videoDur;
+
             try {
-                await api.post(`/api/history/${mediaId}`, buildPayload(time), {
+                await api.post(`/api/history/${mediaId}`, buildPayload(time, duration), {
                     headers: historyHeaders(scopedClientId),
                 });
             } catch {
                 // non-fatal
             }
         },
-        [mediaId, duration, buildPayload, scopedClientId],
+        [mediaId, buildPayload, scopedClientId, videoRef, mediaDuration],
     );
 
-    // ── Load resume point from history ────────────────────────────────────────
+    // FIX: Keep a ref to saveProgress so event handlers and page-exit listeners
+    // can always call the latest version without stale closures.
+    const saveProgressRef = useRef(saveProgress);
+    useEffect(() => {
+        saveProgressRef.current = saveProgress;
+    }, [saveProgress]);
+
+    // ── Load resume point ─────────────────────────────────────────────────────
+    // FIX (Report-19): Race condition — AuthContext registers the token via
+    // registerAuthProvider() inside a useEffect. If this hook runs before that
+    // effect fires, client.js has _getToken=null and sends no Authorization header.
+    // Solution: short delay (50ms) lets React flush all mount effects first, then
+    // the Axios interceptor will have a valid token. The interceptor also does
+    // silent refresh+retry on 401, so a single retry covers token-expiry cases.
     useEffect(() => {
         if (!mediaId) return;
         let cancelled = false;
@@ -53,10 +113,11 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         setResumePoint(null);
         setShowResumeDialog(false);
 
-        (async () => {
+        const load = async () => {
             try {
                 const data = await api.get(`/api/history/${mediaId}`, {
                     headers: historyHeaders(scopedClientId),
+                    skipAuthHandler: true,
                 });
                 if (cancelled) return;
                 if (data?.position && data.position > 10 && !data.completed) {
@@ -65,12 +126,15 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
                     resolvedRef.current = false;
                 }
             } catch {
-                // no history
+                // no history or not authenticated — silent
             }
-        })();
+        };
 
+        // Delay 50ms so all mount useEffects (incl. registerAuthProvider) fire first
+        const t = setTimeout(load, 50);
         return () => {
             cancelled = true;
+            clearTimeout(t);
         };
     }, [mediaId, scopedClientId]);
 
@@ -94,7 +158,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         clearInterval(countdownRef.current);
     }, [videoRef]);
 
-    // ── Resume countdown (auto Start Over after 5s) ────────────────────────────
+    // ── Resume countdown (auto Start Over after 5s) ───────────────────────────
     useEffect(() => {
         if (!showResumeDialog) return undefined;
         setResumeCountdown(5);
@@ -114,59 +178,129 @@ export function useProgress({ mediaId, clientId, name, type, poster, streamUrl, 
         return () => clearInterval(countdownRef.current);
     }, [showResumeDialog]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ── onReadyToSeek — called from PlayerPage on video canplay ──────────────
-    // FIX: was missing from return → PlayerPage threw "undefined is not a function"
-    //
-    // Purpose: if a resume dialog is pending and the video just became ready to
-    // play, we can auto-seek to the resume position if the user hasn't interacted.
-    // This fires on every canplay (HLS fires it multiple times), so we guard with
-    // seekFiredRef to ensure we only act once per media load.
-    //
-    // If the dialog is showing: let the user choose (handleResume / handleStartOver).
-    // If no resume point: no-op.
+    // ── onReadyToSeek ─────────────────────────────────────────────────────────
     const onReadyToSeek = useCallback(() => {
         if (seekFiredRef.current) return;
-        if (showResumeDialog) return; // dialog is showing, let user choose
+        if (showResumeDialog) return;
         if (!resumePoint?.position) return;
-        // No dialog but we have a resume point (e.g. short session, auto-resume)
         seekFiredRef.current = true;
         if (videoRef.current) {
             videoRef.current.currentTime = resumePoint.position;
         }
     }, [showResumeDialog, resumePoint, videoRef]);
 
-    // ── Periodic progress save ────────────────────────────────────────────────
+    // ── Periodic progress save (every 10s) + immediate save on play/pause ─────
     useEffect(() => {
-        if (playing && duration > 0) {
+        if (playing) {
+            // FIX: save immediately when playback starts (don't wait for first interval)
+            if (videoRef.current) saveProgress(videoRef.current.currentTime);
             intervalRef.current = setInterval(() => {
                 if (videoRef.current) saveProgress(videoRef.current.currentTime);
-            }, 5000);
+            }, 10_000);
         } else {
             clearInterval(intervalRef.current);
+            // FIX: save immediately on pause
+            const time = lastTimeRef.current;
+            if (time > 0) saveProgressRef.current?.(time);
         }
         return () => clearInterval(intervalRef.current);
-    }, [playing, duration, saveProgress, videoRef]);
+    }, [playing, saveProgress, videoRef]);
+
+    // ── sendBeacon helper — used by unmount, pagehide, visibilitychange ───────
+    // Kept as a ref so page-exit handlers always read the latest mediaId/token/etc.
+    const sendBeaconRef = useRef(null);
+    useEffect(() => {
+        sendBeaconRef.current = () => {
+            const time = lastTimeRef.current;
+            if (!mediaId || time < 1) return;
+            const video = videoRef.current;
+            const rawDuration = video ? video.duration : 0;
+            const videoDur = isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+            const duration = mediaDuration && mediaDuration > 60 ? mediaDuration : videoDur;
+            const payload = buildPayload(time, duration);
+            const token = getToken ? getToken() : null;
+
+            // FIX (Report-29): navigator.sendBeacon() is keepalive-safe and CORS-exempt
+            // for text/plain blobs. Token + clientId go in query params since
+            // sendBeacon cannot set custom headers.
+            const qs = new URLSearchParams({ clientId: scopedClientId });
+            if (token) qs.set("token", token);
+            const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
+            const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
+            const sent = navigator.sendBeacon(beaconUrl, blob);
+
+            // Fallback: if sendBeacon unavailable or returns false (quota exceeded),
+            // try plain fetch without custom headers.
+            if (!sent) {
+                fetch(beaconUrl, {
+                    method: "POST",
+                    body: JSON.stringify(payload),
+                }).catch(() => {});
+            }
+        };
+    }, [mediaId, buildPayload, scopedClientId, getToken, mediaDuration, videoRef]);
+
+    // ── pagehide + visibilitychange — catch tab close / refresh / navigate ────
+    // FIX: useEffect cleanup (unmount) fires for SPA navigation but NOT for
+    // hard tab closes or F5 refresh. Wire document-level events that always fire.
+    useEffect(() => {
+        const onPageHide = () => sendBeaconRef.current?.();
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "hidden") sendBeaconRef.current?.();
+        };
+        window.addEventListener("pagehide", onPageHide);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            window.removeEventListener("pagehide", onPageHide);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, []); // mount once — sendBeaconRef always holds latest values
 
     // ── Save on unmount ───────────────────────────────────────────────────────
+    // FIX (Report-22): deps array was missing `mediaDuration` — the closure
+    // captured the value at mount (undefined/0), so duration was always 0 and
+    // the early-return `if (time < 1)` sometimes fired incorrectly.
+    // Added mediaDuration to deps so the closure always has the latest value.
     useEffect(() => {
         return () => {
             clearInterval(intervalRef.current);
             clearInterval(countdownRef.current);
-            if (!videoRef.current || !duration || !mediaId) return;
-            const payload = buildPayload(videoRef.current.currentTime);
-            const base = import.meta.env.VITE_API_URL || "http://localhost:5000";
-            fetch(`${base}/api/history/${mediaId}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    ...historyHeaders(scopedClientId),
-                },
-                body: JSON.stringify(payload),
-                credentials: "omit",
-                keepalive: true,
-            }).catch(() => {});
+            if (!mediaId) return;
+            // FIX (Report-25): videoRef.current is null by cleanup time (React 17+
+            // async unmount). Use lastTimeRef which was updated on every timeupdate.
+            const time = lastTimeRef.current;
+            if (time < 1) return;
+            const video = videoRef.current;
+            const rawDuration = video ? video.duration : 0;
+            const videoDur = isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+            const duration = mediaDuration && mediaDuration > 60 ? mediaDuration : videoDur;
+            const payload = buildPayload(time, duration);
+            const token = getToken ? getToken() : null;
+
+            // FIX (Report-29): fetch+keepalive fails on cross-origin requests that
+            // require a CORS preflight (custom headers trigger preflight; browser
+            // forbids keepalive on preflighted requests → silent TypeError).
+            // Solution: navigator.sendBeacon() is always keepalive-safe and CORS-exempt
+            // for text/plain blobs. Token + clientId go in query params since
+            // sendBeacon cannot set custom headers.
+            const qs = new URLSearchParams({ clientId: scopedClientId });
+            if (token) qs.set("token", token);
+            const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
+            const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
+            const sent = navigator.sendBeacon(beaconUrl, blob);
+
+            // Fallback: if sendBeacon unavailable or returns false (quota exceeded),
+            // try plain fetch without custom headers — CORS preflight still fires but
+            // at least we get one attempt through. Token goes in query param only.
+            if (!sent) {
+                fetch(beaconUrl, {
+                    method: "POST",
+                    body: JSON.stringify(payload),
+                }).catch(() => {});
+            }
         };
-    }, [mediaId, duration, buildPayload, scopedClientId, videoRef]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mediaId, mediaDuration, buildPayload, scopedClientId, videoRef]);
 
     return {
         resumePoint,

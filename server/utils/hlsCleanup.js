@@ -24,7 +24,28 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 
-const { getSession, killSession, getSessionStats, getCurrentSegmentIndex, TEMP_DIR, SESSION_TIMEOUT_MS, SEGMENT_DURATION } = require("./transcoderService");
+// Constants derived locally — DO NOT import from transcoderService.
+// Importing constants at module-load time creates a circular dependency:
+//   hlsCleanup → transcoderService → (module-load side-effects) → incomplete exports → TEMP_DIR = undefined
+// Both files read the same env vars so the values are always identical.
+const TEMP_DIR = process.env.HLS_TEMP_DIR || path.join(__dirname, "../../temp/hls");
+const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || "1200000", 10);
+const SEGMENT_DURATION = parseInt(process.env.HLS_SEGMENT_DURATION || "4", 10);
+
+// Functions imported lazily so they survive the circular require window.
+// By the time startDaemon() / runCycle() are called, transcoderService is fully loaded.
+function _svc() {
+    return require("./transcoderService");
+}
+function getSession(id) {
+    return _svc().getSession(id);
+}
+function killSession(id) {
+    return _svc().killSession(id);
+}
+function getSessionStats() {
+    return _svc().getSessionStats();
+}
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -32,7 +53,8 @@ const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS || "30000",
 const MAX_TEMP_MB = parseInt(process.env.MAX_TEMP_MB || "4096", 10); // 4 GB
 const ORPHAN_AGE_MS = parseInt(process.env.ORPHAN_AGE_MS || "600000", 10); // 10 min
 // How many seconds of past segments to keep (player can seek back this far without restart)
-const SEGMENT_KEEP_SECONDS = parseInt(process.env.SEGMENT_KEEP_SECONDS || "30", 10);
+// Increased from 60 → 120 to reduce race window between cleanup and player seek-back.
+const SEGMENT_KEEP_SECONDS = parseInt(process.env.SEGMENT_KEEP_SECONDS || "120", 10);
 
 let _timer = null;
 let _running = false;
@@ -164,7 +186,7 @@ async function enforceStorageLimit() {
 
     if (totalMB <= MAX_TEMP_MB) return;
 
-    console.warn(`[Cleanup] Temp ${Math.round(totalMB)} MB > limit ${MAX_TEMP_MB} MB — evicting oldest sessions`);
+    console.warn(`[Cleanup] Temp ${Math.round(totalMB)} MB > limit ${MAX_TEMP_MB} MB — evicting INACTIVE sessions first`);
 
     const dirs = [];
     try {
@@ -185,13 +207,29 @@ async function enforceStorageLimit() {
 
     for (const dir of dirs) {
         if (totalMB <= MAX_TEMP_MB * 0.85) break;
+
+        // FIX (Report-08): NEVER kill an active (running) session to free space.
+        // Killing the only active session causes 404s for all subsequent segment
+        // requests — exactly the bug reported. Only evict sessions that are
+        // already dead/done/error, or dirs with no live session at all.
+        const session = getSession(dir.id);
+        if (session && session.status === "running") {
+            console.log(`[Cleanup] Skipping active session ${dir.id} during storage eviction`);
+            continue;
+        }
+
         const sizeMB = await getDirSizeMB(dir.full);
-        console.log(`[Cleanup] Evicting ${dir.id} (${Math.round(sizeMB)} MB)`);
-        await killSession(dir.id);
+        console.log(`[Cleanup] Evicting inactive ${dir.id} (${Math.round(sizeMB)} MB, status=${session?.status ?? "orphan"})`);
+        if (session) await killSession(dir.id);
         try {
             await fsp.rm(dir.full, { recursive: true, force: true });
         } catch {}
         totalMB -= sizeMB;
+    }
+
+    // If still over limit after inactive purge, log a warning but do NOT kill active sessions.
+    if (totalMB > MAX_TEMP_MB) {
+        console.warn(`[Cleanup] Still over limit (${Math.round(totalMB)} MB) but active sessions protected. Consider raising MAX_TEMP_MB.`);
     }
 }
 

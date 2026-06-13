@@ -19,11 +19,22 @@ const metadataRouter = require("./routes/metadata");
 const historyRouter = require("./routes/history");
 const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
+const adminDashboardRouter = require("./routes/adminDashboard");
+
+// ─── Auth layer (additive — does not touch existing routers above) ─────────────
+const authRouter = require("./auth/routes/authRoutes");
+const adminRouter = require("./auth/routes/adminRoutes");
+const sessionRouter = require("./auth/routes/sessionRoutes");
+const streamStartRouter = require("./auth/routes/streamStartRoutes");
 
 const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/fileHelpers");
 const { startDaemon, stopDaemon } = require("./utils/hlsCleanup");
-const { killAllSessions } = require("./utils/transcoderService");
+const transcoderService = require("./utils/transcoderService");
 const { detect: detectHW, getSysInfoRoute } = require("./utils/hwAccel");
+
+const { authenticateJWT } = require("./auth/middleware/authenticateJWT");
+const { requireApprovedUser } = require("./auth/middleware/requireApprovedUser");
+const { requireRole } = require("./auth/middleware/requireRole");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -40,12 +51,15 @@ app.use(
             else callback(null, false);
         },
         methods: ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Range", "X-Flux-Client", "X-Flux-Profile"],
+        allowedHeaders: ["Content-Type", "Range", "X-Flux-Client", "X-Flux-Profile", "Authorization"],
         exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length", "X-Content-Duration", "ETag"],
     }),
 );
 
 app.use(express.json());
+
+
+
 
 // ─── Request Logger ───────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -60,13 +74,20 @@ app.use((req, res, next) => {
     next();
 });
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ─── Auth routes (public — no middleware applied here) ────────────────────────
+app.use("/auth", authRouter);
+app.use("/admin", adminRouter);
+app.use("/api/sessions", sessionRouter);
+app.use("/stream/start", streamStartRouter); // POST /stream/start/:id — auth-gated stream token
+
+// ─── Existing routes (auth middleware injected inside each router) ─────────────
 app.use("/api/library", libraryRouter);
 app.use("/api/media", mediaRouter);
 app.use("/api/metadata", metadataRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
+app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -94,7 +115,7 @@ app.get("/api/info", async (req, res) => {
 });
 
 // ─── System Info (hardware + transcoding diagnostics) ──────────────────────────
-app.get("/api/sysinfo", getSysInfoRoute);
+app.get("/api/sysinfo", authenticateJWT, requireApprovedUser, requireRole("admin"), getSysInfoRoute);
 
 // ─── 404 / Error ─────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
@@ -108,12 +129,28 @@ app.use((err, req, res, next) => {
 async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
-    await killAllSessions();
+    await transcoderService.killAllSessions();
     console.log("[Server] All transcoding sessions terminated. Bye.");
     process.exit(0);
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// ─── Crash prevention — keep server alive, don't lose sessions ────────────────
+// An unhandled promise rejection or uncaught exception must NOT kill the process.
+// Log the full stack so we can debug, but keep running.
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("[Server] ⚠ Unhandled Promise Rejection:", reason);
+    if (reason instanceof Error) console.error(reason.stack);
+    // Do NOT call process.exit() — that would destroy all in-memory HLS sessions
+});
+
+process.on("uncaughtException", (err, origin) => {
+    console.error(`[Server] ⚠ Uncaught Exception (${origin}):`, err.message);
+    console.error(err.stack);
+    // Do NOT call process.exit() — that would destroy all in-memory HLS sessions
+    // Exception is logged; server continues running
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, "0.0.0.0", async () => {
@@ -127,12 +164,13 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     // Start HLS cleanup daemon
     startDaemon();
 
-    // Pre-warm hardware detection
-    detectHW()
-        .then((hw) => {
-            console.log(`[Server] Hardware acceleration: ${hw.type}`);
-        })
-        .catch(() => {});
+    // Pre-warm hardware detection + FFmpeg path resolution at startup.
+    // Without this, the first transcode session would block for 3-36s while
+    // QSV/NVENC/VAAPI test encodes run sequentially.
+    transcoderService.warmup().catch(() => {});
+
+    // Start idle-session sweeper (kills abandoned sessions after SESSION_TIMEOUT_MS)
+    transcoderService.startSweeper();
 });
 
 // Keep-alive timeouts — prevents premature connection drops during chunked streaming

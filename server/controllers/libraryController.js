@@ -7,6 +7,10 @@ const crypto = require("crypto");
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
 const { invalidateFolder, invalidateAll } = require("../utils/mediaCache");
 
+// In-memory folders cache — eliminates disk I/O on every API call.
+// Populated on first read, updated atomically on every write.
+let _cachedFolders = null;
+
 // Returns true only if resolvedPath exists and is a directory; false on any stat error
 function isDirectory(resolvedPath) {
     try {
@@ -16,13 +20,19 @@ function isDirectory(resolvedPath) {
     }
 }
 
-// Reads folders.json and returns the parsed array
+// Reads folders.json and returns the parsed array.
+// Uses in-memory cache — only reads disk on cold start or after server restart.
 async function readFolders() {
+    if (_cachedFolders !== null) return _cachedFolders;
     try {
         const raw = await fs.promises.readFile(FOLDERS_FILE, "utf-8");
-        return JSON.parse(raw);
+        _cachedFolders = JSON.parse(raw);
+        return _cachedFolders;
     } catch (err) {
-        if (err && err.code === "ENOENT") return [];
+        if (err && err.code === "ENOENT") {
+            _cachedFolders = [];
+            return _cachedFolders;
+        }
         console.error("[Library] readFolders error:", err);
         throw err;
     }
@@ -47,6 +57,8 @@ async function _atomicWrite(folders) {
         await fd.close();
     }
     await fs.promises.rename(tmp, FOLDERS_FILE);
+    // Update in-memory cache atomically after successful disk write
+    _cachedFolders = folders;
 }
 
 // GET /api/library — returns all saved folders

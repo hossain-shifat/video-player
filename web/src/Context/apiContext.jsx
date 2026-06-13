@@ -1,296 +1,244 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
-import {
-    getMedia,
-    searchMedia,
-    getFolders,
-    addFolder,
-    updateFolder,
-    removeFolder,
-    getCategories,
-    getByCategory,
-    getHistory,
-    getResumePoint,
-    saveProgress,
-    deleteHistory,
-    clearHistory,
-    getWatchlist,
-    addToWatchlist,
-    removeFromWatchlist,
-    getFavourites,
-    addToFavourites,
-    removeFromFavourites,
-    refreshMetadata,
-    refreshAllMetadata,
-    api,
-} from "../api";
+// web/src/Context/apiContext.jsx
+//
+// Thin compatibility layer around TanStack Query hooks.
+// Preserves the existing `useApi()` hook API for all consuming components.
+//
+// Migration strategy:
+//   - Data fetching and caching now done by TanStack Query (useMedia, useLibrary, etc.)
+//   - This context bridges TQ state into the existing useApi() shape
+//   - No existing consumer needs to change
+//   - New components can import hooks directly from src/hooks/
+
+import { createContext, useContext, useCallback, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
+// TanStack Query hooks
+import { useMedia, MEDIA_KEYS } from "../hooks/useMedia";
+import { useLibrary, useAddFolder, useUpdateFolder, useRemoveFolder, LIBRARY_KEYS } from "../hooks/useLibrary";
+import { useCategories, useCategoryMedia } from "../hooks/useCategories";
+import { useHistory, useDeleteHistory, useClearHistory } from "../hooks/useHistory";
+import { useWatchlist, useAddToWatchlist, useRemoveFromWatchlist } from "../hooks/useWatchlist";
+import { useFavourites, useAddToFavourites, useRemoveFromFavourites } from "../hooks/useFavourites";
+
+// Direct API calls (still needed for player and metadata refresh actions)
+import { searchMedia, getResumePoint, saveProgress, refreshMetadata, refreshAllMetadata, api } from "../api";
 
 const ApiContext = createContext(null);
 
 export function ApiProvider({ children }) {
-    // ─── Loading & Error ──────────────────────────────────────────────────────
-    const [loading, setLoadingMap] = useState({});
-    const [errors, setErrorMap] = useState({});
-
-    function setLoading(key, val) {
-        setLoadingMap((p) => ({ ...p, [key]: val }));
-    }
-    function setError(key, err) {
-        setErrorMap((p) => ({ ...p, [key]: err?.message ?? null }));
-    }
-
-    async function run(key, fn, signal) {
-        setLoading(key, true);
-        setError(key, null);
-        try {
-            const result = await fn(signal);
-            if (signal?.aborted) return;
-            return result;
-        } catch (err) {
-            if (err?.name === "AbortError" || signal?.aborted) return;
-            setError(key, err);
-            throw err;
-        } finally {
-            if (!signal?.aborted) setLoading(key, false);
-        }
-    }
+    const qc = useQueryClient();
 
     // ─── Media ────────────────────────────────────────────────────────────────
-    // Server response shape:
-    // { folders, movies: { total, items }, series: { total, items }, anime: { total, items }, unknown: { total, items } }
-    const [movies, setMovies] = useState([]);
-    const [series, setSeries] = useState([]);
-    const [anime, setAnime] = useState([]);
+    const mediaQuery = useMedia();
+    const movies = mediaQuery.data?.movies?.items ?? [];
+    const series = mediaQuery.data?.series?.items ?? [];
+    const anime = mediaQuery.data?.anime?.items ?? [];
+
+    // media is considered "loaded" when mediaQuery is settled
     const [searchResults, setSearchResults] = useState([]);
 
-    const fetchMedia = useCallback(
-        (params, signal) =>
-            run(
-                "media",
-                async (sig) => {
-                    const data = await getMedia(params, sig);
-                    setMovies(data?.movies?.items ?? []);
-                    setSeries(data?.series?.items ?? []);
-                    setAnime(data?.anime?.items ?? []);
-                    return data;
-                },
-                signal,
-            ),
-        [],
-    );
-
-    const search = useCallback(
-        (q, folderId) =>
-            run("search", async () => {
-                const data = await searchMedia(q, folderId);
-                // server returns { total, results: [] }
-                setSearchResults(data?.results ?? []);
-                return data;
-            }),
-        [],
-    );
-
     // ─── Library / Folders ────────────────────────────────────────────────────
-    const [folders, setFolders] = useState([]);
+    const libraryQuery = useLibrary();
+    const folders = libraryQuery.data ?? [];
 
-    const fetchFolders = useCallback(
-        (signal) =>
-            run(
-                "folders",
-                async (sig) => {
-                    const data = await getFolders(sig);
-                    setFolders(data?.folders ?? []);
-                },
-                signal,
-            ),
-        [],
+    const addFolderMut = useAddFolder();
+    const updateFolderMut = useUpdateFolder();
+    const removeFolderMut = useRemoveFolder();
+
+    // ─── Categories ───────────────────────────────────────────────────────────
+    const categoriesQuery = useCategories();
+    const categories = categoriesQuery.data ?? [];
+
+    // Active category for single-category views (CategoryPage)
+    const [activeCategory, setActiveCategory] = useState(null);
+    const [activeCatType, setActiveCatType] = useState(null);
+    const catMediaQuery = useCategoryMedia(activeCategory, activeCatType);
+    const categoryData = catMediaQuery.data ?? null;
+
+    // ─── History ──────────────────────────────────────────────────────────────
+    const historyQuery = useHistory();
+    const history = historyQuery.data ?? [];
+    const deleteHistMut = useDeleteHistory();
+    const clearHistMut = useClearHistory();
+
+    // ─── Watchlist ────────────────────────────────────────────────────────────
+    const watchlistQuery = useWatchlist();
+    const watchlist = watchlistQuery.data ?? [];
+    const addWlMut = useAddToWatchlist();
+    const removeWlMut = useRemoveFromWatchlist();
+
+    // ─── Favourites ───────────────────────────────────────────────────────────
+    const favouritesQuery = useFavourites();
+    const favourites = favouritesQuery.data ?? [];
+    const addFavMut = useAddToFavourites();
+    const removeFavMut = useRemoveFromFavourites();
+
+    // ─── Unified loading/error maps (matches old API shape) ──────────────────
+    const loading = useMemo(
+        () => ({
+            media: mediaQuery.isLoading,
+            folders: libraryQuery.isLoading,
+            categories: categoriesQuery.isLoading,
+            history: historyQuery.isLoading,
+            watchlist: watchlistQuery.isLoading,
+            favourites: favouritesQuery.isLoading,
+            search: false,
+            addFolder: addFolderMut.isPending,
+            updateFolder: updateFolderMut.isPending,
+            removeFolder: removeFolderMut.isPending,
+        }),
+        [
+            mediaQuery.isLoading,
+            libraryQuery.isLoading,
+            categoriesQuery.isLoading,
+            historyQuery.isLoading,
+            watchlistQuery.isLoading,
+            favouritesQuery.isLoading,
+            addFolderMut.isPending,
+            updateFolderMut.isPending,
+            removeFolderMut.isPending,
+        ],
     );
+
+    const errors = useMemo(
+        () => ({
+            media: mediaQuery.error?.message ?? null,
+            folders: libraryQuery.error?.message ?? null,
+            categories: categoriesQuery.error?.message ?? null,
+            history: null, // silenced
+            watchlist: null, // silenced
+            favourites: null, // silenced
+        }),
+        [mediaQuery.error, libraryQuery.error, categoriesQuery.error],
+    );
+
+    // ─── Actions ──────────────────────────────────────────────────────────────
+
+    /** Refetch all media (for manual refresh) */
+    const fetchMedia = useCallback(
+        (params) => {
+            return qc.invalidateQueries({ queryKey: MEDIA_KEYS.all });
+        },
+        [qc],
+    );
+
+    /** Search media (still uses direct API — not worth caching) */
+    const search = useCallback(async (q, folderId) => {
+        const data = await searchMedia(q, folderId);
+        setSearchResults(data?.results ?? []);
+        return data;
+    }, []);
+
+    /** Refetch folders */
+    const fetchFolders = useCallback(() => {
+        return qc.invalidateQueries({ queryKey: LIBRARY_KEYS.folders() });
+    }, [qc]);
 
     const addLibraryFolder = useCallback(
-        (path, label) =>
-            run("addFolder", async () => {
-                const data = await addFolder(path, label);
-                setFolders((p) => [...p, data.folder]);
-            }),
-        [],
+        async (path, label) => {
+            await addFolderMut.mutateAsync({ path, label });
+        },
+        [addFolderMut],
     );
 
     const updateLibraryFolder = useCallback(
-        (id, updates) =>
-            run("updateFolder", async () => {
-                const data = await updateFolder(id, updates);
-                setFolders((p) => p.map((f) => (f.id === id ? data.folder : f)));
-            }),
-        [],
+        async (id, updates) => {
+            await updateFolderMut.mutateAsync({ id, updates });
+        },
+        [updateFolderMut],
     );
 
     const removeLibraryFolder = useCallback(
-        (id) =>
-            run("removeFolder", async () => {
-                await removeFolder(id);
-                setFolders((p) => p.filter((f) => f.id !== id));
-            }),
-        [],
+        async (id) => {
+            await removeFolderMut.mutateAsync(id);
+        },
+        [removeFolderMut],
     );
 
-    // ─── Categories ───────────────────────────────────────────────────────────
-    // GET /api/categories
-    //   → { total, categories: [{ name, title, subtitle, total, movies, series, anime }] }
-    //
-    // GET /api/categories/:name
-    //   → { category, title, subtitle,
-    //       movies: { total, items: [] },
-    //       series: { total, items: [] },
-    //       anime:  { total, items: [] } }
-    const [categories, setCategories] = useState([]);
-    const [categoryData, setCategoryData] = useState(null);
-    const [activeCategory, setActiveCategory] = useState(null);
+    /** fetchCategories — invalidate TQ cache instead of refetching manually */
+    const fetchCategories = useCallback(() => {
+        return qc.invalidateQueries({ queryKey: ["categories"] });
+    }, [qc]);
 
-    // Derived flat arrays — recalculated whenever categoryData changes
-    const categoryMovies = categoryData?.movies?.items ?? [];
-    const categorySeries = categoryData?.series?.items ?? [];
-    const categoryAnime = categoryData?.anime?.items ?? [];
+    /** fetchByCategory — sets the active category and triggers the lazy query */
+    const fetchByCategory = useCallback((name, type) => {
+        setActiveCategory(name || null);
+        setActiveCatType(type || null);
+    }, []);
 
-    const fetchCategories = useCallback(
-        (signal) =>
-            run(
-                "categories",
-                async (sig) => {
-                    const data = await getCategories(sig);
-                    setCategories(data?.categories ?? []);
-                },
-                signal,
-            ),
-        [],
-    );
-
-    /**
-     * fetchByCategory(name, type?)
-     * Loads all media for one genre into categoryData / categoryMovies / etc.
-     * The CategoryPage calls this with the :name param from the URL.
-     */
-    const fetchByCategory = useCallback(
-        (name, type) =>
-            run("categoryMedia", async () => {
-                const data = await getByCategory(name, type);
-                setCategoryData(data);
-                setActiveCategory(name);
-                return data;
-            }),
-        [],
-    );
-
-    // ─── History ──────────────────────────────────────────────────────────────
-    const [history, setHistory] = useState([]);
-
-    const fetchHistory = useCallback(
-        (signal) =>
-            run(
-                "history",
-                async (sig) => {
-                    const data = await getHistory(sig);
-                    setHistory(data?.history ?? []);
-                },
-                signal,
-            ),
-        [],
-    );
+    const fetchHistory = useCallback(() => {
+        return qc.invalidateQueries({ queryKey: ["history"] });
+    }, [qc]);
 
     const logProgress = useCallback((id, progressData) => saveProgress(id, progressData).catch(() => {}), []);
 
-    const getResume = useCallback((id) => getResumePoint(id), []);
+    const getResume = useCallback((id) => getResumePoint(id).catch(() => null), []);
 
     const removeHistoryItem = useCallback(
-        (id) =>
-            run("deleteHistory", async () => {
-                await deleteHistory(id);
-                setHistory((p) => p.filter((h) => h.id !== id));
-            }),
-        [],
+        async (id) => {
+            await deleteHistMut.mutateAsync(id);
+        },
+        [deleteHistMut],
     );
 
-    const clearAllHistory = useCallback(
-        () =>
-            run("clearHistory", async () => {
-                await clearHistory();
-                setHistory([]);
-            }),
-        [],
-    );
+    const clearAllHistory = useCallback(async () => {
+        await clearHistMut.mutateAsync();
+    }, [clearHistMut]);
 
-    // ─── Watchlist ────────────────────────────────────────────────────────────
-    const [watchlist, setWatchlist] = useState([]);
-
-    const fetchWatchlist = useCallback(
-        (signal) =>
-            run(
-                "watchlist",
-                async (sig) => {
-                    const data = await getWatchlist(sig);
-                    setWatchlist(data?.watchlist ?? []);
-                },
-                signal,
-            ),
-        [],
-    );
+    const fetchWatchlist = useCallback(() => {
+        return qc.invalidateQueries({ queryKey: ["watchlist"] });
+    }, [qc]);
 
     const addWatchlistItem = useCallback(
-        (id, data) =>
-            run("addWatchlist", async () => {
-                const item = await addToWatchlist(id, data);
-                setWatchlist((p) => [item, ...p]);
-            }),
-        [],
+        async (id, data) => {
+            await addWlMut.mutateAsync({ id, data });
+        },
+        [addWlMut],
     );
 
     const removeWatchlistItem = useCallback(
-        (id) =>
-            run("removeWatchlist", async () => {
-                await removeFromWatchlist(id);
-                setWatchlist((p) => p.filter((w) => w.id !== id));
-            }),
-        [],
+        async (id) => {
+            await removeWlMut.mutateAsync(id);
+        },
+        [removeWlMut],
     );
 
-    // ─── Favourites ───────────────────────────────────────────────────────────
-    const [favourites, setFavourites] = useState([]);
-
-    const fetchFavourites = useCallback(
-        (signal) =>
-            run(
-                "favourites",
-                async (sig) => {
-                    const data = await getFavourites(sig);
-                    setFavourites(data?.favourites ?? []);
-                },
-                signal,
-            ),
-        [],
-    );
+    const fetchFavourites = useCallback(() => {
+        return qc.invalidateQueries({ queryKey: ["favourites"] });
+    }, [qc]);
 
     const addFavouriteItem = useCallback(
-        (id, data) =>
-            run("addFavourite", async () => {
-                const item = await addToFavourites(id, data);
-                setFavourites((p) => [item, ...p]);
-            }),
-        [],
+        async (id, data) => {
+            await addFavMut.mutateAsync({ id, data });
+        },
+        [addFavMut],
     );
 
     const removeFavouriteItem = useCallback(
-        (id) =>
-            run("removeFavourite", async () => {
-                await removeFromFavourites(id);
-                setFavourites((p) => p.filter((f) => f.id !== id));
-            }),
-        [],
+        async (id) => {
+            await removeFavMut.mutateAsync(id);
+        },
+        [removeFavMut],
     );
 
-    // ─── Metadata ─────────────────────────────────────────────────────────────
-    const refreshOneMetadata = useCallback((id) => run("refreshMetadata", () => refreshMetadata(id)), []);
+    const refreshOneMetadata = useCallback(
+        (id) =>
+            refreshMetadata(id).then(() => {
+                // Invalidate media cache so updated metadata appears
+                qc.invalidateQueries({ queryKey: MEDIA_KEYS.all });
+            }),
+        [qc],
+    );
 
-    const refreshAll = useCallback(() => run("refreshAllMetadata", () => refreshAllMetadata()), []);
+    const refreshAll = useCallback(
+        () =>
+            refreshAllMetadata().then(() => {
+                qc.invalidateQueries({ queryKey: MEDIA_KEYS.all });
+            }),
+        [qc],
+    );
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    // ─── Derived helpers ──────────────────────────────────────────────────────
     const isInWatchlist = useCallback((id) => watchlist.some((w) => w.id === id), [watchlist]);
     const isFavourite = useCallback((id) => favourites.some((f) => f.id === id), [favourites]);
     const getStreamUrl = useCallback((id) => api.streamUrl(id), []);
@@ -300,54 +248,41 @@ export function ApiProvider({ children }) {
 
     const toggleFavourite = useCallback((id, data) => (isFavourite(id) ? removeFavouriteItem(id) : addFavouriteItem(id, data)), [isFavourite, removeFavouriteItem, addFavouriteItem]);
 
-    // ─── Auto-fetch on mount ──────────────────────────────────────────────────
-    useEffect(() => {
-        const controller = new AbortController();
-        const { signal } = controller;
+    // Derived category arrays for CategoryPage (compatible with existing consumers)
+    const categoryMovies = categoryData?.movies?.items ?? [];
+    const categorySeries = categoryData?.series?.items ?? [];
+    const categoryAnime = categoryData?.anime?.items ?? [];
 
-        fetchMedia(undefined, signal);
-        fetchFolders(signal);
-        fetchCategories(signal);
-        fetchHistory(signal);
-        fetchWatchlist(signal);
-        fetchFavourites(signal);
-
-        return () => controller.abort();
-    }, [fetchMedia, fetchFolders, fetchCategories, fetchHistory, fetchWatchlist, fetchFavourites]);
-
-    // ─── Memoised context value ───────────────────────────────────────────────
+    // ─── Context value — identical shape to old ApiProvider ───────────────────
     const value = useMemo(
         () => ({
-            // ── media — use directly: movies.map(...), series.map(...)
-            movies, // /api/media → movies.items
-            series, // /api/media → series.items
-            anime, // /api/media → anime.items
-            searchResults, // /api/media/search → results
+            // media
+            movies,
+            series,
+            anime,
+            searchResults,
 
-            // ── library
+            // library
             folders,
 
-            // ── categories list (for AllCategory page & CategoryBar)
-            // each item: { name, title, subtitle, total, movies, series, anime }
+            // categories
             categories,
+            categoryData,
+            categoryMovies,
+            categorySeries,
+            categoryAnime,
+            activeCategory,
 
-            // ── single category page (populated after fetchByCategory)
-            categoryData, // raw full response
-            categoryMovies, // categoryData.movies.items
-            categorySeries, // categoryData.series.items
-            categoryAnime, // categoryData.anime.items
-            activeCategory, // name string of current category
-
-            // ── user data
+            // user data
             history,
             watchlist,
             favourites,
 
-            // ── status maps  e.g. loading.media, loading.categories, errors.media
+            // status
             loading,
             errors,
 
-            // ── actions
+            // actions
             fetchMedia,
             search,
             fetchFolders,
@@ -375,6 +310,9 @@ export function ApiProvider({ children }) {
             getSubtitleUrl,
             refreshOneMetadata,
             refreshAll,
+
+            // expose raw media query for advanced consumers
+            media: mediaQuery.data,
         }),
         [
             movies,
@@ -420,6 +358,7 @@ export function ApiProvider({ children }) {
             getSubtitleUrl,
             refreshOneMetadata,
             refreshAll,
+            mediaQuery.data,
         ],
     );
 

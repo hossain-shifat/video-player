@@ -1,2 +1,124 @@
-temp
-/server/data
+# ==========================================
+# FLUX MEDIA SERVER: CONSOLIDATED .GITIGNORE
+# ==========================================
+
+# ==========================================
+# DEPENDENCIES & CACHES
+# ==========================================
+node_modules/
+.pnp
+.pnp.js
+.cache/
+.vite/
+.turbo/
+
+# ==========================================
+# BUILD OUTPUTS
+# ==========================================
+dist/
+dist-ssr/
+build/
+out/
+coverage/
+
+# ==========================================
+# LOGS & DEBUGGING
+# ==========================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==========================================
+# TEMPORARY FILES & BACKUPS
+# ==========================================
+*.tmp
+*.temp
+*.bak
+*.old
+*.swp
+*.swo
+*~
+temp/
+tmp/
+
+# ==========================================
+# OS, IDE & EDITOR FILES
+# ==========================================
+.DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ==========================================
+# ENVIRONMENT VARIABLES
+# ==========================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.local
+*.env
+
+# ==========================================
+# FLUX MEDIA SERVER RUNTIME DATA
+# ==========================================
+# The entire server/data directory is ignored to prevent any runtime leaks
+/server/data/
+
+# Explicit tracking blocks for individual DBs (redundant but defensive)
+server/data/history.json
+server/data/userdata.json
+server/data/folders.json
+server/data/metadata.json
+server/data/*.db
+server/data/*.sqlite
+
+# Caches & generated media
+server/data/metadata/
+server/data/posters/
+server/data/thumbnails/
+server/data/subtitles/
+server/data/previews/
+
+# Transcoding & Streaming Temp Files
+server/data/transcode/
+server/data/hls/
+server/data/stream/
+*.m3u8
+*.ts
+*.vtt
+
+# Uploads & General Temp
+server/data/uploads/
+
+# ==========================================
+# MISCELLANEOUS & RUNTIME
+# ==========================================
+# Test artifacts, screenshots, benchmarks
+__snapshots__/
+test-results/
+screenshots/
+benchmarks/
+test-artifacts/
+
+# Docker / CasaOS / Deployment Volumes
+docker-volumes/
+casaos-data/
+data/
+
+# Existing explicit ignores
+docs/

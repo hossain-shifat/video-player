@@ -1,12 +1,26 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useApi } from "../../Context/apiContext";
 import MediaRow from "../../Components/MediaRow";
 
 const WatchList = () => {
-    const { watchlist } = useApi();
+    const { watchlist, movies: allMovies, series: allSeries } = useApi();
 
-    const movies = watchlist?.filter((item) => item.type === "movie") || [];
-    const series = watchlist?.filter((item) => item.type === "series") || [];
+    const { movies, series } = useMemo(() => {
+        const m = [];
+        const s = [];
+        if (!watchlist) return { movies: m, series: s };
+
+        watchlist.forEach((wItem) => {
+            if (wItem.type === "movie") {
+                const fullItem = allMovies?.find((x) => x.id === wItem.id);
+                m.push(fullItem ? { ...fullItem, addedAt: wItem.addedAt } : wItem);
+            } else if (wItem.type === "series") {
+                const fullItem = allSeries?.find((x) => x.id === wItem.id);
+                s.push(fullItem ? { ...fullItem, addedAt: wItem.addedAt } : wItem);
+            }
+        });
+        return { movies: m, series: s };
+    }, [watchlist, allMovies, allSeries]);
 
     return (
         <div className="space-y-10">

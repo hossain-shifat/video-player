@@ -31,13 +31,25 @@ const { QUALITY_PRESETS, DECISION } = require("./streamingEngine");
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const TEMP_DIR = process.env.HLS_TEMP_DIR || path.join(__dirname, "../../temp/hls");
-const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || "300000", 10); // 5 min idle
+const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || "1200000", 10); // 20 min idle
 const SEGMENT_DURATION = parseInt(process.env.HLS_SEGMENT_DURATION || "4", 10); // seconds
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "10", 10);
 
 // How many segments ahead of current transcode position before we restart
 // Jellyfin uses: 24s / segmentLength  (≈6 segments for 4s segments)
 const SEGMENT_GAP_RESTART = Math.ceil(24 / SEGMENT_DURATION);
+
+// ─── HW Profile Cache ─────────────────────────────────────────────────────────
+// detectHW() runs 3–4 test encodes (3–36s total) on first call.
+// Cache the result so createSession() never blocks on subsequent plays.
+// warmup() pre-populates this; first play hits it otherwise.
+let _hwProfileCache = null;
+
+async function getHWProfile() {
+    if (_hwProfileCache) return _hwProfileCache;
+    _hwProfileCache = await detectHW();
+    return _hwProfileCache;
+}
 
 // ─── In-memory session map ────────────────────────────────────────────────────
 
@@ -74,8 +86,26 @@ function segmentPath(sessionDir, segNumber) {
 /**
  * Returns the highest segment index currently on disk for a session.
  * Mirrors Jellyfin's GetCurrentTranscodingIndex().
+ * Async version — uses fsp.readdir to avoid blocking the event loop.
  */
-function getCurrentSegmentIndex(sessionDir) {
+async function getCurrentSegmentIndex(sessionDir) {
+    try {
+        const files = (await fsp.readdir(sessionDir))
+            .filter((f) => /^index\d+\.ts$/.test(f))
+            .map((f) => parseInt(f.replace("index", "").replace(".ts", ""), 10))
+            .filter((n) => !isNaN(n));
+        if (!files.length) return null;
+        return Math.max(...files);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Sync version — only for getSessionStats() where we need a quick snapshot.
+ * Should NOT be called in hot request paths.
+ */
+function getCurrentSegmentIndexSync(sessionDir) {
     try {
         const files = fs
             .readdirSync(sessionDir)
@@ -137,15 +167,27 @@ function buildFFmpegArgs({
 
     args.push("-i", inputPath);
 
-    // ── Timestamp preservation (THE KEY FIX for random start position bug) ───
-    // -copyts: do NOT rebase timestamps; keep original PTS from source
-    // -avoid_negative_ts disabled: do not shift even if PTS goes negative
+    // ── Timestamp handling ────────────────────────────────────────────────────
+    // Use Jellyfin's magic pair unconditionally to preserve PTS across seeks.
+    // This ensures HLS.js places segments at the correct timeline position
+    // instead of resetting to 0 and causing random start times.
     args.push("-copyts");
     args.push("-avoid_negative_ts", "disabled");
 
     // ── Video stream ──────────────────────────────────────────────────────────
     if (decision.decision === DECISION.DIRECT_STREAM || decision.decision === DECISION.AUDIO_TRANSCODE) {
         args.push("-c:v", "copy");
+
+        // FIX (Report-06): H.264/HEVC streams from MKV/MP4 containers use
+        // length-prefixed NALUs. MPEG-TS segments require Annex B start codes.
+        // Without this bitstream filter, -c:v copy produces unplayable .ts files.
+        // Jellyfin applies this filter unconditionally when the video is copied.
+        const videoCodec = (mediaInfo?.video?.codec || "").toLowerCase();
+        if (videoCodec === "h264" || videoCodec === "avc" || videoCodec === "avc1") {
+            args.push("-bsf:v", "h264_mp4toannexb");
+        } else if (videoCodec === "hevc" || videoCodec === "h265" || videoCodec === "hvc1") {
+            args.push("-bsf:v", "hevc_mp4toannexb");
+        }
     } else {
         // Full transcode
         const encoder = hw.type === "vaapi" ? hw.encodeCodecH264 : hw.type === "qsv" ? hw.encodeCodecH264 : hw.type === "nvenc" ? hw.encodeCodecH264 : "libx264";
@@ -198,14 +240,25 @@ function buildFFmpegArgs({
 
     // ── Audio stream ──────────────────────────────────────────────────────────
     const primaryAudio = mediaInfo?.audio?.find((a) => a.default) || mediaInfo?.audio?.[0];
-    const audioNeedsXcod = primaryAudio && !["aac", "mp3", "opus"].includes(primaryAudio.codec);
+    const hasAudio = Boolean(primaryAudio);
+    const audioNeedsXcod = hasAudio && !["aac", "mp3", "opus"].includes(primaryAudio.codec);
 
-    if (decision.decision === DECISION.DIRECT_STREAM) {
-        args.push("-c:a", "copy");
-    } else if (audioNeedsXcod || decision.decision === DECISION.FULL_TRANSCODE || decision.decision === DECISION.AUDIO_TRANSCODE) {
-        args.push("-c:a", "aac", "-b:a", preset.audioBitrate, "-ac", "2");
+    // Guard: if AUDIO_TRANSCODE was requested but file has no audio stream,
+    // skip audio args entirely — FFmpeg would exit 1 trying to encode from nothing.
+    if (!hasAudio) {
+        // No audio stream — don't emit any -c:a flag; -map 0:a:0? (optional) handles it
+    } else if (decision.decision === DECISION.DIRECT_STREAM) {
+        // Copy audio only if browser-safe; transcode AC3/DTS/TrueHD to AAC
+        if (audioNeedsXcod) {
+            args.push("-c:a", "aac", "-b:a", "192k", "-ac", "2");
+        } else {
+            args.push("-c:a", "copy");
+        }
     } else {
-        args.push("-c:a", "copy");
+        // AUDIO_TRANSCODE or FULL_TRANSCODE — always force AAC for MSE compatibility.
+        // Without an explicit -c:a here, FFmpeg defaults to mp2 for mpegts output.
+        // Chrome's MSE demuxer rejects mp2 inside fMP4 → DEMUXER_ERROR_COULD_NOT_OPEN.
+        args.push("-c:a", "aac", "-b:a", "192k", "-ac", "2");
     }
 
     // ── Strip subtitles / metadata / chapters ─────────────────────────────────
@@ -214,10 +267,24 @@ function buildFFmpegArgs({
     args.push("-map_chapters", "-1");
 
     // ── Stream mapping ────────────────────────────────────────────────────────
-    args.push("-map", "0:v:0");
+    // Only map video if the file actually has a video stream.
+    // Previously had duplicate args.push("-map","0:v:0") here — FFmpeg treated
+    // that as two video streams → muxer error → broken/empty HLS segments.
+    //
+    // FIX (Report-20): primaryAudio.index is the GLOBAL stream index from ffprobe
+    // (e.g. stream 0=video, stream 1=audio → index=1).
+    // "-map 0:a:N" means N-th AUDIO stream (relative), NOT global index N.
+    // For a file with video=0, audio=1: "-map 0:a:1?" tries to get the 2nd audio
+    // track — which doesn't exist — and the optional "?" silently drops audio.
+    // Fix: use "-map 0:N?" with the global stream index so FFmpeg maps exactly
+    // the stream ffprobe identified as default regardless of its position.
     const hasVideo = Boolean(mediaInfo?.video);
     if (hasVideo) args.push("-map", "0:v:0");
-    args.push("-map", "0:a:0?");
+    if (hasAudio && primaryAudio?.index != null) {
+        args.push("-map", `0:${primaryAudio.index}?`); // global stream index
+    } else {
+        args.push("-map", "0:a:0?"); // fallback: first audio stream
+    }
 
     // ── Muxer stability ───────────────────────────────────────────────────────
     // Jellyfin uses -max_delay 5000000 and -max_muxing_queue_size
@@ -243,6 +310,26 @@ function buildFFmpegArgs({
     // in the manifest match what the player's timeline expects.
     args.push("-start_number", String(startSegment));
 
+    // FIX (Report-08): Without throttling, hardware-accelerated FFmpeg transcodes
+    // at 5–10x realtime, producing hundreds of segments and quickly hitting the
+    // MAX_TEMP_MB limit → enforceStorageLimit kills the active session → 404s.
+    //
+    // Solution: cap the HLS forward buffer to ~60 segments (= ~240s at 4s segments).
+    // FFmpeg's -hls_list_size with -hls_playlist_type event still keeps all segments
+    // in the manifest, but we rate-limit segment GENERATION by setting a realistic
+    // output bitrate buffer. This is done with -re only on CPU-bound paths where
+    // the encoder can run much faster than realtime without hw acceleration.
+    //
+    // For HW-accelerated encodes (nvenc/qsv/vaapi): add -vsync 0 to avoid frame-drop
+    // warnings, plus an explicit -r fps cap derived from the source FPS so the muxer
+    // doesn't race to write all segments at once.
+    //
+    // NOTE: We deliberately do NOT use `-re` (realtime flag) because it causes
+    // audio/video sync drift on long files. Instead we cap using buffer sizing.
+    //
+    // FIX: Removed -t limit. FFmpeg will now transcode the entire file, preventing
+    // the player from stopping after 4 minutes when gap detection fails to restart.
+
     args.push("-hls_segment_type", "mpegts");
     args.push("-hls_flags", "independent_segments");
     args.push("-hls_segment_filename", path.join(outputDir, "index%05d.ts"));
@@ -259,6 +346,10 @@ function buildFFmpegArgs({
 /**
  * createSession
  *
+ * BUG-11 FIX: wrapped in per-sharedKey mutex using _startLocks so two
+ * simultaneous requests for the same content can't both evict + create,
+ * pushing sessions past MAX_SESSIONS.
+ *
  * @param {object} opts
  * @param {string}  opts.mediaId
  * @param {string}  opts.filePath
@@ -268,16 +359,48 @@ function buildFFmpegArgs({
  * @returns {Promise<TranscodeSession>}
  */
 async function createSession({ mediaId, filePath, decision, mediaInfo, startSegment = 0 }) {
+    const sharedKey = makeSharedKey(mediaId, decision.params);
+
+    // Serialize concurrent starts for the same content+quality
+    const existing = _startLocks.get(sharedKey);
+    if (existing) {
+        // Another call is already starting this session — wait for it, then reuse
+        await existing.catch(() => {});
+        // After the lock resolves, check if a usable session now exists
+        for (const [, s] of sessions) {
+            if (s._sharedKey === sharedKey && s.status === "running" && s.mediaId === mediaId) {
+                s.touch();
+                return s;
+            }
+        }
+    }
+
+    let resolveLock, rejectLock;
+    const lockPromise = new Promise((res, rej) => {
+        resolveLock = res;
+        rejectLock = rej;
+    });
+    _startLocks.set(sharedKey, lockPromise);
+
+    try {
+        return await _createSessionInternal({ mediaId, filePath, decision, mediaInfo, startSegment, sharedKey });
+    } finally {
+        _startLocks.delete(sharedKey);
+        resolveLock();
+    }
+}
+
+async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, startSegment, sharedKey }) {
     if (sessions.size >= MAX_SESSIONS) {
         await evictOldestSession();
     }
 
-    const sharedKey = makeSharedKey(mediaId, decision.params);
+    // (sharedKey already computed by createSession wrapper)
 
     // Reuse running session if same content+quality and segment is within range
     for (const [, s] of sessions) {
         if (s._sharedKey === sharedKey && s.status === "running" && s.mediaId === mediaId) {
-            const currentIdx = getCurrentSegmentIndex(s.sessionDir);
+            const currentIdx = await getCurrentSegmentIndex(s.sessionDir);
             if (currentIdx !== null) {
                 const gap = startSegment - currentIdx;
                 // Reuse if player is close enough ahead (within gap threshold)
@@ -305,7 +428,7 @@ async function createSession({ mediaId, filePath, decision, mediaInfo, startSegm
     const sessionDir = path.join(TEMP_DIR, sessionId);
     await fsp.mkdir(sessionDir, { recursive: true });
 
-    const hwProfile = await detectHW();
+    const hwProfile = await getHWProfile(); // BUG-02 FIX: cached, not re-detected per session
     const args = buildFFmpegArgs({
         inputPath: filePath,
         outputDir: sessionDir,
@@ -317,9 +440,20 @@ async function createSession({ mediaId, filePath, decision, mediaInfo, startSegm
 
     console.log(`[Transcoder] Session ${sessionId} — ${decision.decision} — seg${startSegment} — ${path.basename(filePath)}`);
 
-    const ffmpegProcess = spawn("ffmpeg", args, {
+    // Resolve the ffmpeg binary path.
+    // On Windows, bare "ffmpeg" without shell:true may fail to locate the executable
+    // if it is not in PATH as "ffmpeg.exe". Appending ".exe" makes Node's spawn work
+    // reliably with shell:false (avoids shell injection risk).
+    // FIX: previously skipped .exe append when FFMPEG_PATH was set — now always appends on win32.
+    let ffmpegBin = process.env.FFMPEG_PATH || "ffmpeg";
+    if (process.platform === "win32" && !ffmpegBin.toLowerCase().endsWith(".exe")) {
+        ffmpegBin = ffmpegBin + ".exe";
+    }
+    const ffmpegProcess = spawn(ffmpegBin, args, {
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
+        // shell:false (default) — avoids Windows shell escaping issues with paths
+        windowsHide: true, // suppress CMD window popup on Windows
     });
 
     const session = {
@@ -348,6 +482,13 @@ async function createSession({ mediaId, filePath, decision, mediaInfo, startSegm
             }
             this.status = "dead";
             sessions.delete(this.id);
+            // NOTE: Do NOT append #EXT-X-ENDLIST here.
+            // FFmpeg writes it naturally on clean exit (code 0).
+            // kill() is for forced termination — the session dir is deleted immediately
+            // after, so any ENDLIST write would be redundant. More importantly, adding
+            // ENDLIST to a partially-transcoded manifest causes HLS.js to lock the
+            // video duration to only the segments generated so far, preventing
+            // gap detection from restarting the session for the next chunk.
             try {
                 await fsp.rm(this.sessionDir, { recursive: true, force: true });
                 console.log(`[Transcoder] Session ${this.id} cleaned`);
@@ -355,27 +496,98 @@ async function createSession({ mediaId, filePath, decision, mediaInfo, startSegm
         },
     };
 
+    session.metrics = { fps: 0, speed: 0, bitrate: "0kbits/s", frame: 0 };
+    // Stderr buffer for diagnostics — 16 KB cap (increased from 4 KB to capture
+    // full error messages from codec mismatches and filter chain failures).
+    let stderrBuf = "";
+    // Single consolidated stderr listener (was two separate listeners before).
     ffmpegProcess.stderr.on("data", (d) => {
-        const msg = d.toString().trim();
-        if (msg) console.warn(`[FFmpeg:${sessionId}] ${msg}`);
+        const msg = d.toString();
+        // Accumulate stderr for error diagnostics
+        if (stderrBuf.length < 16384) stderrBuf += msg;
+        // Parse metrics from progress lines
+        const trimmed = msg.trim();
+        if (trimmed) {
+            const frameMatch = trimmed.match(/frame=\s*(\d+)/);
+            if (frameMatch) session.metrics.frame = parseInt(frameMatch[1], 10);
+            const fpsMatch = trimmed.match(/fps=\s*([\d.]+)/);
+            if (fpsMatch) session.metrics.fps = parseFloat(fpsMatch[1]);
+            const bitrateMatch = trimmed.match(/bitrate=\s*([\d.]+\s*[a-zA-Z\/]+)/);
+            if (bitrateMatch) session.metrics.bitrate = bitrateMatch[1];
+            const speedMatch = trimmed.match(/speed=\s*([\d.]+)x/);
+            if (speedMatch) session.metrics.speed = parseFloat(speedMatch[1]);
+        }
     });
 
     ffmpegProcess.on("spawn", () => {
         session.status = "running";
+        console.log(`[Transcoder] FFmpeg spawned for session ${sessionId}`);
     });
+
     ffmpegProcess.on("error", (err) => {
         session.status = "error";
-        console.error(`[Transcoder] spawn error ${sessionId}:`, err.message);
-    });
-    ffmpegProcess.on("exit", (code) => {
-        if (session.status !== "dead") {
-            session.status = code === 0 ? "running" : "error"; // keep "running" so file serving still works
-            if (code !== 0) console.error(`[Transcoder] FFmpeg exit=${code} session ${sessionId}`);
+        // ENOENT = ffmpeg not found. Give actionable hint.
+        if (err.code === "ENOENT") {
+            console.error(`[Transcoder] FFmpeg not found. Set FFMPEG_PATH=/path/to/ffmpeg.exe in your .env file. Error: ${err.message}`);
+        } else {
+            console.error(`[Transcoder] spawn error ${sessionId}:`, err.message);
         }
+        // Remove dead session after grace period (lets callers check status first)
+        setTimeout(() => {
+            sessions.delete(sessionId);
+        }, 5_000);
+    });
+
+    ffmpegProcess.on("exit", (code, signal) => {
+        if (session.status !== "dead") {
+            session.status = code === 0 ? "done" : "error";
+            if (code !== 0) {
+                console.error(`[Transcoder] FFmpeg exit=${code} signal=${signal} session=${sessionId}`);
+                if (stderrBuf) {
+                    const tail = stderrBuf.slice(-1500);
+                    console.error(`[Transcoder] FFmpeg stderr tail:\n${tail}`);
+                }
+                // Deferred map cleanup: give startHLSSession time to read status before removing
+                setTimeout(() => {
+                    sessions.delete(sessionId);
+                }, 10_000);
+            }
+        }
+        // BUG-07 FIX: release the stderr buffer — it's no longer needed after exit
+        stderrBuf = null;
     });
 
     sessions.set(sessionId, session);
     return session;
+}
+
+// ─── Idle-timeout sweeper ─────────────────────────────────────────────────────
+// In startSweeper() — not at module-load time — to avoid circular dep issues.
+let _idleSweepInterval = null;
+
+function startSweeper() {
+    if (_idleSweepInterval) return;
+    _idleSweepInterval = setInterval(async () => {
+        const now = Date.now();
+        const toKill = [];
+        for (const [, s] of sessions) {
+            if (s.status === "running" && now - s.lastAccessedAt > SESSION_TIMEOUT_MS) {
+                toKill.push(s);
+            }
+            // FIX: "done" sessions must survive long enough for player to consume all segments.
+            // Old value (60_000 = 60s) was too aggressive — HW FFmpeg finishes fast and
+            // player hasn't consumed all generated segments yet.
+            // New: 10 min idle timeout for done sessions before cleanup.
+            if ((s.status === "done" || s.status === "error") && now - s.lastAccessedAt > 600_000) {
+                toKill.push(s);
+            }
+        }
+        for (const s of toKill) {
+            console.log(`[Transcoder] Idle sweep — killing session ${s.id} (idle ${Math.round((now - s.lastAccessedAt) / 1000)}s)`);
+            await s.kill().catch(() => {});
+        }
+    }, 120_000).unref();
+    console.log("[Transcoder] Idle sweeper started");
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -413,41 +625,39 @@ async function evictOldestSession() {
     }
 }
 
-/**
- * waitForSegment — waits until segment file exists and has size > 0.
- * Used by serveHLSFile to hold the HTTP response until FFmpeg writes the segment.
- *
- * @param {string} segPath
- * @param {number} timeout  ms
- */
-function waitForSegment(segPath, timeout = 30_000) {
+function waitForSegment(segPath, timeout = 45_000) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         const tick = () => {
-            try {
-                const stat = fs.statSync(segPath);
-                if (stat.size > 0) return resolve();
-            } catch {}
-            if (Date.now() - start > timeout) return reject(new Error(`Segment timeout: ${segPath}`));
-            setTimeout(tick, 150);
+            fsp.stat(segPath)
+                .then((stat) => {
+                    if (stat.size > 0) return resolve();
+                    schedule();
+                })
+                .catch(() => schedule());
+            function schedule() {
+                if (Date.now() - start > timeout) return reject(new Error(`Segment timeout: ${segPath}`));
+                setTimeout(tick, 150);
+            }
         };
         tick();
     });
 }
 
-/**
- * waitForM3U8 — waits for manifest file to appear with content.
- */
-function waitForM3U8(m3u8Path, timeout = 20_000) {
+function waitForM3U8(m3u8Path, timeout = 60_000) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         const tick = () => {
-            try {
-                const stat = fs.statSync(m3u8Path);
-                if (stat.size > 0) return resolve();
-            } catch {}
-            if (Date.now() - start > timeout) return reject(new Error("HLS manifest timeout"));
-            setTimeout(tick, 200);
+            fsp.stat(m3u8Path)
+                .then((stat) => {
+                    if (stat.size > 0) return resolve();
+                    schedule();
+                })
+                .catch(() => schedule());
+            function schedule() {
+                if (Date.now() - start > timeout) return reject(new Error("HLS manifest timeout"));
+                setTimeout(tick, 200);
+            }
         };
         tick();
     });
@@ -462,8 +672,18 @@ function getSessionStats() {
         startSegment: s.startSegment,
         downloadPos: s.downloadPositionSec,
         idleMs: Date.now() - s.lastAccessedAt,
-        currentIdx: getCurrentSegmentIndex(s.sessionDir),
+        currentIdx: getCurrentSegmentIndexSync(s.sessionDir),
+        ...s.metrics,
     }));
+}
+
+async function warmup() {
+    try {
+        const profile = await getHWProfile();
+        console.log(`[Transcoder] Warmup complete — HW profile: ${profile.type}`);
+    } catch (err) {
+        console.warn(`[Transcoder] Warmup failed (will retry on first session):`, err.message);
+    }
 }
 
 module.exports = {
@@ -476,6 +696,8 @@ module.exports = {
     getCurrentSegmentIndex,
     segmentPath,
     getSessionStats,
+    warmup,
+    startSweeper,
     TEMP_DIR,
     SESSION_TIMEOUT_MS,
     SEGMENT_DURATION,

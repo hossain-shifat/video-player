@@ -4,7 +4,8 @@ import { api } from "./client";
 
 /** GET /api/user/watchlist */
 export function getWatchlist() {
-    return api.get("/api/user/watchlist");
+    // skipAuthHandler: background fetch — don't open modal on 401
+    return api.get("/api/user/watchlist", { skipAuthHandler: true });
 }
 
 /**
@@ -25,7 +26,8 @@ export function removeFromWatchlist(id) {
 
 /** GET /api/user/favourites */
 export function getFavourites() {
-    return api.get("/api/user/favourites");
+    // skipAuthHandler: background fetch — don't open modal on 401
+    return api.get("/api/user/favourites", { skipAuthHandler: true });
 }
 
 /**

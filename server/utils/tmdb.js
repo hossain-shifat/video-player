@@ -185,6 +185,101 @@ function pickBestResult(results, queryTitle, year, dateField) {
     return bestByScore(results);
 }
 
+const LOGO_SIZE = "w185";
+
+// ─── New helper functions (reviews, OMDB, content rating, etc.) ───────────────
+
+// Silent fetch — returns null on error (for optional enrichment calls)
+async function tmdbFetchSafe(endpoint, params = {}) {
+    try {
+        return await tmdbFetch(endpoint, params);
+    } catch {
+        return null;
+    }
+}
+
+// Collect review IDs only — frontend queries /api/review/:id for full data
+async function fetchReviews(endpoint) {
+    const [p1, p2] = await Promise.all([tmdbFetchSafe(`${endpoint}/reviews`, { page: 1 }), tmdbFetchSafe(`${endpoint}/reviews`, { page: 2 })]);
+    const all = [...(p1?.results ?? []), ...(p2?.results ?? [])];
+    return all.slice(0, 10).map((r) => r.id);
+}
+
+// IMDb/RT/Metascore via OMDB (optional — needs OMDB_API_KEY in .env)
+async function fetchOmdbRatings(imdbId) {
+    if (!imdbId) return {};
+    const omdbKey = process.env.OMDB_API_KEY;
+    if (!omdbKey) return {};
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5_000);
+        let res;
+        try {
+            res = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=${omdbKey}`, { signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok) return {};
+        const d = await res.json();
+        if (d.Response === "False") return {};
+        const rt = (d.Ratings || []).find((r) => r.Source === "Rotten Tomatoes");
+        return {
+            imdbRating: d.imdbRating !== "N/A" ? parseFloat(d.imdbRating) : null,
+            imdbVotes: d.imdbVotes !== "N/A" ? d.imdbVotes.replace(/,/g, "") : null,
+            rottenTomatoes: rt?.Value ?? null,
+            metascore: d.Metascore !== "N/A" ? parseInt(d.Metascore, 10) : null,
+        };
+    } catch {
+        return {};
+    }
+}
+
+// Content rating (US): "PG-13", "TV-MA", etc.
+async function fetchContentRating(mediaId, type) {
+    if (type === "movie") {
+        const data = await tmdbFetchSafe(`/movie/${mediaId}/release_dates`);
+        const us = (data?.results || []).find((r) => r.iso_3166_1 === "US");
+        return us?.release_dates?.[0]?.certification || null;
+    }
+    const data = await tmdbFetchSafe(`/tv/${mediaId}/content_ratings`);
+    const us = (data?.results || []).find((r) => r.iso_3166_1 === "US");
+    return us?.rating || null;
+}
+
+// Top 20 TMDB keywords
+async function fetchKeywords(mediaId, type) {
+    const endpoint = type === "movie" ? `/movie/${mediaId}/keywords` : `/tv/${mediaId}/keywords`;
+    const data = await tmdbFetchSafe(endpoint);
+    const arr = data?.keywords ?? data?.results ?? [];
+    return arr.slice(0, 20).map((k) => ({ id: k.id, name: k.name }));
+}
+
+// Cast with tmdbPersonId (for future /person/:id lookups)
+function shapeCast(castArr, limit = 15) {
+    return (castArr || []).slice(0, limit).map((c) => ({
+        tmdbPersonId: c.id,
+        name: c.name,
+        character: c.character,
+        order: c.order ?? null,
+        photo: imgUrl("w185", c.profile_path),
+    }));
+}
+
+// Key crew: director, writers, DP, composer
+function shapeCrew(crewArr) {
+    const KEEP = new Set(["Director", "Screenplay", "Writer", "Story", "Original Music Composer", "Director of Photography"]);
+    return (crewArr || [])
+        .filter((c) => KEEP.has(c.job))
+        .slice(0, 10)
+        .map((c) => ({
+            tmdbPersonId: c.id,
+            name: c.name,
+            job: c.job,
+            department: c.department,
+            photo: imgUrl("w185", c.profile_path),
+        }));
+}
+
 // ─── Movie endpoints ──────────────────────────────────────────────────────────
 
 async function searchMovie(title, year = null) {
@@ -201,8 +296,23 @@ async function searchMovie(title, year = null) {
 }
 
 async function getMovieDetails(tmdbId) {
-    const data = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: "credits,videos" });
+    const data = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: "credits,videos,external_ids" });
+
+    // Parallel optional enrichment (all safe — won't throw)
+    const [reviews, contentRating, keywords] = await Promise.all([fetchReviews(`/movie/${tmdbId}`), fetchContentRating(tmdbId, "movie"), fetchKeywords(tmdbId, "movie")]);
+
+    const imdbId = data.external_ids?.imdb_id ?? null;
+    const omdbRatings = await fetchOmdbRatings(imdbId);
+
+    const allVideos = (data.videos?.results || []).filter((v) => v.site === "YouTube");
+    const trailer = allVideos.find((v) => v.type === "Trailer")?.key || null;
+    const videos = allVideos
+        .filter((v) => ["Trailer", "Teaser", "Clip", "Featurette"].includes(v.type))
+        .slice(0, 5)
+        .map((v) => ({ type: v.type, key: v.key, name: v.name }));
+
     return {
+        // ── Existing fields (unchanged) ──
         tmdbId: data.id,
         type: "movie",
         title: data.title,
@@ -216,15 +326,42 @@ async function getMovieDetails(tmdbId) {
         genres: (data.genres || []).map((g) => g.name),
         poster: imgUrl(POSTER_SIZE, data.poster_path),
         backdrop: imgUrl(BACKDROP_SIZE, data.backdrop_path),
-        cast: (data.credits?.cast || []).slice(0, 10).map((c) => ({
-            name: c.name,
-            character: c.character,
-            photo: imgUrl("w185", c.profile_path),
-        })),
-        trailer: (data.videos?.results || []).find((v) => v.type === "Trailer" && v.site === "YouTube")?.key || null,
+        trailer, // back-compat: still single key string
         tagline: data.tagline || null,
         status: data.status || null,
         language: data.original_language || null,
+        // ── Upgraded cast (added tmdbPersonId + order) ──
+        cast: shapeCast(data.credits?.cast, 15),
+        // ── New fields ──
+        imdbId,
+        contentRating,
+        popularity: data.popularity ? Math.round(data.popularity * 10) / 10 : null,
+        budget: data.budget || null,
+        revenue: data.revenue || null,
+        ratings: {
+            tmdb: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
+            tmdbVotes: data.vote_count || 0,
+            imdb: omdbRatings.imdbRating ?? null,
+            imdbVotes: omdbRatings.imdbVotes ?? null,
+            rottenTomatoes: omdbRatings.rottenTomatoes ?? null,
+            metascore: omdbRatings.metascore ?? null,
+        },
+        crew: shapeCrew(data.credits?.crew),
+        videos,
+        keywords,
+        reviews,
+        collection: data.belongs_to_collection
+            ? {
+                  id: data.belongs_to_collection.id,
+                  name: data.belongs_to_collection.name,
+                  poster: imgUrl(POSTER_SIZE, data.belongs_to_collection.poster_path),
+                  backdrop: imgUrl(BACKDROP_SIZE, data.belongs_to_collection.backdrop_path),
+              }
+            : null,
+        spokenLanguages: (data.spoken_languages || []).map((l) => ({
+            code: l.iso_639_1,
+            name: l.english_name || l.name,
+        })),
     };
 }
 
@@ -244,8 +381,22 @@ async function searchTV(title, year = null) {
 }
 
 async function getTVDetails(tmdbId) {
-    const data = await tmdbFetch(`/tv/${tmdbId}`, { append_to_response: "credits,videos" });
+    const data = await tmdbFetch(`/tv/${tmdbId}`, { append_to_response: "credits,videos,external_ids" });
+
+    const [reviews, contentRating, keywords] = await Promise.all([fetchReviews(`/tv/${tmdbId}`), fetchContentRating(tmdbId, "tv"), fetchKeywords(tmdbId, "tv")]);
+
+    const imdbId = data.external_ids?.imdb_id ?? null;
+    const omdbRatings = await fetchOmdbRatings(imdbId);
+
+    const allVideos = (data.videos?.results || []).filter((v) => v.site === "YouTube");
+    const trailer = allVideos.find((v) => v.type === "Trailer")?.key || null;
+    const videos = allVideos
+        .filter((v) => ["Trailer", "Teaser", "Clip"].includes(v.type))
+        .slice(0, 5)
+        .map((v) => ({ type: v.type, key: v.key, name: v.name }));
+
     return {
+        // ── Existing fields (unchanged) ──
         tmdbId: data.id,
         type: "series",
         title: data.name,
@@ -261,13 +412,36 @@ async function getTVDetails(tmdbId) {
         totalSeasons: data.number_of_seasons || null,
         totalEpisodes: data.number_of_episodes || null,
         status: data.status || null,
-        cast: (data.credits?.cast || []).slice(0, 10).map((c) => ({
-            name: c.name,
-            character: c.character,
-            photo: imgUrl("w185", c.profile_path),
-        })),
-        trailer: (data.videos?.results || []).find((v) => v.type === "Trailer" && v.site === "YouTube")?.key || null,
+        trailer, // back-compat: single key string
         language: data.original_language || null,
+        // ── Upgraded cast (added tmdbPersonId + order) ──
+        cast: shapeCast(data.credits?.cast, 15),
+        // ── New fields ──
+        imdbId,
+        contentRating,
+        popularity: data.popularity ? Math.round(data.popularity * 10) / 10 : null,
+        episodeRuntime: data.episode_run_time?.[0] ?? null,
+        inProduction: data.in_production ?? null,
+        lastAirDate: data.last_air_date || null,
+        nextEpisodeAirDate: data.next_episode_to_air?.air_date ?? null,
+        ratings: {
+            tmdb: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
+            tmdbVotes: data.vote_count || 0,
+            imdb: omdbRatings.imdbRating ?? null,
+            imdbVotes: omdbRatings.imdbVotes ?? null,
+            rottenTomatoes: omdbRatings.rottenTomatoes ?? null,
+            metascore: omdbRatings.metascore ?? null,
+        },
+        crew: shapeCrew(data.credits?.crew),
+        videos,
+        keywords,
+        reviews,
+        networks: (data.networks || []).slice(0, 3).map((n) => ({
+            id: n.id,
+            name: n.name,
+            logo: imgUrl(LOGO_SIZE, n.logo_path),
+            country: n.origin_country,
+        })),
     };
 }
 
@@ -278,8 +452,10 @@ async function getSeasonDetails(tmdbId, seasonNumber) {
         name: data.name,
         overview: data.overview || null,
         poster: imgUrl(POSTER_SIZE, data.poster_path),
+        airDate: data.air_date || null,
         episodeCount: (data.episodes || []).length,
         episodes: (data.episodes || []).map((ep) => ({
+            // ── Existing fields ──
             episode: ep.episode_number,
             title: ep.name,
             overview: ep.overview || null,
@@ -287,6 +463,15 @@ async function getSeasonDetails(tmdbId, seasonNumber) {
             runtime: ep.runtime || null,
             still: imgUrl(STILL_SIZE, ep.still_path),
             rating: ep.vote_average ? Math.round(ep.vote_average * 10) / 10 : null,
+            // ── New fields ──
+            tmdbEpisodeId: ep.id,
+            voteCount: ep.vote_count || 0,
+            guestStars: (ep.guest_stars || []).slice(0, 5).map((g) => ({
+                tmdbPersonId: g.id,
+                name: g.name,
+                character: g.character,
+                photo: imgUrl("w185", g.profile_path),
+            })),
         })),
     };
 }

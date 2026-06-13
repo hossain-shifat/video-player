@@ -18,7 +18,7 @@ const CategoryBar = ({ onSelect }) => {
             <p className="text-xs text-gray-500 mb-3">On Demand</p>
 
             <div
-                className="flex flex-nowrap gap-4 overflow-x-auto overflow-y-hidden pb-2 w-full"
+                className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden pb-2 w-full"
                 style={{
                     scrollbarWidth: "none",
                     msOverflowStyle: "none",

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 50">
+  <defs>
+    <style>
+      <![CDATA[
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@900&display=swap');
+      ]]>
+    </style>
+  </defs>
+
+  <text x="10" y="40" font-family="'IBM Plex Sans'" font-weight="900" fill="#de1d3f">
+    <tspan font-size="42">F</tspan>
+    <tspan font-size="30" letter-spacing="-2">lu</tspan>
+    <tspan font-size="42">X</tspan>
+  </text>
+</svg>
