@@ -276,7 +276,7 @@ function ResultsList({ results, query, onSelect, limit = 12 }) {
 }
 
 // ─── Search component ─────────────────────────────────────────────────────────
-export default function Search({ className = "" }) {
+export default function Search({ className = "", hideMobileBtn = false, openMobileRef = null }) {
     const { movies, series, anime, search, searchResults, loading } = useApi();
     const navigate = useNavigate();
 
@@ -289,6 +289,19 @@ export default function Search({ className = "" }) {
     const mobileInputRef = useRef(null);
     const containerRef = useRef(null);
     const debounceRef = useRef(null);
+    const mountedRef = useRef(true);
+
+    // Expose openMobile to parent via ref
+    if (openMobileRef) openMobileRef.current = () => setMobileOpen(true);
+
+    // Clear debounce + mark unmounted on cleanup
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            clearTimeout(debounceRef.current);
+        };
+    }, []);
 
     const runSearch = useCallback(
         (val) => {
@@ -308,8 +321,11 @@ export default function Search({ className = "" }) {
 
             // Debounced API call — catches files not yet surfaced
             debounceRef.current = setTimeout(async () => {
+                if (!mountedRef.current) return;
+                // Capture query at schedule time; abort if it changed by the time we run
+                const capturedVal = val;
                 try {
-                    await search(val);
+                    await search(capturedVal);
                 } catch {
                     /* silent */
                 }
@@ -320,9 +336,9 @@ export default function Search({ className = "" }) {
 
     // Merge API flat results when they arrive
     useEffect(() => {
-        if (!query.trim()) return;
+        if (!query.trim() || !mountedRef.current) return;
         setResults((prev) => mergeApiResults(prev, searchResults, query));
-    }, [searchResults]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [searchResults, query]); // query dep prevents stale merge after clear
 
     // Outside click closes desktop dropdown
     useEffect(() => {
@@ -356,6 +372,7 @@ export default function Search({ className = "" }) {
     }
 
     function clear() {
+        clearTimeout(debounceRef.current);
         setQuery("");
         setResults([]);
         setOpen(false);
@@ -387,7 +404,9 @@ export default function Search({ className = "" }) {
                     className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 w-full
                                  transition-all duration-200 ${open ? "ring-1 ring-white/30 brightness-110" : ""}`}>
                     {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
-                    <label htmlFor="desktop-search" className="sr-only">Search</label>
+                    <label htmlFor="desktop-search" className="sr-only">
+                        Search
+                    </label>
                     <input
                         id="desktop-search"
                         name="q"
@@ -425,13 +444,15 @@ export default function Search({ className = "" }) {
             </div>
 
             {/* ── Mobile icon trigger ── */}
-            <button
-                onClick={() => setMobileOpen(true)}
-                className="sm:hidden inline-flex items-center justify-center w-9 h-9
+            {!hideMobileBtn && (
+                <button
+                    onClick={() => setMobileOpen(true)}
+                    className="sm:hidden inline-flex items-center justify-center w-9 h-9
                            rounded-md hover:bg-white/15 transition-colors text-base-content"
-                aria-label="Search">
-                <SearchIcon size={18} />
-            </button>
+                    aria-label="Search">
+                    <SearchIcon size={18} />
+                </button>
+            )}
 
             {/* ── Mobile overlay ── */}
             {mobileOpen && (
@@ -449,7 +470,9 @@ export default function Search({ className = "" }) {
                         </button>
                         <div className={`flex-1 flex items-center gap-2 bg-base-300 rounded-md px-3 h-9`}>
                             {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
-                            <label htmlFor="mobile-search" className="sr-only">Search</label>
+                            <label htmlFor="mobile-search" className="sr-only">
+                                Search
+                            </label>
                             <input
                                 id="mobile-search"
                                 name="q"

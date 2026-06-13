@@ -25,7 +25,7 @@ const Home = () => {
     };
 
     return (
-        <div className="flex flex-col gap-8">
+        <div className="flex flex-col gap-4">
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
             {/* TODO: Here Add History As Currently Watchig */}
 

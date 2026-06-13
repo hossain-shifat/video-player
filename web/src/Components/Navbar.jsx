@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { NavLink, Link } from "react-router";
-import { BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut, LogIn, Bell, LayoutDashboard } from "lucide-react";
+import { Search as SearchIcon, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut, LogIn, Bell, LayoutDashboard } from "lucide-react";
 import Logo from "./Logo";
 import Search from "./Search";
 import { useAuth } from "../auth/AuthContext";
@@ -44,6 +44,7 @@ function navLinkClass({ isActive }) {
 const Navbar = () => {
     const [profileOpen, setProfileOpen] = useState(false);
     const menuRef = useRef(null);
+    const searchMobileRef = useRef(null);
 
     const { user, isAuthenticated, logout } = useAuth();
     const { openAuthModal } = useAuthModal();
@@ -85,8 +86,8 @@ const Navbar = () => {
                     <Logo />
                 </div>
 
-                {/* Search — handles desktop & mobile internally */}
-                <Search className="flex-1 max-w-xs lg:max-w-sm xl:max-w-md" />
+                {/* Search — desktop bar; mobile trigger rendered in right group */}
+                <Search className="ml-4 w-48 lg:w-52 xl:w-64 shrink-0" hideMobileBtn openMobileRef={searchMobileRef} />
 
                 {/* Center nav links — desktop only */}
                 <div className="hidden lg:flex items-center gap-0.5 absolute left-1/2 -translate-x-1/2">
@@ -125,7 +126,13 @@ const Navbar = () => {
                         <span>Watchlist</span>
                     </NavLink>
 
-
+                    {/* Search icon — mobile only, before watchlist */}
+                    <button
+                        onClick={() => searchMobileRef.current?.()}
+                        className="sm:hidden inline-flex items-center justify-center w-9 h-9 rounded-md hover:bg-white/15 transition-colors text-white/80 hover:text-white"
+                        aria-label="Search">
+                        <SearchIcon size={20} />
+                    </button>
 
                     {/* Watchlist icon — mobile/tablet */}
                     <div className="tooltip tooltip-bottom lg:hidden" data-tip="Watchlist">
