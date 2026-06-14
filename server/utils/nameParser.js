@@ -548,3 +548,254 @@ module.exports = {
     parseFilename: parseFilenameAdvanced,
     parseFilenameOriginal: parseFilename,
 };
+
+// ============================================================================
+// ─── v2 PATCH LAYER — New filename pattern support ───────────────────────────
+// ============================================================================
+
+// Known non-anime bracket groups (scene/site groups that use [brackets])
+// These must NOT trigger the bracket→anime heuristic
+const _NON_ANIME_BRACKET_RE =
+    /^\[(yts|yify|tgx|psa|psarips|galaxyrg|rarbg|ettv|eztv|playbd|bhd|hdhub|hallowed|ntb|sparks|fgt|ion10|evo|ctx|ctrlhd|d3g|moviehub|moviezverse|worldfree4u|katmoviehd|mlwbd|pahe|scenerG?|movielink|kHD|[A-Z]{2,8})\b/i;
+
+// Known anime fansub groups that legitimately use [brackets]
+const _ANIME_BRACKET_RE =
+    /^\[(SubsPlease|Erai-raws|EraiRaws|HorribleSubs|Anime\.Time|AnimeRG|DeadToonsIndia|DeadToons|Judas|Moozzi2|BakedFish|LoliHouse|NyaaSubs|Shiro|SCY|Cleo|beatrice|tenshi|GS-Team|EMBER|AnimeTime|AnimeFlix|SmallSizedHD|ASW|GST|Commie|Underwater|Reaktor|kBaraka|GJM|NanDesuKa|Kametsu|LostYears|Funimation|YURI)\b/i;
+
+// Paren site prefix: "(Movies4u.CC)." "(MovieHub)." "(BanglaFlix)."
+// Matches opening paren group that looks like a site/group tag (3-40 chars, not just a year)
+const _PAREN_SITE_RE = /^\(([^)]{3,40})\)[.\s]*/;
+
+// "Episode NNN" word form not handled by base BARE_EPISODE_RE
+const _WORD_EPISODE_RE = /\bEpisode[\s._-]?(\d{1,4})\b/i;
+
+// Anime "Title - 500 END" final episode
+const _END_EP_RE = /[-.\s]+(\d{2,4})[\s.]*(?:END|FINAL)\b/i;
+
+// Anime absolute ep "Title - 1123" or "Title.-.01." (allows 1-4 digits, dot or space sep)
+const _ABS4_RE = /[-–][.\s]+(\d{1,4})(?:[.\s]*[\[(]|[.\s]*$|[.]\d+p)/i;
+
+// Multi-season range: S01-S05
+const _MULTI_SEASON_RE = /[Ss](\d{1,2})[-–][Ss](\d{1,2})\b/;
+
+// Compact episode "514" = S05E14 (3-digit where d1=season, d23=episode)
+// Only if no year/season found and episode ≤22
+const _COMPACT_SNE_RE = /(?:^|[\s.])([1-9])(\d{2})(?:[\s.]|$)/;
+
+const _origParseFilenameAdvanced = parseFilenameAdvanced;
+
+function parseFilenamePatched(filename) {
+    // ── STEP 1: Strip paren site prefix ──────────────────────────────────
+    let fn = filename;
+    let parenSite = null;
+    const pm = fn.match(_PAREN_SITE_RE);
+    if (pm) {
+        const inside = pm[1];
+        // Only strip if it looks like a site name (not a year, not a person name in parens)
+        const isYear = /^\d{4}$/.test(inside);
+        const hasSiteLook =
+            /^[A-Za-z]/.test(inside) &&
+            (/[A-Z][a-z]/.test(inside) || // CamelCase
+                /[A-Za-z]\.[A-Za-z]/.test(inside) || // dot-domain
+                /^[A-Z0-9]+$/.test(inside) || // ALL CAPS
+                inside.length >= 4);
+        if (!isYear && hasSiteLook) {
+            parenSite = inside.toLowerCase();
+            fn = fn.slice(pm[0].length);
+        }
+    }
+
+    // ── STEP 2: Run original advanced parser on cleaned filename ──────────
+    let adv = _origParseFilenameAdvanced(fn);
+
+    // ── STEP 3: Fix bracket→anime over-triggering ─────────────────────────
+    // Original: "if file starts with [bracket] → type=anime"
+    // Fix: only apply if group is known anime fansub
+    const bracketMatch = fn.match(/^\[([^\]]+)\]/);
+    if (bracketMatch && adv.type === "anime") {
+        const grp = bracketMatch[1];
+        const isKnownAnime = _ANIME_BRACKET_RE.test(`[${grp}]`);
+        const hasAnimeSignal = /\b(OVA|ONA|OAD|anime|[\u3000-\u9fff])\b/i.test(fn);
+        // All-caps groups (MLWBD, EMBER, TGx, etc.) + no anime signal → revert
+        if (!isKnownAnime && !hasAnimeSignal) {
+            adv.type = adv.season !== null || adv.episodes.length > 0 ? "series" : "movie";
+        }
+    }
+
+    // ── STEP 4: Paren site → anime type detection ─────────────────────────
+    // "(AnimeFlix)." → type should be anime if it has SxxExx
+    if (parenSite) {
+        if ((parenSite.includes("anime") || parenSite.includes("deadtoon")) && adv.type === "series") {
+            adv.type = "anime";
+        }
+        // Bangla site prefix → add language
+        if (parenSite.includes("bangla")) {
+            adv.languages = [...new Set([...(adv.languages || []), "bn"])];
+        }
+    }
+
+    // ── STEP 5: "Episode NNN" word form ───────────────────────────────────
+    if (adv.episodes.length === 0) {
+        const ew = fn.match(_WORD_EPISODE_RE);
+        if (ew) {
+            const ep = parseInt(ew[1], 10);
+            adv.episodes = [ep];
+            adv.episode = ep;
+            if (adv.type === "movie") adv.type = "series";
+            // Clean from title
+            adv.title = adv.title.replace(new RegExp(`\\s*Episode[\\s._-]?0*${ep}\\s*$`, "i"), "").trim();
+        }
+    }
+
+    // ── STEP 6: Anime "NNN END/FINAL" episode ─────────────────────────────
+    if (adv.type === "anime" && adv.episodes.length === 0) {
+        const em = fn.match(_END_EP_RE);
+        if (em) {
+            const ep = parseInt(em[1], 10);
+            adv.episodes = [ep];
+            adv.episode = ep;
+            adv.title = adv.title.replace(/\s*[-–]\s*\d+(?:[\s.]*(?:END|FINAL))?\s*$/i, "").trim();
+        }
+    }
+
+    // ── STEP 7: Anime absolute episode "- 1123" or "-.01." ────────────────
+    if (adv.type === "anime" && adv.episodes.length === 0) {
+        const am = fn.match(_ABS4_RE);
+        if (am) {
+            const ep = parseInt(am[1], 10);
+            adv.episodes = [ep];
+            adv.episode = ep;
+            adv.title = adv.title.replace(/\s*[-–]\s*\d+\s*$/i, "").trim();
+        }
+    }
+
+    // ── STEP 8: Multi-season range → series ───────────────────────────────
+    const msm = fn.match(_MULTI_SEASON_RE);
+    if (msm) {
+        adv.type = "series";
+        adv.season = parseInt(msm[1], 10);
+    }
+
+    // ── STEP 9: Compact SNE "514" = S05E14 ────────────────────────────────
+    // Only if no season/episode/year detected and it follows the title
+    if (adv.season === null && adv.episodes.length === 0 && !adv.year) {
+        // Get the base without extension
+        const base = fn.replace(/\.\w{2,4}$/, "");
+        const cm = base.match(_COMPACT_SNE_RE);
+        if (cm) {
+            const s = parseInt(cm[1], 10);
+            const e = parseInt(cm[2], 10);
+            // Episode must be ≤22 to avoid false positives
+            if (e >= 1 && e <= 22) {
+                adv.season = s;
+                adv.episode = e;
+                adv.episodes = [e];
+                adv.type = "series";
+                // Strip compact code from title
+                const compCode = cm[1] + cm[2];
+                adv.title = adv.title.replace(new RegExp(`\\s+${compCode}(?:\\s.*)?$`), "").trim();
+            }
+        }
+    }
+
+    // ── STEP 10: (Copy) noise in title ────────────────────────────────────
+    if (adv.title) {
+        adv.title = adv.title.replace(/\s*\(copy(?:\s*\(\d+\))?\)\s*/gi, "").trim();
+    }
+
+    // ── STEP 11: Tilde episode range "01~04" → episode=1, episodeEnd=4 ────
+    // "[Erai-raws] Title - 01~04 [1080p]..." → ep=1, epEnd=4
+    if (adv.episodes.length === 0 && adv.type === "anime") {
+        const tildeMatch = fn.match(/[-–\s]+(\d{1,3})\s*~\s*(\d{1,3})/);
+        if (tildeMatch) {
+            const epStart = parseInt(tildeMatch[1], 10);
+            const epEnd = parseInt(tildeMatch[2], 10);
+            adv.episode = epStart;
+            adv.episodeEnd = epEnd;
+            adv.episodes = [];
+            for (let i = epStart; i <= epEnd; i++) adv.episodes.push(i);
+            // clean trailing "- 01~04" from title
+            adv.title = adv.title.replace(/\s*[-–]\s*\d+\s*~\s*\d+\s*$/, "").trim();
+        }
+    }
+
+    // ── STEP 12: "Dubbed" keyword → anime signal ──────────────────────────
+    // "Naruto Shippuden Episode 500 English Dubbed" → type=anime
+    // "Dubbed" alone is strong indicator (anime dubs are commonly labelled this way)
+    if (adv.type === "series" && /\bDubbed\b/i.test(fn)) {
+        adv.type = "anime";
+    }
+
+    // ── STEP 13: Anime title cleanup — strip trailing episode + lang noise ─
+    // "[Cleo] SPY x FAMILY - 12 (Dual Audio...)" → "SPY x FAMILY"
+    // After episode extracted, clean title of leftover "- NN (noise...)" suffix
+    if (adv.type === "anime" && adv.title) {
+        // Strip trailing "- NN (anything)" where NN matches a known episode
+        if (adv.episodes.length > 0) {
+            const ep = adv.episodes[0];
+            // Remove "- EP (junk" or "- EP" at end of title
+            adv.title = adv.title.replace(new RegExp(`\\s*[-–]\\s*0*${ep}(?:\\s*\\(.*)?$`), "").trim();
+        }
+        // Strip any trailing paren group that leaked (e.g. "(Dual Audio 10bit")
+        adv.title = adv.title.replace(/\s*\([^)]*$/, "").trim();
+        // Strip trailing "- NNN" or "- NN" that remains
+        adv.title = adv.title.replace(/\s*[-–]\s*\d{1,4}\s*$/, "").trim();
+    }
+
+    // ── STEP 14: "Episode NNN" → strip from anime title + set type anime ──
+    // "Naruto Shippuden Episode 500 English Dubbed" → title="Naruto Shippuden"
+    if (adv.type === "anime" && adv.title) {
+        const epWordInTitle = adv.title.match(/\s+Episode\s+\d+.*/i);
+        if (epWordInTitle) {
+            adv.title = adv.title.slice(0, epWordInTitle.index).trim();
+        }
+    }
+
+    // ── STEP 15: "Season N" leaking into title → strip ────────────────────
+    // "The Office US Season 4" → "The Office US"
+    // extractSmartTitle uses SEASON_ONLY_RE but title still bleeds in some paths
+    if (adv.title) {
+        adv.title = adv.title.replace(/\s+Season\s+\d+\s*$/i, "").trim();
+        // Also strip bare "S4" / "S04" at end if season already captured
+        if (adv.season !== null) {
+            adv.title = adv.title.replace(new RegExp(`\\s+S0?${adv.season}\\s*$`, "i"), "").trim();
+        }
+    }
+
+    // ── STEP 16: Numeric-title year bleed cleanup ──────────────────────────
+    // "2012 2009 REMASTERED" → title should be "2012" (year=2009, REMASTERED=edition)
+    // When title starts with a 4-digit number followed by a year, strip the year+noise
+    if (adv.title && adv.year) {
+        // Pattern: title = "<numericTitle> <year> [NOISE...]"
+        // e.g. "2012 2009 REMASTERED", "1923 2022"
+        const numTitleYearBleed = adv.title.match(new RegExp(`^(\\d{1,4}(?:\\s+[A-Za-z][A-Za-z0-9\\s]*)?)\\s+${adv.year}\\b(.*)$`));
+        if (numTitleYearBleed) {
+            // Only apply if the part before the year is plausibly a title (short numeric or short word)
+            const beforeYear = numTitleYearBleed[1].trim();
+            const afterYear = numTitleYearBleed[2].trim();
+            // Strip year and anything after it (noise like REMASTERED already in edition)
+            if (beforeYear.length > 0 && beforeYear.length <= 40) {
+                adv.title = beforeYear;
+            }
+        }
+        // Also strip trailing year if it somehow remains
+        adv.title = adv.title.replace(new RegExp(`\\s+${adv.year}\\s*$`), "").trim();
+    }
+
+    // ── STEP 17: Sync episode singular from episodes array ────────────────
+    // Some paths set adv.episodes but not adv.episode — keep them in sync
+    if (adv.episode === null && adv.episodes && adv.episodes.length > 0) {
+        adv.episode = adv.episodes[0];
+    }
+    if (adv.episodeEnd === null && adv.episodes && adv.episodes.length > 1) {
+        adv.episodeEnd = adv.episodes[adv.episodes.length - 1];
+    }
+
+    return adv;
+}
+
+// Re-export with patched version
+module.exports = {
+    parseFilename: parseFilenamePatched,
+    parseFilenameOriginal: parseFilename,
+};
