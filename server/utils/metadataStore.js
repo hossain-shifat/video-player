@@ -26,25 +26,55 @@ const PARSER_VERSION = 10;
 // from a bad API key or transient network failure blocking real lookups.
 const NOT_FOUND_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Season details TTL — 7 days. Season episode lists rarely change.
+// Key format: "_season:<tmdbId>:<seasonNumber>" — the underscore + word prefix
+// guarantees no collision with file IDs (which are base64url encoded paths).
+const SEASON_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 let store = new Map();
 let dirty = false;
 let saveTimer = null;
 let storeLoaded = false;
+// Single shared promise so concurrent calls to loadStore() all await the same
+// in-flight read instead of spawning multiple parallel fs.readFile calls.
+let _loadPromise = null;
 
 // ─── Disk I/O ─────────────────────────────────────────────────────────────────
 
-function loadStore() {
+// PERF FIX: loadStore is now async — uses non-blocking fs.promises.readFile
+// instead of fs.readFileSync. On large metadata.json files (100 MB+) this
+// prevents the Node event loop from freezing during the disk read phase.
+async function loadStore() {
     if (storeLoaded) return;
-    storeLoaded = true;
-    try {
-        const raw = fs.readFileSync(STORE_FILE, "utf-8");
-        const obj = JSON.parse(raw);
-        store = new Map(Object.entries(obj));
-        console.log(`[Metadata] Loaded ${store.size} cached entries`);
-    } catch {
-        store = new Map();
-        console.log("[Metadata] No cache file found, starting fresh");
-    }
+    if (_loadPromise) return _loadPromise;
+
+    _loadPromise = (async () => {
+        try {
+            const raw = await fs.promises.readFile(STORE_FILE, "utf-8");
+            const obj = JSON.parse(raw);
+            store = new Map(Object.entries(obj));
+            console.log(`[Metadata] Loaded ${store.size} cached entries`);
+            storeLoaded = true;
+        } catch {
+            store = new Map();
+            console.log("[Metadata] No cache file found, starting fresh");
+            storeLoaded = true;
+        } finally {
+            _loadPromise = null;
+        }
+    })();
+
+    return _loadPromise;
+}
+
+// PERF FIX: Wrap the CPU-bound JSON.stringify inside a setImmediate so the
+// event loop gets exactly one tick to service pending I/O (streams, API
+// requests) before we freeze it with serialization. This prevents the
+// ~500 ms stutter that large libraries caused on every periodic save.
+function yieldThenStringify(obj) {
+    return new Promise((resolve) => {
+        setImmediate(() => resolve(JSON.stringify(obj)));
+    });
 }
 
 function scheduleSave() {
@@ -59,7 +89,10 @@ function scheduleSave() {
             const tmp = `${STORE_FILE}.tmp.${process.pid}.${Date.now()}`;
             const fd = await fs.promises.open(tmp, "w");
             try {
-                await fd.writeFile(JSON.stringify(obj, null, 2), "utf-8");
+                // PERF FIX: Compact JSON + yield event loop via setImmediate
+                // before the CPU-heavy stringify runs.
+                const serialized = await yieldThenStringify(obj);
+                await fd.writeFile(serialized, "utf-8");
                 await fd.sync();
             } finally {
                 await fd.close();
@@ -83,8 +116,8 @@ function isCacheValid(entry) {
     return true;
 }
 
-function getCached(fileId) {
-    loadStore();
+async function getCached(fileId) {
+    await loadStore();
     const entry = store.get(fileId);
     if (!entry || !isCacheValid(entry)) return null;
     return entry;
@@ -129,11 +162,13 @@ function invalidateAll() {
     scheduleSave();
 }
 
-function purgeStaleEntries() {
-    loadStore();
+async function purgeStaleEntries() {
+    await loadStore();
     if (store.size === 0) return;
     let purged = 0;
     for (const [key, value] of store) {
+        // Season entries have their own TTL — skip here, getCachedSeason handles expiry
+        if (key.startsWith("_season:")) continue;
         if (!isCacheValid(value)) {
             store.delete(key);
             purged++;
@@ -160,7 +195,7 @@ function purgeStaleEntries() {
  * Genuine "no result" responses ARE cached (for NOT_FOUND_TTL_MS).
  */
 async function getMetadata(file) {
-    loadStore();
+    await loadStore();
 
     const cached = store.get(file.id);
     if (cached && isCacheValid(cached)) {
@@ -200,6 +235,80 @@ async function getMetadata(file) {
     return store.get(file.id); // return the stored version (without parsed)
 }
 
+// ─── Orphaned entry cleanup ───────────────────────────────────────────────────
+
+/**
+ * reconcile(activeFileIds)
+ *
+ * Removes metadata entries whose fileId is no longer present in the active
+ * fileIndex. Call this after a library folder is deleted.
+ *
+ * @param {Set<string>|Map<string,*>} activeFileIds - Set or Map of active IDs
+ */
+async function reconcile(activeFileIds) {
+    await loadStore();
+    if (store.size === 0) return;
+
+    let removed = 0;
+    for (const key of store.keys()) {
+        // Skip internal season cache entries — they are NOT indexed by fileId
+        if (key.startsWith("_season:")) continue;
+
+        // hasOwnProperty-safe check — supports both Set and Map
+        const isActive = activeFileIds instanceof Set
+            ? activeFileIds.has(key)
+            : activeFileIds.has(key);
+
+        if (!isActive) {
+            store.delete(key);
+            removed++;
+        }
+    }
+
+    if (removed > 0) {
+        console.log(`[Metadata] Reconcile: removed ${removed} orphaned entries`);
+        scheduleSave();
+    } else {
+        console.log(`[Metadata] Reconcile: no orphaned entries found`);
+    }
+}
+
+// ─── Season-level cache ───────────────────────────────────────────────────────
+
+/**
+ * getCachedSeason(tmdbId, seasonNumber)
+ *
+ * Returns cached season detail object, or null if missing / expired.
+ * Season data is stored in the same metadata.json under key
+ * "_season:<tmdbId>:<seasonNumber>".
+ */
+async function getCachedSeason(tmdbId, seasonNumber) {
+    await loadStore();
+    const key = `_season:${tmdbId}:${seasonNumber}`;
+    const entry = store.get(key);
+    if (!entry) return null;
+    const age = Date.now() - new Date(entry._cachedAt).getTime();
+    if (age > SEASON_TTL_MS) {
+        store.delete(key);
+        return null;
+    }
+    const { _cachedAt: _, ...data } = entry;
+    return data;
+}
+
+/**
+ * setCachedSeason(tmdbId, seasonNumber, data)
+ *
+ * Persists season detail into the store. Called after a successful
+ * getSeasonDetails() TMDB fetch.
+ */
+async function setCachedSeason(tmdbId, seasonNumber, data) {
+    await loadStore();
+    const key = `_season:${tmdbId}:${seasonNumber}`;
+    store.set(key, { ...data, _cachedAt: new Date().toISOString() });
+    scheduleSave();
+}
+
 module.exports = {
     getMetadata,
     getCached,
@@ -207,4 +316,7 @@ module.exports = {
     invalidate,
     invalidateAll,
     purgeStaleEntries,
+    reconcile,
+    getCachedSeason,
+    setCachedSeason,
 };

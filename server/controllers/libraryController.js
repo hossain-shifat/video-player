@@ -5,7 +5,8 @@ const path = require("path");
 const crypto = require("crypto");
 
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
-const { invalidateFolder, invalidateAll } = require("../utils/mediaCache");
+const { invalidateFolder, invalidateAll, fileIndex } = require("../utils/mediaCache");
+const { reconcile } = require("../utils/metadataStore");
 
 // In-memory folders cache — eliminates disk I/O on every API call.
 // Populated on first read, updated atomically on every write.
@@ -126,6 +127,10 @@ async function removeFolder(req, res) {
         folders.splice(index, 1);
         await writeFolders(folders);
         invalidateFolder(id);
+
+        // FIX (Problem 1): After folder removal, purge orphaned metadata entries
+        // by comparing the metadata store against the remaining active fileIndex.
+        reconcile(fileIndex);
 
         return res.json({ message: "Folder removed", id });
     } catch (err) {

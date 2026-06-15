@@ -1,7 +1,7 @@
 "use strict";
 
 const { parseFilename } = require("./nameParser");
-const { getMetadata } = require("./metadataStore");
+const { getMetadata, getCachedSeason, setCachedSeason } = require("./metadataStore");
 const { getSeasonDetails } = require("./tmdb");
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
@@ -211,12 +211,19 @@ async function enrichGroups(groupMap) {
         const metadata = await getMetadata(representativeEp);
         group.metadata = metadata;
 
-        // ── Fetch per-season details from TMDB ────────────────────────────────
+        // ── Fetch per-season details from TMDB ───────────────────────────────────────
         if (metadata?.tmdbId) {
             await Promise.all(
                 [...group.seasons.entries()].map(async ([seasonNum, season]) => {
                     try {
-                        season.tmdbMeta = await getSeasonDetails(metadata.tmdbId, seasonNum);
+                        // FIX: Check persistent cache first — avoids live TMDB call
+                        // on every server restart. Season data cached for 7 days.
+                        let seasonData = await getCachedSeason(metadata.tmdbId, seasonNum);
+                        if (!seasonData) {
+                            seasonData = await getSeasonDetails(metadata.tmdbId, seasonNum);
+                            await setCachedSeason(metadata.tmdbId, seasonNum, seasonData);
+                        }
+                        season.tmdbMeta = seasonData;
                     } catch {
                         // Season doesn't exist on TMDB — skip silently
                     }

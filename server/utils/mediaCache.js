@@ -47,6 +47,15 @@ async function getOrScan(folder) {
     }
 
     const files = await scanFolder(folder.path);
+
+    // FIX (Problem 2): If file count changed since last scan, the grouped cache
+    // is stale. Invalidate it so the next getGroupedCached() call rebuilds it.
+    const prevCount = entry ? entry.files.length : -1;
+    if (files.length !== prevCount) {
+        _groupedCache = null;
+        console.log(`[Cache] Folder "${folder.label}" changed (${prevCount} → ${files.length} files) — grouped cache invalidated`);
+    }
+
     cache.set(folder.id, { files, label: folder.label, path: folder.path, folderId: folder.id, scannedAt: now });
     // Update file index with new scan results
     for (const f of files) {
@@ -136,4 +145,5 @@ async function getGroupedCached(allMedia) {
     };
 }
 
-module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached };
+module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached, fileIndex };
+
