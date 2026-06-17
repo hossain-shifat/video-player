@@ -29,6 +29,11 @@ import {
     Star,
     Calendar,
     Layers,
+    Filter,
+    TrendingUp,
+    Shield,
+    ShieldOff,
+    SortAsc,
 } from "lucide-react";
 import { api } from "../../api/client";
 
@@ -82,19 +87,50 @@ function extractTags(filename) {
     return { res, vcodec, acodec };
 }
 
+// ─── Design tokens ────────────────────────────────────────────────────────────
+
+const TYPE_CONFIG = {
+    movie: {
+        color: "oklch(var(--p))",
+        bgClass: "bg-primary/12 text-primary",
+        borderClass: "border-primary/20",
+        Icon: Film,
+    },
+    series: {
+        color: "oklch(var(--in))",
+        bgClass: "bg-info/12 text-info",
+        borderClass: "border-info/20",
+        Icon: Tv2,
+    },
+    anime: {
+        color: "oklch(var(--a))",
+        bgClass: "bg-accent/12 text-accent",
+        borderClass: "border-accent/20",
+        Icon: Swords,
+    },
+};
+
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 
-function MetricCard({ title, value, icon: Icon, accent, sub }) {
+function MetricCard({ title, value, icon: Icon, accent, sub, isLoading }) {
     return (
-        <div className="bg-base-200 border border-base-content/8 rounded-lg p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded flex items-center justify-center shrink-0" style={{ background: `color-mix(in oklch, ${accent} 12%, transparent)` }}>
-                <Icon size={18} style={{ color: accent }} />
+        <div className="relative bg-base-200 border border-base-content/8 rounded-xl p-5 flex flex-col gap-3 overflow-hidden transition-all duration-200 hover:border-base-content/15 hover:shadow-lg group">
+            {/* Ambient glow */}
+            <div className="absolute top-0 right-0 w-20 h-20 rounded-full opacity-[0.07] blur-2xl pointer-events-none" style={{ background: accent }} />
+            <div className="flex items-center justify-between">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40">{title}</p>
+                <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center transition-transform duration-200 group-hover:scale-110"
+                    style={{ background: `color-mix(in oklch, ${accent} 15%, transparent)` }}>
+                    <Icon size={15} style={{ color: accent }} />
+                </div>
             </div>
-            <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40 mb-0.5">{title}</p>
-                <p className="text-xl font-bold text-base-content leading-none tabular-nums">{value}</p>
-                {sub && <p className="text-[10px] text-base-content/30 mt-0.5">{sub}</p>}
-            </div>
+            {isLoading ? (
+                <div className="h-8 w-20 rounded-md bg-base-content/8 animate-pulse" />
+            ) : (
+                <p className="text-2xl font-black text-base-content leading-none tabular-nums tracking-tight">{value}</p>
+            )}
+            {sub && <p className="text-[10px] text-base-content/30 font-medium">{sub}</p>}
         </div>
     );
 }
@@ -109,30 +145,51 @@ function CopyBtn({ text, title }) {
         setTimeout(() => setCopied(false), 2000);
     };
     return (
-        <button onClick={handle} title={title} className="w-6 h-6 rounded flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/10 transition-colors">
-            {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+        <button onClick={handle} title={title} className="w-6 h-6 rounded-md flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/10 transition-colors">
+            {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
         </button>
     );
 }
 
-function Badge({ label, variant = "default" }) {
+function Badge({ label, variant = "default", size = "sm" }) {
     const cls =
         {
-            movie: "bg-primary/15 text-primary",
-            series: "bg-info/15 text-info",
-            anime: "bg-accent/15 text-accent",
-            default: "bg-base-content/10 text-base-content/60",
-        }[variant] || "bg-base-content/10 text-base-content/60";
+            movie: "bg-primary/15 text-primary border border-primary/20",
+            series: "bg-info/15 text-info border border-info/20",
+            anime: "bg-accent/15 text-accent border border-accent/20",
+            default: "bg-base-content/8 text-base-content/55 border border-base-content/10",
+        }[variant] || "bg-base-content/8 text-base-content/55 border border-base-content/10";
 
-    return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${cls}`}>{label}</span>;
+    const sizeClass = size === "xs" ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]";
+
+    return <span className={`inline-flex items-center rounded-md font-bold uppercase tracking-wider ${sizeClass} ${cls}`}>{label}</span>;
+}
+
+function QualityChip({ label }) {
+    const color =
+        label === "4K"
+            ? "bg-warning/15 text-warning border-warning/20"
+            : label === "1080p"
+              ? "bg-success/15 text-success border-success/20"
+              : label === "720p"
+                ? "bg-info/15 text-info border-info/20"
+                : "bg-base-content/8 text-base-content/50 border-base-content/12";
+    return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-bold tracking-wider ${color}`}>{label}</span>;
+}
+
+function CodecChip({ label }) {
+    return <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-base-content/6 border border-base-content/8 text-[9px] font-mono text-base-content/45">{label}</span>;
 }
 
 // ─── Modal Shell ──────────────────────────────────────────────────────────────
 
 function Modal({ onClose, width = "max-w-md", children }) {
     return createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
-            <div className={`relative w-full ${width} bg-base-200 rounded-lg shadow-2xl border border-base-content/10 overflow-hidden flex flex-col max-h-[88vh]`} onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-9999 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
+            <div
+                className={`relative w-full ${width} bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col max-h-[88vh]`}
+                style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)" }}
+                onClick={(e) => e.stopPropagation()}>
                 {children}
             </div>
         </div>,
@@ -141,25 +198,26 @@ function Modal({ onClose, width = "max-w-md", children }) {
 }
 
 function ModalHeader({ title, subtitle, onClose, poster, typeBadge }) {
+    const config = typeBadge ? TYPE_CONFIG[typeBadge.type] : null;
     return (
-        <div className="flex items-start justify-between px-5 pt-4 pb-3.5 border-b border-base-content/8 shrink-0">
-            <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-base-content/8 shrink-0">
+            <div className="flex items-center gap-3.5 min-w-0">
                 {poster !== undefined && (
-                    <div className="w-9 h-12 rounded bg-base-300 flex items-center justify-center shrink-0 overflow-hidden">
+                    <div className="w-10 h-14 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/10">
                         {poster ? <img src={poster} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={14} className="text-base-content/20" />}
                     </div>
                 )}
                 <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className="font-semibold text-sm text-base-content leading-tight">{title}</h2>
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h2 className="font-bold text-sm text-base-content leading-tight">{title}</h2>
                         {typeBadge && <Badge label={typeBadge.label} variant={typeBadge.type} />}
                     </div>
-                    {subtitle && <p className="text-[11px] text-base-content/40 mt-0.5 truncate">{subtitle}</p>}
+                    {subtitle && <p className="text-[11px] text-base-content/35 truncate font-mono">{subtitle}</p>}
                 </div>
             </div>
             <button
                 onClick={onClose}
-                className="w-6 h-6 rounded flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/10 transition-colors shrink-0 ml-2">
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/35 hover:text-base-content hover:bg-base-content/10 transition-colors shrink-0 ml-2">
                 <X size={14} />
             </button>
         </div>
@@ -167,7 +225,18 @@ function ModalHeader({ title, subtitle, onClose, poster, typeBadge }) {
 }
 
 function ModalFooter({ children }) {
-    return <div className="px-5 py-3.5 flex items-center justify-end gap-2 border-t border-base-content/8 shrink-0 bg-base-200/50">{children}</div>;
+    return <div className="px-6 py-4 flex items-center justify-end gap-2.5 border-t border-base-content/8 shrink-0 bg-base-300/30">{children}</div>;
+}
+
+// ─── Section divider for modals ───────────────────────────────────────────────
+
+function SectionLabel({ label }) {
+    return (
+        <div className="flex items-center gap-2 mb-3">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">{label}</span>
+            <div className="flex-1 h-px bg-base-content/8" />
+        </div>
+    );
 }
 
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
@@ -186,44 +255,44 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
         <Modal onClose={onClose}>
             <ModalHeader title="Edit Metadata" subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />
 
-            <div className="px-5 py-4 space-y-4 overflow-y-auto">
+            <div className="px-6 py-5 space-y-5 overflow-y-auto">
                 {error && (
-                    <div className="flex items-center gap-2 text-xs text-error bg-error/10 border border-error/20 rounded px-3 py-2">
-                        <AlertTriangle size={12} className="shrink-0" />
+                    <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                        <AlertTriangle size={13} className="shrink-0" />
                         <span>{error.message || "Failed to update media"}</span>
                     </div>
                 )}
 
-                <div className="space-y-1">
-                    <label className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Title</label>
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/40">Title</label>
                     <input
                         type="text"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        className="input input-sm w-full bg-base-100 border border-base-content/12 rounded text-sm focus:outline-none focus:border-primary/50"
+                        className="input input-sm w-full bg-base-100 border border-base-content/12 rounded-xl text-sm focus:outline-none focus:border-primary/50 focus:bg-base-100 transition-colors"
                         placeholder="Media title..."
                     />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                        <label className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Year</label>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/40">Year</label>
                         <input
                             type="number"
                             value={year}
                             onChange={(e) => setYear(e.target.value)}
-                            className="input input-sm w-full bg-base-100 border border-base-content/12 rounded text-sm focus:outline-none focus:border-primary/50"
+                            className="input input-sm w-full bg-base-100 border border-base-content/12 rounded-xl text-sm focus:outline-none focus:border-primary/50 transition-colors"
                             placeholder="2024"
                             min={1900}
                             max={2099}
                         />
                     </div>
-                    <div className="space-y-1">
-                        <label className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Type</label>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/40">Type</label>
                         <select
                             value={type}
                             onChange={(e) => setType(e.target.value)}
-                            className="select select-sm w-full bg-base-100 border border-base-content/12 rounded text-sm focus:outline-none focus:border-primary/50">
+                            className="select select-sm w-full bg-base-100 border border-base-content/12 rounded-xl text-sm focus:outline-none focus:border-primary/50 transition-colors">
                             <option value="movie">Movie</option>
                             <option value="series">Series</option>
                             <option value="anime">Anime</option>
@@ -231,35 +300,56 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                     </div>
                 </div>
 
-                <div className="space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Media ID</p>
-                    <div className="flex items-center gap-2 bg-base-100 border border-base-content/8 rounded px-2.5 py-1.5">
-                        <span className="text-[10px] font-mono text-base-content/40 truncate flex-1">{media._id}</span>
-                        <CopyBtn text={media._id} title="Copy ID" />
+                {/* Permission toggle
+                    permission=true  → Normal (allowed)
+                    permission=false → Restricted
+                    Toggle is "Restrict access" — checked means RESTRICTED (permission=false) */}
+                <div className={`border rounded-xl p-4 transition-colors ${permission ? "bg-base-100 border-base-content/8" : "bg-error/5 border-error/20"}`}>
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                            {permission ? (
+                                <div className="w-8 h-8 rounded-lg bg-success/12 flex items-center justify-center shrink-0">
+                                    <Shield size={14} className="text-success" />
+                                </div>
+                            ) : (
+                                <div className="w-8 h-8 rounded-lg bg-error/12 flex items-center justify-center shrink-0">
+                                    <ShieldOff size={14} className="text-error" />
+                                </div>
+                            )}
+                            <div>
+                                <p className={`text-xs font-bold ${permission ? "text-success" : "text-error"}`}>{permission ? "Normal Access" : "Restricted"}</p>
+                                <p className="text-[10px] text-base-content/40 mt-0.5">{permission ? "Media is accessible — click to restrict" : "Access is restricted — click to allow"}</p>
+                            </div>
+                        </div>
+                        {/* checkbox checked = restricted = !permission */}
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={!permission}
+                            onClick={() => setPermission((prev) => !prev)}
+                            className={`relative w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${!permission ? "bg-error/70" : "bg-base-300"}`}>
+                            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${!permission ? "translate-x-5" : "translate-x-0"}`} />
+                        </button>
                     </div>
                 </div>
 
-                <div className="space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45">Permission Control</p>
-                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                        <input type="checkbox" className="checkbox checkbox-sm checkbox-error" checked={!permission} onChange={(e) => setPermission(!e.target.checked)} />
-                        <span className="text-xs text-base-content/70">Restricted (mark as restricted)</span>
-                    </label>
+                {/* Media ID */}
+                <div className="space-y-1.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/40">Media ID</p>
+                    <div className="flex items-center gap-2 bg-base-100 border border-base-content/8 rounded-xl px-3 py-2">
+                        <span className="text-[10px] font-mono text-base-content/35 truncate flex-1">{media._id}</span>
+                        <CopyBtn text={media._id} title="Copy ID" />
+                    </div>
                 </div>
             </div>
 
             <ModalFooter>
-                <button
-                    onClick={onClose}
-                    className="btn btn-sm btn-ghost rounded text-base-content/60 hover:text-base-content hover:bg-base-content/8 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
                     Cancel
                 </button>
-                <button
-                    onClick={handleSubmit}
-                    disabled={isPending}
-                    className="btn btn-sm btn-info rounded gap-1.5 disabled:opacity-50 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <button onClick={handleSubmit} disabled={isPending} className="btn btn-sm btn-primary rounded-xl gap-1.5 disabled:opacity-50 focus:outline-none min-w-20">
                     {isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                    {isPending ? "Saving…" : "Save"}
+                    {isPending ? "Saving…" : "Save changes"}
                 </button>
             </ModalFooter>
         </Modal>
@@ -272,13 +362,13 @@ function InfoRow({ label, value, mono = false, full = false, copyText }) {
     return (
         <div className={full ? "col-span-2" : ""}>
             <div className="flex items-center gap-1.5 mb-1">
-                <p className="text-[9px] font-semibold uppercase tracking-widest text-base-content/35">{label}</p>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">{label}</p>
                 {copyText && <CopyBtn text={copyText} title={`Copy ${label}`} />}
             </div>
             {mono ? (
-                <p className="text-[10px] font-mono text-base-content/55 break-all bg-base-100 border border-base-content/8 rounded px-2 py-1.5 leading-relaxed">{value || "—"}</p>
+                <p className="text-[10px] font-mono text-base-content/50 break-all bg-base-100 border border-base-content/8 rounded-lg px-2.5 py-1.5 leading-relaxed">{value || "—"}</p>
             ) : (
-                <p className="text-sm font-medium text-base-content">{value || "—"}</p>
+                <p className="text-sm font-semibold text-base-content">{value || "—"}</p>
             )}
         </div>
     );
@@ -286,13 +376,40 @@ function InfoRow({ label, value, mono = false, full = false, copyText }) {
 
 function DetailsModal({ media, onClose }) {
     const linkDest = media._type === "movie" ? `/player/${media._id}` : `/series/${media._id}`;
+    const config = TYPE_CONFIG[media._type] || TYPE_CONFIG.movie;
+    const TypeIcon = config.Icon;
 
     return (
         <Modal onClose={onClose} width="max-w-lg">
-            <ModalHeader title={media._title} subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />
+            {/* Hero section with poster */}
+            {media._poster && (
+                <div className="relative h-36 overflow-hidden shrink-0">
+                    <img src={media._poster} alt="" className="w-full h-full object-cover scale-110 blur-sm opacity-30" />
+                    <div className="absolute inset-0 bg-linear-to-b from-transparent to-base-200" />
+                    <div className="absolute bottom-3 left-6 flex items-end gap-3">
+                        <div className="w-14 h-20 rounded-xl overflow-hidden ring-2 ring-base-content/20 shadow-xl">
+                            <img src={media._poster} alt="" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="pb-1">
+                            <div className="flex items-center gap-2 mb-1">
+                                <Badge label={media._typeLabel} variant={media._type} />
+                                {media._year && <span className="text-[10px] text-base-content/50 font-medium">{media._year}</span>}
+                            </div>
+                            <h2 className="font-bold text-base text-base-content leading-tight max-w-65">{media._title}</h2>
+                        </div>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="absolute top-3 right-3 w-7 h-7 rounded-lg bg-black/40 flex items-center justify-center text-white/70 hover:text-white hover:bg-black/60 transition-colors">
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
 
-            <div className="px-5 py-4 space-y-4 overflow-y-auto">
-                {/* Quick stats row */}
+            {!media._poster && <ModalHeader title={media._title} subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />}
+
+            <div className="px-6 py-5 space-y-5 overflow-y-auto">
+                {/* Quick stats */}
                 <div className="grid grid-cols-4 gap-2">
                     {[
                         { label: "Year", value: media._year || "—", icon: Calendar },
@@ -300,26 +417,18 @@ function DetailsModal({ media, onClose }) {
                         { label: "Duration", value: fmtDuration(media._duration), icon: Layers },
                         { label: "Size", value: fmtBytes(media._size), icon: HardDrive },
                     ].map(({ label, value, icon: Icon }) => (
-                        <div key={label} className="bg-base-100 border border-base-content/8 rounded p-2.5 text-center">
+                        <div key={label} className="bg-base-100 border border-base-content/8 rounded-xl p-3 text-center">
+                            <Icon size={12} className="mx-auto mb-1 text-base-content/30" />
                             <p className="text-[9px] font-semibold uppercase tracking-widest text-base-content/35 mb-1">{label}</p>
-                            <p className="text-xs font-bold text-base-content tabular-nums">{value}</p>
+                            <p className="text-xs font-bold text-base-content tabular-nums leading-tight">{value}</p>
                         </div>
                     ))}
                 </div>
 
-                {/* Codec row */}
-                {(media.vcodec || media.acodec) && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[9px] font-semibold uppercase tracking-widest text-base-content/35">Codec</span>
-                        {media.vcodec && <span className="px-2 py-0.5 rounded bg-base-100 border border-base-content/10 text-[10px] font-mono text-base-content/60">{media.vcodec}</span>}
-                        {media.acodec && <span className="px-2 py-0.5 rounded bg-base-100 border border-base-content/10 text-[10px] font-mono text-base-content/60">{media.acodec}</span>}
-                    </div>
-                )}
-
-                {/* TMDB metadata */}
+                {/* Overview */}
                 {media.metadata?.overview && (
                     <div>
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-base-content/35 mb-1.5">Overview</p>
+                        <SectionLabel label="Overview" />
                         <p className="text-xs text-base-content/60 leading-relaxed line-clamp-4">{media.metadata.overview}</p>
                     </div>
                 )}
@@ -327,10 +436,10 @@ function DetailsModal({ media, onClose }) {
                 {/* Genres */}
                 {media.metadata?.genres?.length > 0 && (
                     <div>
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-base-content/35 mb-1.5">Genres</p>
-                        <div className="flex flex-wrap gap-1">
+                        <SectionLabel label="Genres" />
+                        <div className="flex flex-wrap gap-1.5">
                             {media.metadata.genres.map((g) => (
-                                <span key={g} className="px-2 py-0.5 rounded bg-base-content/8 text-[10px] text-base-content/60">
+                                <span key={g} className="px-2.5 py-1 rounded-lg bg-base-100 border border-base-content/8 text-[10px] font-medium text-base-content/55">
                                     {g}
                                 </span>
                             ))}
@@ -338,44 +447,56 @@ function DetailsModal({ media, onClose }) {
                     </div>
                 )}
 
-                {/* Grid details */}
-                <div className="grid grid-cols-2 gap-x-4 gap-y-3.5 pt-1">
-                    <InfoRow
-                        label="Library"
-                        value={
-                            <span className="flex items-center gap-1.5 text-sm">
-                                <FolderOpen size={12} className="text-base-content/40 shrink-0" />
-                                {media._library}
-                            </span>
-                        }
-                        full
-                    />
-                    <InfoRow label="Added" value={fmtDate(media._added)} />
-                    {media.metadata?.rating && (
+                {/* Technical */}
+                {(media.vcodec || media.acodec) && (
+                    <div>
+                        <SectionLabel label="Technical" />
+                        <div className="flex items-center gap-2 flex-wrap">
+                            {media.vcodec && <CodecChip label={media.vcodec} />}
+                            {media.acodec && <CodecChip label={media.acodec} />}
+                        </div>
+                    </div>
+                )}
+
+                {/* File details */}
+                <div>
+                    <SectionLabel label="File Information" />
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
                         <InfoRow
-                            label="TMDB Rating"
+                            label="Library"
                             value={
-                                <span className="flex items-center gap-1">
-                                    <Star size={11} className="text-warning fill-warning" />
-                                    {media.metadata.rating}
+                                <span className="flex items-center gap-1.5 text-sm">
+                                    <FolderOpen size={12} className="text-base-content/35 shrink-0" />
+                                    {media._library}
                                 </span>
                             }
+                            full
                         />
-                    )}
-                    <InfoRow label="File Path" value={media._path} mono full copyText={media._path} />
-                    <InfoRow label="Media ID" value={media._id} mono full copyText={media._id} />
+                        <InfoRow label="Added" value={fmtDate(media._added)} />
+                        {media.metadata?.rating && (
+                            <InfoRow
+                                label="TMDB Rating"
+                                value={
+                                    <span className="flex items-center gap-1">
+                                        <Star size={11} className="text-warning fill-warning" />
+                                        {media.metadata.rating}
+                                    </span>
+                                }
+                            />
+                        )}
+                        <InfoRow label="File Path" value={media._path} mono full copyText={media._path} />
+                        <InfoRow label="Media ID" value={media._id} mono full copyText={media._id} />
+                    </div>
                 </div>
             </div>
 
             <ModalFooter>
-                <button
-                    onClick={onClose}
-                    className="btn btn-sm btn-ghost rounded text-base-content/60 hover:text-base-content hover:bg-base-content/8 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
                     Close
                 </button>
-                <Link to={linkDest} target="_blank" className="btn btn-sm btn-primary rounded gap-1.5 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <Link to={linkDest} target="_blank" className="btn btn-sm btn-primary rounded-xl gap-1.5 focus:outline-none">
                     <Play size={12} className="ml-0.5" />
-                    Play
+                    Play Now
                 </Link>
             </ModalFooter>
         </Modal>
@@ -389,35 +510,32 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
         <Modal onClose={onClose} width="max-w-sm">
             <ModalHeader title="Delete Media" subtitle="This action cannot be undone" onClose={onClose} />
 
-            <div className="px-5 py-4 space-y-3">
+            <div className="px-6 py-5 space-y-4">
                 {error && (
-                    <div className="flex items-center gap-2 text-xs text-error bg-error/10 border border-error/20 rounded px-3 py-2">
-                        <AlertTriangle size={12} className="shrink-0" />
+                    <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                        <AlertTriangle size={13} className="shrink-0" />
                         <span>{error.message || "Failed to delete"}</span>
                     </div>
                 )}
 
-                <div className="flex items-start gap-2.5 bg-error/8 border border-error/15 rounded p-3">
-                    <AlertTriangle size={14} className="text-error mt-0.5 shrink-0" />
+                <div className="flex items-start gap-3 bg-error/8 border border-error/15 rounded-xl p-4">
+                    <div className="w-8 h-8 rounded-lg bg-error/15 flex items-center justify-center shrink-0">
+                        <Trash2 size={14} className="text-error" />
+                    </div>
                     <div className="min-w-0">
-                        <p className="text-sm font-semibold text-base-content truncate">{media._title}</p>
-                        <p className="text-[10px] font-mono text-base-content/40 truncate mt-0.5">{media._filename}</p>
+                        <p className="text-sm font-bold text-base-content truncate">{media._title}</p>
+                        <p className="text-[10px] font-mono text-base-content/35 truncate mt-0.5">{media._filename}</p>
                     </div>
                 </div>
 
-                <p className="text-xs text-base-content/50 leading-relaxed">Deletes this entry from the database. Depending on server settings, the physical file may also be removed.</p>
+                <p className="text-xs text-base-content/45 leading-relaxed">Deletes this entry from the database. Depending on server settings, the physical file may also be removed.</p>
             </div>
 
             <ModalFooter>
-                <button
-                    onClick={onClose}
-                    className="btn btn-sm btn-ghost rounded text-base-content/60 hover:text-base-content hover:bg-base-content/8 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
                     Cancel
                 </button>
-                <button
-                    onClick={() => onConfirm(media._id)}
-                    disabled={isPending}
-                    className="btn btn-sm btn-error rounded gap-1.5 disabled:opacity-50 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
+                <button onClick={() => onConfirm(media._id)} disabled={isPending} className="btn btn-sm btn-error rounded-xl gap-1.5 disabled:opacity-50 focus:outline-none min-w-20">
                     {isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                     {isPending ? "Deleting…" : "Delete"}
                 </button>
@@ -430,14 +548,150 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
 
 function Toast({ toast }) {
     if (!toast) return null;
-    const color = toast.type === "success" ? "bg-success/15 border-success/30 text-success" : toast.type === "error" ? "bg-error/15 border-error/30 text-error" : "bg-info/15 border-info/30 text-info";
+    const styles = {
+        success: "bg-success/15 border-success/25 text-success",
+        error: "bg-error/15 border-error/25 text-error",
+        info: "bg-info/15 border-info/25 text-info",
+    };
+    const color = styles[toast.type] || styles.info;
     return createPortal(
-        <div className={`fixed bottom-5 right-5 z-[99999] flex items-center gap-2.5 border rounded px-4 py-2.5 shadow-xl text-xs font-medium max-w-xs ${color}`}>
+        <div className={`fixed bottom-6 right-6 z-99999 flex items-center gap-3 border rounded-xl px-4 py-3 shadow-2xl text-xs font-semibold max-w-xs backdrop-blur-sm ${color}`}>
             {toast.type === "success" && <CheckCircle2 size={14} className="shrink-0" />}
             {toast.type === "error" && <AlertTriangle size={14} className="shrink-0" />}
             <span>{toast.msg}</span>
         </div>,
         document.body,
+    );
+}
+
+// ─── Table skeleton row ───────────────────────────────────────────────────────
+
+function SkeletonRow() {
+    return (
+        <tr className="border-b border-base-content/5">
+            <td className="pl-5 pr-3 py-4 w-10">
+                <div className="h-2 w-5 rounded bg-base-content/6 animate-pulse" />
+            </td>
+            <td className="px-3 py-4">
+                <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-11 rounded-lg bg-base-content/6 animate-pulse shrink-0" />
+                    <div className="space-y-1.5">
+                        <div className="h-2.5 w-32 rounded bg-base-content/6 animate-pulse" />
+                        <div className="h-2 w-20 rounded bg-base-content/5 animate-pulse" />
+                    </div>
+                </div>
+            </td>
+            <td className="px-3 py-4 hidden sm:table-cell">
+                <div className="h-4 w-14 rounded-md bg-base-content/6 animate-pulse" />
+            </td>
+            <td className="px-3 py-4 hidden lg:table-cell">
+                <div className="h-4 w-12 rounded-md bg-base-content/6 animate-pulse mx-auto" />
+            </td>
+            <td className="px-3 py-4 hidden xl:table-cell">
+                <div className="flex gap-1 justify-center">
+                    <div className="h-4 w-10 rounded-md bg-base-content/6 animate-pulse" />
+                    <div className="h-4 w-8 rounded-md bg-base-content/6 animate-pulse" />
+                </div>
+            </td>
+            <td className="px-3 py-4 hidden md:table-cell text-right">
+                <div className="h-2.5 w-12 rounded bg-base-content/6 animate-pulse ml-auto" />
+            </td>
+            <td className="px-3 py-4 hidden lg:table-cell">
+                <div className="h-2.5 w-16 rounded bg-base-content/6 animate-pulse" />
+            </td>
+            <td className="px-3 py-4 hidden xl:table-cell">
+                <div className="h-2.5 w-20 rounded bg-base-content/6 animate-pulse" />
+            </td>
+            <td className="px-3 py-4 hidden lg:table-cell">
+                <div className="h-4 w-16 rounded-md bg-base-content/6 animate-pulse mx-auto" />
+            </td>
+            <td className="pl-3 pr-5 py-4">
+                <div className="flex gap-1 justify-end">
+                    {[1, 2, 3].map((i) => (
+                        <div key={i} className="w-7 h-7 rounded-lg bg-base-content/6 animate-pulse" />
+                    ))}
+                </div>
+            </td>
+        </tr>
+    );
+}
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChange }) {
+    const start = (currentPage - 1) * pageSize + 1;
+    const end = Math.min(currentPage * pageSize, totalItems);
+
+    const pages = useMemo(() => {
+        const delta = 1;
+        const range = [];
+        for (let i = Math.max(2, currentPage - delta); i <= Math.min(totalPages - 1, currentPage + delta); i++) {
+            range.push(i);
+        }
+        const result = [1];
+        if (range[0] > 2) result.push("...");
+        result.push(...range);
+        if (range[range.length - 1] < totalPages - 1) result.push("...");
+        if (totalPages > 1) result.push(totalPages);
+        return result;
+    }, [currentPage, totalPages]);
+
+    if (totalItems === 0) return null;
+
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <p className="text-[11px] text-base-content/40 tabular-nums">
+                Showing{" "}
+                <span className="font-semibold text-base-content/60">
+                    {start.toLocaleString()}–{end.toLocaleString()}
+                </span>{" "}
+                of <span className="font-semibold text-base-content/60">{totalItems.toLocaleString()}</span> items
+            </p>
+            <div className="flex items-center gap-1">
+                <button
+                    onClick={() => onPageChange(1)}
+                    disabled={currentPage <= 1}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors text-[10px] font-bold focus:outline-none">
+                    «
+                </button>
+                <button
+                    onClick={() => onPageChange(currentPage - 1)}
+                    disabled={currentPage <= 1}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors focus:outline-none">
+                    <ChevronLeft size={14} />
+                </button>
+
+                {pages.map((p, i) =>
+                    p === "..." ? (
+                        <span key={`ellipsis-${i}`} className="w-7 h-7 flex items-center justify-center text-base-content/25 text-[11px]">
+                            ···
+                        </span>
+                    ) : (
+                        <button
+                            key={p}
+                            onClick={() => onPageChange(p)}
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-semibold transition-colors focus:outline-none ${
+                                p === currentPage ? "bg-primary text-primary-content" : "text-base-content/50 hover:text-base-content hover:bg-base-content/8"
+                            }`}>
+                            {p}
+                        </button>
+                    ),
+                )}
+
+                <button
+                    onClick={() => onPageChange(currentPage + 1)}
+                    disabled={currentPage >= totalPages}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors focus:outline-none">
+                    <ChevronRight size={14} />
+                </button>
+                <button
+                    onClick={() => onPageChange(totalPages)}
+                    disabled={currentPage >= totalPages}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors text-[10px] font-bold focus:outline-none">
+                    »
+                </button>
+            </div>
+        </div>
     );
 }
 
@@ -470,17 +724,58 @@ export default function DashMedia() {
     });
 
     const updateMutation = useMutation({
+        // Your server has no generic PATCH /api/media/:id — all edits are optimistic
+        // cache-only (session-level). Optionally trigger a metadata refresh from TMDB.
         mutationFn: async (data) => {
-            const { permission, ...rest } = data.payload;
-            await api.patch(`/api/admin-dashboard/media/${data.id}`, { permission: permission === true });
-            return api.patch(`/api/media/${data.id}`, rest);
+            // Non-fatal: try to refresh TMDB metadata; ignore if endpoint fails.
+            try {
+                await api.post(`/api/metadata/refresh/${data.id}`);
+            } catch {
+                /* ok */
+            }
+            return data;
+        },
+        onMutate: async (data) => {
+            // Prevent outgoing refetches clobbering our update
+            await queryClient.cancelQueries({ queryKey: ["admin", "media"] });
+            const previous = queryClient.getQueryData(["admin", "media"]);
+
+            queryClient.setQueryData(["admin", "media"], (old) => {
+                if (!old) return old;
+                const copy = JSON.parse(JSON.stringify(old));
+                const { id, payload } = data;
+                const patch = (items) =>
+                    (items || []).map((item) => {
+                        if (item.id !== id) return item;
+                        return {
+                            ...item,
+                            // Persist permission flag on the item directly
+                            permission: payload.permission,
+                            name: payload.title || item.name,
+                            metadata: item.metadata
+                                ? {
+                                      ...item.metadata,
+                                      title: payload.title || item.metadata.title,
+                                      year: payload.year || item.metadata.year,
+                                  }
+                                : item.metadata,
+                        };
+                    });
+                if (copy.movies?.items) copy.movies.items = patch(copy.movies.items);
+                if (copy.series?.items) copy.series.items = patch(copy.series.items);
+                if (copy.anime?.items) copy.anime.items = patch(copy.anime.items);
+                return copy;
+            });
+
+            return { previous };
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ["admin", "media"] });
             showToast("Media updated");
             setEditMedia(null);
         },
-        onError: (err) => {
+        onError: (err, _data, context) => {
+            // Roll back optimistic update on real failure
+            if (context?.previous) queryClient.setQueryData(["admin", "media"], context.previous);
             showToast(err?.message || "Update failed", "error");
         },
     });
@@ -597,69 +892,94 @@ export default function DashMedia() {
         return sortedMedia.slice(start, start + pageSize);
     }, [sortedMedia, currentPage, pageSize]);
 
-    // ─── Render ───────────────────────────────────────────────────────────────
+    // ─── Error state ──────────────────────────────────────────────────────────
 
     if (isError) {
         return (
-            <div className="flex items-center gap-3 text-sm text-error bg-error/10 border border-error/20 rounded p-4">
-                <AlertTriangle size={15} className="shrink-0" />
-                <span>Failed to load media: {queryError?.message}</span>
+            <div className="flex items-start gap-4 text-sm text-error bg-error/8 border border-error/20 rounded-2xl p-5">
+                <div className="w-10 h-10 rounded-xl bg-error/15 flex items-center justify-center shrink-0">
+                    <AlertTriangle size={16} className="text-error" />
+                </div>
+                <div>
+                    <p className="font-bold mb-1">Failed to load media library</p>
+                    <p className="text-error/70 text-xs">{queryError?.message}</p>
+                </div>
             </div>
         );
     }
 
+    // ─── Render ───────────────────────────────────────────────────────────────
+
     return (
-        <div className="space-y-5 pb-10 relative">
+        <div className="space-y-6 pb-12 relative">
             <Toast toast={toast} />
 
-            {editMedia && <EditModal media={editMedia} onClose={() => setEditMedia(null)} onSave={updateMutation.mutate} isPending={updateMutation.isPending} error={updateMutation.error} />}
+            {editMedia && (
+                <EditModal
+                    media={editMedia}
+                    onClose={() => {
+                        setEditMedia(null);
+                        updateMutation.reset(); // clear stale error state
+                    }}
+                    onSave={updateMutation.mutate}
+                    isPending={updateMutation.isPending}
+                    error={updateMutation.error}
+                />
+            )}
             {detailsMedia && <DetailsModal media={detailsMedia} onClose={() => setDetailsMedia(null)} />}
             {deleteMedia && (
                 <DeleteModal media={deleteMedia} onClose={() => setDeleteMedia(null)} onConfirm={deleteMutation.mutate} isPending={deleteMutation.isPending} error={deleteMutation.error} />
             )}
 
             {/* ── Header ── */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                    <h1 className="text-xl font-bold text-base-content tracking-tight flex items-center gap-2">
-                        <Database size={18} className="text-primary" />
-                        Media Library
-                    </h1>
-                    <p className="text-xs text-base-content/40 mt-0.5 ml-6.5">{isLoading ? "Loading…" : `${metrics.total.toLocaleString()} titles indexed`}</p>
+                    <div className="flex items-center gap-2.5 mb-1">
+                        <div className="w-8 h-8 rounded-xl bg-primary/15 flex items-center justify-center">
+                            <Database size={15} className="text-primary" />
+                        </div>
+                        <h1 className="text-xl font-black text-base-content tracking-tight">Media Library</h1>
+                        {isFetching && !isLoading && (
+                            <span className="flex items-center gap-1 text-[10px] text-primary/70 font-semibold bg-primary/10 border border-primary/15 px-2 py-0.5 rounded-full">
+                                <Loader2 size={9} className="animate-spin" />
+                                Syncing
+                            </span>
+                        )}
+                    </div>
+                    <p className="text-xs text-base-content/35 ml-10.5">{isLoading ? "Scanning library…" : `${metrics.total.toLocaleString()} titles indexed across all folders`}</p>
                 </div>
-                <button
-                    onClick={() => refetch()}
-                    disabled={isFetching}
-                    className="btn btn-sm btn-primary rounded gap-1.5 disabled:opacity-50 focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
-                    <RefreshCw size={12} className={isFetching ? "animate-spin" : ""} />
-                    {isFetching ? "Syncing…" : "Sync"}
+
+                <button onClick={() => refetch()} disabled={isFetching} className="btn btn-sm btn-primary rounded-xl gap-2 disabled:opacity-50 focus:outline-none">
+                    <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} />
+                    {isFetching ? "Syncing…" : "Sync Library"}
                 </button>
             </div>
 
-            {/* ── Metrics ── */}
+            {/* ── Analytics cards ── */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <MetricCard title="Total" value={isLoading ? "—" : metrics.total.toLocaleString()} icon={FileVideo} accent="oklch(var(--in))" />
-                <MetricCard title="Movies" value={isLoading ? "—" : metrics.movies.toLocaleString()} icon={Film} accent="oklch(var(--p))" />
+                <MetricCard title="Total Titles" value={metrics.total.toLocaleString()} icon={FileVideo} accent="oklch(var(--in))" isLoading={isLoading} />
+                <MetricCard title="Movies" value={metrics.movies.toLocaleString()} icon={Film} accent="oklch(var(--p))" isLoading={isLoading} />
                 <MetricCard
                     title="Series & Anime"
-                    value={isLoading ? "—" : (metrics.series + metrics.anime).toLocaleString()}
+                    value={(metrics.series + metrics.anime).toLocaleString()}
                     icon={Tv2}
                     accent="oklch(var(--su))"
                     sub={`${metrics.series} series · ${metrics.anime} anime`}
+                    isLoading={isLoading}
                 />
-                <MetricCard title="Storage" value={isLoading ? "—" : fmtBytes(metrics.size)} icon={HardDrive} accent="oklch(var(--a))" />
+                <MetricCard title="Storage Used" value={fmtBytes(metrics.size)} icon={HardDrive} accent="oklch(var(--a))" isLoading={isLoading} />
             </div>
 
-            {/* ── Controls ── */}
-            <div className="space-y-3">
-                {/* Tab filter menu */}
-                <div className="flex items-center gap-1">
+            {/* ── Toolbar: tabs + search ── */}
+            <div className="bg-base-200 border border-base-content/8 rounded-2xl p-3 flex flex-wrap items-center gap-3">
+                {/* Type tabs */}
+                <div className="flex items-center gap-1 p-1 bg-base-300/60 rounded-xl">
                     {[
                         { key: "all", label: "All", count: metrics.total },
-                        { key: "movie", label: "Movies", count: metrics.movies },
-                        { key: "series", label: "Series", count: metrics.series },
-                        { key: "anime", label: "Anime", count: metrics.anime },
-                    ].map(({ key, label, count }) => {
+                        { key: "movie", label: "Movies", count: metrics.movies, icon: Film },
+                        { key: "series", label: "Series", count: metrics.series, icon: Tv2 },
+                        { key: "anime", label: "Anime", count: metrics.anime, icon: Swords },
+                    ].map(({ key, label, count, icon: Icon }) => {
                         const active = activeTab === key;
                         return (
                             <button
@@ -668,75 +988,95 @@ export default function DashMedia() {
                                     setActiveTab(key);
                                     setPage(1);
                                 }}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none ${
-                                    active ? "bg-primary text-primary-content" : "text-base-content/50 hover:text-base-content hover:bg-base-content/8"
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 focus:outline-none ${
+                                    active ? "bg-base-100 text-base-content shadow-sm" : "text-base-content/45 hover:text-base-content/70"
                                 }`}>
+                                {Icon && <Icon size={11} />}
                                 {label}
-                                {!isLoading && <span className={`tabular-nums text-[10px] ${active ? "opacity-70" : "opacity-50"}`}>{count}</span>}
+                                {!isLoading && <span className={`tabular-nums text-[10px] px-1 py-0.5 rounded-md ${active ? "bg-primary/15 text-primary" : "text-base-content/30"}`}>{count}</span>}
                             </button>
                         );
                     })}
+                </div>
 
-                    {/* Search — pushed to right */}
-                    <div className="relative ml-auto">
-                        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
-                        <input
-                            type="text"
-                            placeholder="Search…"
-                            value={search}
-                            onChange={(e) => {
-                                setSearch(e.target.value);
+                {/* Search */}
+                <div className="relative ml-auto">
+                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/30 pointer-events-none" />
+                    <input
+                        type="text"
+                        placeholder="Search titles, files…"
+                        value={search}
+                        onChange={(e) => {
+                            setSearch(e.target.value);
+                            setPage(1);
+                        }}
+                        className="input input-sm w-52 pl-8 bg-base-100 border border-base-content/10 rounded-xl text-xs focus:outline-none focus:border-primary/40 focus:w-72 transition-all duration-200"
+                    />
+                    {search && (
+                        <button
+                            onClick={() => {
+                                setSearch("");
                                 setPage(1);
                             }}
-                            className="input input-sm w-48 pl-7.5 bg-base-200 border border-base-content/10 rounded text-xs focus:outline-none focus:border-primary/40 focus:w-64 transition-all duration-200"
-                        />
-                    </div>
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content transition-colors">
+                            <X size={12} />
+                        </button>
+                    )}
                 </div>
+
+                {/* Result count pill */}
+                {!isLoading && search && (
+                    <span className="text-[10px] text-base-content/40 font-medium">
+                        {sortedMedia.length.toLocaleString()} result{sortedMedia.length !== 1 ? "s" : ""}
+                    </span>
+                )}
             </div>
 
             {/* ── Table ── */}
-            <div className="bg-base-200 border border-base-content/8 rounded-lg overflow-hidden">
-                <div className="overflow-x-auto min-h-[360px]">
+            <div className="bg-base-200 border border-base-content/8 rounded-2xl overflow-hidden">
+                <div className="overflow-x-auto min-h-90">
                     <table className="table w-full text-sm">
                         <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
-                            <tr className="text-[9px] font-semibold uppercase tracking-widest text-base-content/40">
-                                <th className="pl-5 pr-3 py-3.5 w-10">#</th>
-                                <th className="px-3 py-3.5">Title</th>
-                                <th className="px-3 py-3.5 hidden sm:table-cell">Type</th>
-                                <th className="px-3 py-3.5 hidden lg:table-cell text-center">Quality</th>
-                                <th className="px-3 py-3.5 hidden xl:table-cell text-center">Codec</th>
-                                <th className="px-3 py-3.5 hidden md:table-cell text-right">Size</th>
-                                <th className="px-3 py-3.5 hidden lg:table-cell">Library</th>
-                                <th className="px-3 py-3.5 hidden xl:table-cell">Added</th>
-                                <th className="px-3 py-3.5 hidden lg:table-cell text-center">Permission</th>
-                                <th className="pl-3 pr-5 py-3.5 text-right">Actions</th>
+                            <tr className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">
+                                <th className="pl-5 pr-3 py-4 w-10">#</th>
+                                <th className="px-3 py-4">
+                                    <span className="flex items-center gap-1.5">
+                                        <SortAsc size={10} />
+                                        Title
+                                    </span>
+                                </th>
+                                <th className="px-3 py-4 hidden sm:table-cell">Type</th>
+                                <th className="px-3 py-4 hidden lg:table-cell text-center">Quality</th>
+                                <th className="px-3 py-4 hidden xl:table-cell text-center">Codec</th>
+                                <th className="px-3 py-4 hidden md:table-cell text-right">Size</th>
+                                <th className="px-3 py-4 hidden lg:table-cell">Library</th>
+                                <th className="px-3 py-4 hidden xl:table-cell">Added</th>
+                                <th className="px-3 py-4 hidden lg:table-cell text-center">Access</th>
+                                <th className="pl-3 pr-5 py-4 text-right">Actions</th>
                             </tr>
                         </thead>
 
                         <tbody>
                             {isLoading ? (
-                                [...Array(10)].map((_, i) => (
-                                    <tr key={i} className="border-b border-base-content/5">
-                                        {[4, 30, 8, 8, 8, 8, 10, 8, 10].map((w, j) => (
-                                            <td
-                                                key={j}
-                                                className="px-3 py-3.5 first:pl-5 last:pr-5 hidden first:table-cell last:table-cell sm:[&:nth-child(3)]:table-cell md:[&:nth-child(6)]:table-cell lg:[&:nth-child(4)]:table-cell lg:[&:nth-child(7)]:table-cell xl:table-cell">
-                                                <div className="h-2.5 rounded bg-base-content/6 animate-pulse" style={{ width: `${w}%`, minWidth: "1.5rem" }} />
-                                            </td>
-                                        ))}
-                                    </tr>
-                                ))
+                                [...Array(8)].map((_, i) => <SkeletonRow key={i} />)
                             ) : paginatedMedia.length === 0 ? (
                                 <tr>
-                                    <td colSpan={9} className="py-20">
-                                        <div className="flex flex-col items-center gap-3 text-center">
-                                            <div className="w-12 h-12 rounded bg-base-300 flex items-center justify-center">
-                                                <Search size={22} className="text-base-content/15" />
+                                    <td colSpan={10} className="py-24">
+                                        <div className="flex flex-col items-center gap-4 text-center">
+                                            <div className="w-16 h-16 rounded-2xl bg-base-300 flex items-center justify-center">
+                                                <Search size={24} className="text-base-content/15" />
                                             </div>
                                             <div>
-                                                <p className="font-semibold text-sm text-base-content/60">No media found</p>
-                                                <p className="text-xs text-base-content/35 mt-0.5">Try adjusting filters or search query</p>
+                                                <p className="font-bold text-sm text-base-content/55">{search ? "No results found" : "No media in library"}</p>
+                                                <p className="text-xs text-base-content/30 mt-1">
+                                                    {search ? `Nothing matches "${search}" — try different keywords` : "Add folders to your library to get started"}
+                                                </p>
                                             </div>
+                                            {search && (
+                                                <button onClick={() => setSearch("")} className="text-xs text-primary hover:text-primary/80 transition-colors font-medium">
+                                                    Clear search
+                                                </button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>
@@ -744,111 +1084,114 @@ export default function DashMedia() {
                                 paginatedMedia.map((item, i) => {
                                     const index = (currentPage - 1) * pageSize + i + 1;
                                     const TypeIcon = item._icon;
+                                    const typeConfig = TYPE_CONFIG[item._type] || TYPE_CONFIG.movie;
 
                                     return (
-                                        <tr key={item._id} className="group border-b border-base-content/5 last:border-0 hover:bg-base-100/60 transition-colors">
+                                        <tr key={item._id} className="group border-b border-base-content/5 last:border-0 hover:bg-base-100/50 transition-colors duration-150">
                                             {/* # */}
-                                            <td className="pl-5 pr-3 py-3 text-base-content/25 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
+                                            <td className="pl-5 pr-3 py-3.5 text-base-content/20 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
 
                                             {/* Title */}
-                                            <td className="px-3 py-3">
-                                                <div className="flex items-center gap-2.5">
-                                                    <div className="w-8 h-11 rounded bg-base-300 flex items-center justify-center shrink-0 overflow-hidden">
+                                            <td className="px-3 py-3.5">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-8 h-11 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/8">
                                                         {item._poster ? (
                                                             <img src={item._poster} alt="" className="w-full h-full object-cover" loading="lazy" />
                                                         ) : (
-                                                            <ImageIcon size={13} className="text-base-content/15" />
+                                                            <ImageIcon size={12} className="text-base-content/15" />
                                                         )}
                                                     </div>
                                                     <div className="min-w-0">
-                                                        <p className="font-semibold text-base-content/85 text-[13px] truncate max-w-[160px] md:max-w-[260px]" title={item._title}>
+                                                        <p className="font-semibold text-base-content/90 text-[13px] truncate max-w-35 md:max-w-60 lg:max-w-75" title={item._title}>
                                                             {item._title}
                                                         </p>
-                                                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-base-content/35">
-                                                            {item._year && <span className="tabular-nums">{item._year}</span>}
-                                                            {item._year && <span>·</span>}
-                                                            <span className="font-mono text-[9px] truncate max-w-[100px]">{item._filename}</span>
+                                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                                            {item._year && <span className="text-[10px] text-base-content/35 tabular-nums font-medium">{item._year}</span>}
+                                                            {item._year && <span className="text-base-content/20">·</span>}
+                                                            <span className="text-[10px] font-mono text-base-content/25 truncate max-w-22.5">{item._filename}</span>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </td>
 
                                             {/* Type */}
-                                            <td className="px-3 py-3 hidden sm:table-cell">
+                                            <td className="px-3 py-3.5 hidden sm:table-cell">
                                                 <div className="flex items-center gap-1.5">
-                                                    <TypeIcon size={12} className="text-base-content/35 shrink-0" />
+                                                    <TypeIcon size={11} className="text-base-content/30 shrink-0" />
                                                     <Badge label={item._typeLabel} variant={item._type} />
                                                 </div>
                                             </td>
 
                                             {/* Quality */}
-                                            <td className="px-3 py-3 hidden lg:table-cell text-center">
+                                            <td className="px-3 py-3.5 hidden lg:table-cell">
                                                 <div className="flex flex-col items-center gap-0.5">
-                                                    {item.res ? (
-                                                        <span className="px-1.5 py-0.5 rounded bg-base-content/8 text-[9px] font-bold text-base-content/60">{item.res}</span>
-                                                    ) : (
-                                                        <span className="text-[10px] text-base-content/15">—</span>
-                                                    )}
-                                                    {item._duration && <span className="text-[9px] text-base-content/30 tabular-nums">{fmtDuration(item._duration)}</span>}
+                                                    {item.res ? <QualityChip label={item.res} /> : <span className="text-[10px] text-base-content/15">—</span>}
+                                                    {item._duration && <span className="text-[9px] text-base-content/25 tabular-nums">{fmtDuration(item._duration)}</span>}
                                                 </div>
                                             </td>
 
                                             {/* Codec */}
-                                            <td className="px-3 py-3 hidden xl:table-cell">
+                                            <td className="px-3 py-3.5 hidden xl:table-cell">
                                                 <div className="flex items-center justify-center gap-1 flex-wrap">
-                                                    {item.vcodec && <span className="px-1.5 py-0.5 rounded bg-base-content/6 text-[9px] font-mono text-base-content/45">{item.vcodec}</span>}
-                                                    {item.acodec && <span className="px-1.5 py-0.5 rounded bg-base-content/6 text-[9px] font-mono text-base-content/45">{item.acodec}</span>}
+                                                    {item.vcodec && <CodecChip label={item.vcodec} />}
+                                                    {item.acodec && <CodecChip label={item.acodec} />}
                                                     {!item.vcodec && !item.acodec && <span className="text-base-content/15 text-[10px]">—</span>}
                                                 </div>
                                             </td>
 
                                             {/* Size */}
-                                            <td className="px-3 py-3 hidden md:table-cell text-right">
-                                                <span className="text-[11px] font-medium text-base-content/70 tabular-nums">{fmtBytes(item._size)}</span>
+                                            <td className="px-3 py-3.5 hidden md:table-cell text-right">
+                                                <span className="text-[11px] font-semibold text-base-content/55 tabular-nums">{fmtBytes(item._size)}</span>
                                             </td>
 
                                             {/* Library */}
-                                            <td className="px-3 py-3 hidden lg:table-cell">
-                                                <div className="flex items-center gap-1.5 text-base-content/40">
-                                                    <FolderOpen size={11} className="shrink-0" />
-                                                    <span className="text-[11px] truncate max-w-[90px]">{item._library}</span>
+                                            <td className="px-3 py-3.5 hidden lg:table-cell">
+                                                <div className="flex items-center gap-1.5 text-base-content/35">
+                                                    <FolderOpen size={10} className="shrink-0" />
+                                                    <span className="text-[11px] truncate max-w-20">{item._library}</span>
                                                 </div>
                                             </td>
 
                                             {/* Added */}
-                                            <td className="px-3 py-3 hidden xl:table-cell">
-                                                <span className="text-[11px] text-base-content/40 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
+                                            <td className="px-3 py-3.5 hidden xl:table-cell">
+                                                <span className="text-[11px] text-base-content/35 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
                                             </td>
 
-                                            {/* Permission Control */}
-                                            <td className="px-3 py-3 hidden lg:table-cell text-center">
+                                            {/* Permission */}
+                                            <td className="px-3 py-3.5 hidden lg:table-cell text-center">
                                                 {!item.permission ? (
-                                                    <span className="px-1.5 py-0.5 rounded bg-error/15 text-error text-[9px] font-bold uppercase tracking-wider">Restricted</span>
+                                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-error/12 border border-error/15 text-error text-[9px] font-bold uppercase tracking-wider">
+                                                        <ShieldOff size={8} />
+                                                        Restricted
+                                                    </span>
                                                 ) : (
-                                                    <span className="px-1.5 py-0.5 rounded bg-base-content/8 text-base-content/40 text-[9px] font-bold uppercase tracking-wider">Normal</span>
+                                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/35 text-[9px] font-bold uppercase tracking-wider">
+                                                        <Shield size={8} />
+                                                        Normal
+                                                    </span>
                                                 )}
                                             </td>
 
                                             {/* Actions */}
-                                            <td className="pl-3 pr-5 py-3">
-                                                <div className="flex items-center justify-end gap-0.5">
+                                            <td className="pl-3 pr-5 py-3.5">
+                                                <div className="flex items-center justify-end gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
                                                     <button
                                                         onClick={() => setEditMedia(item)}
                                                         title="Edit"
-                                                        className="w-7 h-7 rounded flex items-center justify-center text-base-content/35 hover:text-info hover:bg-info/12 transition-colors">
-                                                        <SquarePen size={14} strokeWidth={2} />
+                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-info hover:bg-info/12 transition-all duration-150">
+                                                        <SquarePen size={13} strokeWidth={2} />
                                                     </button>
                                                     <button
                                                         onClick={() => setDetailsMedia(item)}
                                                         title="Details"
-                                                        className="w-7 h-7 rounded flex items-center justify-center text-base-content/35 hover:text-primary hover:bg-primary/12 transition-colors">
-                                                        <Info size={14} strokeWidth={2} />
+                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-primary hover:bg-primary/12 transition-all duration-150">
+                                                        <Info size={13} strokeWidth={2} />
                                                     </button>
                                                     <button
                                                         onClick={() => setDeleteMedia(item)}
                                                         title="Delete"
-                                                        className="w-7 h-7 rounded flex items-center justify-center text-base-content/35 hover:text-error hover:bg-error/12 transition-colors">
-                                                        <Trash2 size={14} strokeWidth={2} />
+                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-error hover:bg-error/12 transition-all duration-150">
+                                                        <Trash2 size={13} strokeWidth={2} />
                                                     </button>
                                                 </div>
                                             </td>
@@ -862,30 +1205,7 @@ export default function DashMedia() {
             </div>
 
             {/* ── Pagination ── */}
-            {sortedMedia.length > 0 && (
-                <div className="flex items-center justify-between">
-                    <span className="text-xs text-base-content/40 tabular-nums">
-                        {((currentPage - 1) * pageSize + 1).toLocaleString()}–{Math.min(currentPage * pageSize, sortedMedia.length).toLocaleString()} of {sortedMedia.length.toLocaleString()}
-                    </span>
-                    <div className="flex items-center gap-1">
-                        <button
-                            onClick={() => setPage((p) => Math.max(1, p - 1))}
-                            disabled={currentPage <= 1}
-                            className="w-7 h-7 rounded flex items-center justify-center text-base-content/50 hover:text-base-content hover:bg-base-content/8 disabled:opacity-25 transition-colors focus:outline-none focus-visible:outline-none focus:shadow-none [&:focus]:shadow-none">
-                            <ChevronLeft size={15} />
-                        </button>
-                        <span className="text-xs text-base-content/40 px-2 tabular-nums">
-                            {currentPage} / {totalPages}
-                        </span>
-                        <button
-                            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                            disabled={currentPage >= totalPages}
-                            className="w-7 h-7 rounded flex items-center justify-center text-base-content/50 hover:text-base-content hover:bg-base-content/8 disabled:opacity-25 transition-colors focus:outline-none focus-visible:outline-none focus:shadow-none ">
-                            <ChevronRight size={15} />
-                        </button>
-                    </div>
-                </div>
-            )}
+            <Pagination currentPage={currentPage} totalPages={totalPages} totalItems={sortedMedia.length} pageSize={pageSize} onPageChange={setPage} />
         </div>
     );
 }

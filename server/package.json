@@ -18,6 +18,7 @@
         "express": "^5.2.1",
         "jsonwebtoken": "^9.0.3",
         "mime-types": "^3.0.2",
+        "multer": "^2.2.0",
         "playwright": "^1.60.0",
         "prisma": "^7.8.0",
         "resend": "^6.12.3",

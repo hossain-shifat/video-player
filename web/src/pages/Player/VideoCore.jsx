@@ -138,7 +138,7 @@ function getHlsConfig() {
  *  5. Adaptive buffering config for large remux/4K files.
  *  6. Network error auto-retry with exponential backoff.
  */
-const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek }, ref) {
+const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated }, ref) {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const retryCount = useRef(0);
@@ -183,6 +183,8 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                 const hls = new Hls(getHlsConfig());
                 hlsRef.current = hls;
+                // Notify parent so it can call hls.startLoad() for accurate resume seeking
+                onHlsCreated?.(hls);
                 hls.loadSource(streamUrl);
                 hls.attachMedia(video);
 

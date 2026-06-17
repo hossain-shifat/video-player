@@ -23,6 +23,11 @@ function PlayerInner({ mediaId }) {
     const clientIdRef = useRef(null);
     // FIX (Report-25): store ffprobe duration for useProgress unmount save
     const mediaDurationRef = useRef(null);
+    // Subtitle default selection: populated after subtitle list loads, consumed after history loads
+    const setDefaultSubRef = useRef(null);
+    // HLS instance ref — populated by VideoCore via onHlsCreated, used by useProgress deferredSeek
+    const hlsRef = useRef(null);
+
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
@@ -226,7 +231,23 @@ function PlayerInner({ mediaId }) {
                 // Step 3 — subtitles (non-fatal)
                 try {
                     const subData = await getSubtitles(mediaId);
-                    if (!cancelled) setSubtitles(subData?.subtitles || []);
+                    if (!cancelled) {
+                        const subs = subData?.subtitles || [];
+                        setSubtitles(subs);
+
+                        // Auto-select subtitle from history pref first; then default to English.
+                        // Deferred so history load (below) can override.
+                        if (subs.length > 0) {
+                            // Prefer English track; fall back to first track
+                            const english = subs.find((s) =>
+                                (s.lang || "").toLowerCase().startsWith("en") ||
+                                (s.label || "").toLowerCase().startsWith("english")
+                            );
+                            const defaultSub = english || null; // null = off by default if no English
+                            // Will be overridden below if history has a saved subtitle pref
+                            setDefaultSubRef.current = { subs, defaultSub };
+                        }
+                    }
                 } catch {
                     /* no subtitles */
                 }
@@ -265,6 +286,25 @@ function PlayerInner({ mediaId }) {
         mediaDuration: mediaDurationRef.current,
         streamUrl, // FIX (Report-28): needed as dep so timeupdate listener attaches
         getToken, // FIX (Report-28): auth token for unmount keepalive fetch
+        activeSubtitle: state.activeSubtitle, // NEW: save subtitle pref to history
+        hlsRef, // NEW: hls instance for accurate resume seek via startLoad
+        onHistoryLoaded: (entry) => {
+            // Restore subtitle preference from history
+            if (!entry?.subtitlePref) {
+                // No saved pref — apply default (English or off)
+                const { subs, defaultSub } = setDefaultSubRef.current || {};
+                if (subs?.length > 0) actions.setActiveSubtitle(defaultSub || null);
+                return;
+            }
+            const { subs } = setDefaultSubRef.current || {};
+            if (!subs?.length) return;
+            // Match saved subtitle by lang + source
+            const saved = entry.subtitlePref;
+            const match = subs.find(
+                (s) => s.url === saved.url || (s.lang === saved.lang && s.source === saved.source)
+            );
+            actions.setActiveSubtitle(match || null);
+        },
     });
 
     const handleBack = () => navigate(-1);
@@ -331,7 +371,7 @@ function PlayerInner({ mediaId }) {
     return (
         <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
             {/* Video core */}
-            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} mediaDuration={mediaDurationRef.current} onReadyToSeek={progressProps.onReadyToSeek} />}
+            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} mediaDuration={mediaDurationRef.current} onReadyToSeek={progressProps.onReadyToSeek} onHlsCreated={(hls) => { hlsRef.current = hls; }} />}
 
             {/* Gesture layer */}
             <PlayerGestures videoRef={videoRef} containerRef={containerRef} overlayTriggers={overlayTriggers} setOverlayState={setOverlayState} showControls={showControls} />

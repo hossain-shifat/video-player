@@ -55,10 +55,18 @@ async function loadStore() {
             store = new Map(Object.entries(obj));
             console.log(`[Metadata] Loaded ${store.size} cached entries`);
             storeLoaded = true;
-        } catch {
-            store = new Map();
-            console.log("[Metadata] No cache file found, starting fresh");
-            storeLoaded = true;
+        } catch (err) {
+            if (err.code === "ENOENT") {
+                // File doesn't exist yet — normal on first run
+                store = new Map();
+                console.log("[Metadata] No cache file found, starting fresh");
+                storeLoaded = true;
+            } else {
+                // Parse error, permission issue, etc. — log and rethrow so caller knows
+                console.error("[Metadata] Failed to load cache:", err.message);
+                _loadPromise = null;
+                throw err;
+            }
         } finally {
             _loadPromise = null;
         }
@@ -255,9 +263,7 @@ async function reconcile(activeFileIds) {
         if (key.startsWith("_season:")) continue;
 
         // hasOwnProperty-safe check — supports both Set and Map
-        const isActive = activeFileIds instanceof Set
-            ? activeFileIds.has(key)
-            : activeFileIds.has(key);
+        const isActive = activeFileIds instanceof Set ? activeFileIds.has(key) : activeFileIds.has(key);
 
         if (!isActive) {
             store.delete(key);
@@ -290,6 +296,7 @@ async function getCachedSeason(tmdbId, seasonNumber) {
     const age = Date.now() - new Date(entry._cachedAt).getTime();
     if (age > SEASON_TTL_MS) {
         store.delete(key);
+        scheduleSave(); // persist deletion so expired entry not reloaded on restart
         return null;
     }
     const { _cachedAt: _, ...data } = entry;

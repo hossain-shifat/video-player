@@ -144,6 +144,10 @@ function saveProgress(id, data, clientId) {
         completed,
         watchCount,
         lastSessionStart: isNewSession ? position : existing.lastSessionStart,
+        // Subtitle preference: null means "off", object means the chosen track
+        subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref")
+            ? data.subtitlePref
+            : (existing.subtitlePref ?? null),
     };
 
     writeJson(HISTORY_FILE, store);

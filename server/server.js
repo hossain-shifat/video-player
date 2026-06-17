@@ -36,6 +36,9 @@ const { authenticateJWT } = require("./auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("./auth/middleware/requireApprovedUser");
 const { requireRole } = require("./auth/middleware/requireRole");
 
+// const subtitleStore = require("./utils/subtitleStore");
+// const subtitleWorker = require("./utils/subtitleWorker");
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -57,9 +60,6 @@ app.use(
 );
 
 app.use(express.json());
-
-
-
 
 // ─── Request Logger ───────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -117,6 +117,25 @@ app.get("/api/info", async (req, res) => {
 // ─── System Info (hardware + transcoding diagnostics) ──────────────────────────
 app.get("/api/sysinfo", authenticateJWT, requireApprovedUser, requireRole("admin"), getSysInfoRoute);
 
+// ─── Subtitle queue API ───────────────────────────────────────────────────────
+app.get("/api/subtitle/queue", authenticateJWT, requireApprovedUser, requireRole("admin"), async (req, res) => {
+    try {
+        const stats = await subtitleStore.getQueueStats();
+        return res.json({ worker: subtitleWorker.getStatus(), ...stats });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/api/subtitle/enqueue/:id", authenticateJWT, requireApprovedUser, async (req, res) => {
+    try {
+        const entry = await subtitleStore.enqueue(req.params.id, req.body || {});
+        return res.status(201).json(entry);
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── 404 / Error ─────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 // eslint-disable-next-line no-unused-vars
@@ -129,6 +148,7 @@ app.use((err, req, res, next) => {
 async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
+    subtitleWorker.stop();
     await transcoderService.killAllSessions();
     console.log("[Server] All transcoding sessions terminated. Bye.");
     process.exit(0);
@@ -171,6 +191,47 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 
     // Start idle-session sweeper (kills abandoned sessions after SESSION_TIMEOUT_MS)
     transcoderService.startSweeper();
+
+    // ── Subtitle system ───────────────────────────────────────────────────────
+    try {
+        await subtitleStore.init();
+
+        const { getAllCached } = require("./utils/mediaCache");
+        const { readFolders } = require("./controllers/libraryController");
+        const folders = await readFolders();
+
+        if (folders.length > 0) {
+            const { allMedia } = await getAllCached(folders);
+            const allMediaIds = new Set(allMedia.map((f) => f.id));
+
+            // Remove orphan subtitle data for media no longer in library
+            await subtitleStore.reconcile(allMediaIds);
+
+            // Auto-enqueue all media for subtitle download (skips already done/queued)
+            // Uses TMDB metadata (title, year, tmdbId) for best SubDL match.
+            const { getMetadata } = require("./utils/metadataStore");
+            const batchItems = [];
+            for (const file of allMedia) {
+                const meta = await getMetadata(file).catch(() => null);
+                batchItems.push({
+                    mediaId: file.id,
+                    title: meta?.title || file.name,
+                    year: meta?.year || null,
+                    imdbId: meta?.imdbId || null,
+                    tmdbId: meta?.tmdbId ? String(meta.tmdbId) : null,
+                    season: meta?.parsed?.season ?? null,
+                    episode: meta?.parsed?.episode ?? null,
+                    type: meta?.type === "series" || meta?.type === "anime" ? "tv" : "movie",
+                });
+            }
+            const added = await subtitleStore.enqueueBatch(batchItems);
+            if (added > 0) console.log(`[Subtitle] Auto-enqueued ${added} items for download`);
+        }
+
+        subtitleWorker.start();
+    } catch (err) {
+        console.error("[Server] Subtitle system init error:", err.message);
+    }
 });
 
 // Keep-alive timeouts — prevents premature connection drops during chunked streaming

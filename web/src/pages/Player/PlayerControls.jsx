@@ -214,6 +214,31 @@ function SpeedPicker({ open, onClose }) {
 
 function SubtitlePicker({ open, onClose, subtitles }) {
     const { state, actions } = usePlayerState();
+
+    // Build display label: prefer .label (full name set by backend), fall back to lang code
+    function getLabel(sub) {
+        if (sub.label && sub.label.toLowerCase() !== sub.lang) return sub.label;
+        // Fallback: capitalize lang code
+        return (sub.lang || "Unknown").toUpperCase();
+    }
+
+    // Badge showing track source
+    function SourceBadge({ source }) {
+        if (!source) return null;
+        const styles = {
+            embedded: { background: "rgba(99,102,241,0.25)", color: "#a5b4fc" },
+            external: { background: "rgba(16,185,129,0.2)", color: "#6ee7b7" },
+            online:   { background: "rgba(251,191,36,0.2)",  color: "#fcd34d" },
+        };
+        const label = { embedded: "EMB", external: "EXT", online: "WEB" }[source] || source.toUpperCase();
+        const style = styles[source] || { background: "rgba(255,255,255,0.1)", color: "#ccc" };
+        return (
+            <span style={{ ...style, fontSize: 9, padding: "1px 5px", borderRadius: 4, marginLeft: 6, fontWeight: 700, letterSpacing: "0.04em" }}>
+                {label}
+            </span>
+        );
+    }
+
     return (
         <PopupMenu open={open} onClose={onClose} title="Subtitles">
             <PopupItem
@@ -232,7 +257,11 @@ function SubtitlePicker({ open, onClose, subtitles }) {
                         actions.setActiveSubtitle(sub);
                         onClose();
                     }}>
-                    {sub.filename || sub.lang || "Unknown"}
+                    <span style={{ display: "flex", alignItems: "center" }}>
+                        {getLabel(sub)}
+                        {sub.forced && <span style={{ fontSize: 9, color: "#f87171", marginLeft: 4 }}>FORCED</span>}
+                        <SourceBadge source={sub.source} />
+                    </span>
                 </PopupItem>
             ))}
         </PopupMenu>

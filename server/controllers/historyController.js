@@ -44,8 +44,20 @@ function deleteOne(req, res) {
 }
 
 // DELETE /api/history — clear history for this client only
+// clientId is required; without it, pass ?all=true for intentional full-store clear
 function clearAll(req, res) {
     const clientId = getClientId(req);
+    if (!clientId) {
+        // No client identified — require explicit confirmation to avoid accidental wipe
+        if (req.query.all !== "true") {
+            return res.status(400).json({
+                error: "X-Flux-Client header required. To clear all history pass ?all=true",
+            });
+        }
+        // ?all=true — intentional admin-level clear of entire store
+        clearHistory(null);
+        return res.json({ message: "All history cleared" });
+    }
     clearHistory(clientId);
     return res.json({ message: "History cleared" });
 }

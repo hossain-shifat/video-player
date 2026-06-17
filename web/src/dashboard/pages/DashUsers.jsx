@@ -28,6 +28,15 @@ import {
     WifiOff,
     Shield,
     LogOut,
+    Users,
+    UserPlus,
+    Activity,
+    Lock,
+    ChevronFirst,
+    ChevronLast,
+    Filter,
+    SlidersHorizontal,
+    Check,
 } from "lucide-react";
 import { dashApi } from "../api/dashboardApi";
 import ConfirmModal from "../components/ConfirmModal";
@@ -64,21 +73,21 @@ function isExpired(u) {
 // ─── STATUS / ROLE atoms ──────────────────────────────────────────────────────
 
 const STATUS_CFG = {
-    approved: { dot: "bg-success", badge: "border-success/40 text-success", label: "Approved" },
-    pending: { dot: "bg-warning", badge: "border-warning/40 text-warning", label: "Pending" },
-    rejected: { dot: "bg-error", badge: "border-error/40  text-error", label: "Rejected" },
-    blocked: { dot: "bg-error/70", badge: "border-error/30  text-error/80", label: "Blocked" },
+    approved: { dot: "bg-success", badge: "bg-success/10 border-success/30 text-success", label: "Approved" },
+    pending: { dot: "bg-warning", badge: "bg-warning/10 border-warning/30 text-warning", label: "Pending" },
+    rejected: { dot: "bg-error", badge: "bg-error/10   border-error/30   text-error", label: "Rejected" },
+    blocked: { dot: "bg-error/70", badge: "bg-error/8   border-error/20   text-error/80", label: "Blocked" },
 };
 
 function StatusBadge({ status }) {
     const c = STATUS_CFG[status] ?? {
         dot: "bg-base-content/30",
-        badge: "border-base-content/20 text-base-content/60",
+        badge: "bg-base-content/5 border-base-content/20 text-base-content/60",
         label: status,
     };
     return (
-        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-xs font-bold ${c.badge}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-bold ${c.badge}`}>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.dot}`} />
             {c.label}
         </span>
     );
@@ -86,18 +95,23 @@ function StatusBadge({ status }) {
 
 function RoleBadge({ role }) {
     return role === "admin" ? (
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-primary/40 text-primary text-xs font-bold">
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-primary/40 bg-primary/10 text-primary text-xs font-bold">
             <Crown size={11} /> Admin
         </span>
     ) : (
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-base-content/20 text-white/70 text-xs font-bold">
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-accent/40 bg-accent/10 text-accent text-xs font-bold">
             <User size={11} /> User
         </span>
     );
 }
 
 function Avatar({ user, size = "sm" }) {
-    const dim = { sm: "w-7 h-7 text-xs", md: "w-9 h-9 text-sm", lg: "w-11 h-11 text-base" }[size] ?? "w-7 h-7 text-xs";
+    const dim =
+        {
+            sm: "w-8 h-8 text-xs",
+            md: "w-10 h-10 text-sm",
+            lg: "w-12 h-12 text-base",
+        }[size] ?? "w-8 h-8 text-xs";
     const initial = (user.name || user.email || "U")[0].toUpperCase();
     if (user.avatar) return <img src={user.avatar} alt="" className={`${dim} rounded-full object-cover ring-1 ring-base-300 shrink-0`} />;
     return <div className={`${dim} rounded-full bg-primary/20 flex items-center justify-center font-black text-primary ring-1 ring-primary/20 shrink-0`}>{initial}</div>;
@@ -109,8 +123,8 @@ function Toast({ toast }) {
     if (!toast) return null;
     return createPortal(
         <div
-            className={`fixed bottom-5 right-5 z-[99999] flex items-center gap-2 px-4 py-2.5
-            rounded-xl shadow-2xl text-xs font-bold max-w-xs animate-[slideUp_0.2s_ease-out]
+            className={`fixed bottom-5 right-5 z-99999 flex items-center gap-2 px-4 py-3
+            rounded-lg shadow-2xl text-xs font-bold max-w-xs
             ${toast.type === "error" ? "bg-error text-error-content" : "bg-success text-success-content"}`}>
             {toast.type === "error" ? <AlertTriangle size={13} /> : <CheckCircle size={13} />}
             {toast.msg}
@@ -127,11 +141,11 @@ function Toggle({ value, onChange, disabled }) {
             type="button"
             onClick={() => !disabled && onChange(!value)}
             disabled={disabled}
-            className={`relative w-8 h-4 rounded-full transition-colors duration-200 shrink-0 disabled:opacity-40
+            className={`relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0 disabled:opacity-40 border-none cursor-pointer
                 ${value ? "bg-primary" : "bg-white/15"}`}>
             <span
-                className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all duration-200
-                ${value ? "left-[17px]" : "left-0.5"}`}
+                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all duration-200
+                ${value ? "left-4.75" : "left-0.5"}`}
             />
         </button>
     );
@@ -146,7 +160,7 @@ function ActionBtn({ icon: Icon, label, onClick, className = "", pulse = false }
             aria-label={label}
             title={label}
             className={`relative w-8 h-8 rounded-md flex items-center justify-center
-                text-white/60 transition-all duration-150 cursor-pointer
+                text-white/50 transition-all duration-150 cursor-pointer border-none
                 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 ${className}`}>
             <Icon size={15} strokeWidth={1.8} />
             {pulse && (
@@ -166,7 +180,7 @@ function ActionMenu({ user, onAction }) {
     const [pos, setPos] = useState({ top: 0, left: 0 });
     const btnRef = useRef(null);
     const menuRef = useRef(null);
-    const MENU_W = 160;
+    const MENU_W = 165;
 
     useEffect(() => {
         if (!open) return;
@@ -207,8 +221,8 @@ function ActionMenu({ user, onAction }) {
                 onClick={handleOpen}
                 aria-label="More actions"
                 title="More actions"
-                className="w-8 h-8 rounded-md flex items-center justify-center text-white/60
-                    hover:bg-warning/10 hover:text-warning transition-all duration-150
+                className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none
+                    hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer
                     focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
                 <MoreVertical size={15} strokeWidth={1.8} />
             </button>
@@ -218,7 +232,7 @@ function ActionMenu({ user, onAction }) {
                     <div
                         ref={menuRef}
                         style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 99999, minWidth: MENU_W }}
-                        className="bg-base-200 border border-white/10 rounded-md shadow-2xl py-1 overflow-hidden">
+                        className="bg-base-200 border border-white/10 rounded-lg shadow-2xl py-1 overflow-hidden">
                         {actions.map((a, i) =>
                             !a ? (
                                 <div key={i} className="my-1 border-t border-white/5" />
@@ -229,7 +243,7 @@ function ActionMenu({ user, onAction }) {
                                         onAction(user, a.key);
                                         setOpen(false);
                                     }}
-                                    className={`flex items-center gap-2 w-full px-3 py-2 text-sm font-semibold transition-colors ${a.cls}`}>
+                                    className={`flex items-center gap-2.5 w-full px-3.5 py-2.5 text-sm font-semibold transition-colors border-none cursor-pointer ${a.cls}`}>
                                     <a.icon size={14} className="shrink-0" /> {a.label}
                                 </button>
                             ),
@@ -256,7 +270,7 @@ function Modal({ onClose, children, maxW = "max-w-lg" }) {
         <dialog open className="modal modal-open" style={{ zIndex: 9998 }}>
             <div
                 className={`modal-box ${maxW} p-0 overflow-hidden bg-base-100
-                rounded-md shadow-[0_24px_64px_rgba(0,0,0,0.75)] border border-white/[0.07]`}>
+                rounded-xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] border border-white/8`}>
                 {children}
             </div>
             <div className="modal-backdrop bg-black/75 backdrop-blur-[2px]" onClick={onClose} />
@@ -266,9 +280,9 @@ function Modal({ onClose, children, maxW = "max-w-lg" }) {
 
 function ModalHeader({ title, subtitle, icon: Icon, iconCls = "text-primary", onClose, badge }) {
     return (
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06]">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.07]">
             {Icon && (
-                <div className={`w-9 h-9 rounded-md bg-base-300/50 flex items-center justify-center shrink-0 ${iconCls}`}>
+                <div className={`w-9 h-9 rounded-lg bg-base-300/60 flex items-center justify-center shrink-0 ${iconCls}`}>
                     <Icon size={18} />
                 </div>
             )}
@@ -279,7 +293,7 @@ function ModalHeader({ title, subtitle, icon: Icon, iconCls = "text-primary", on
             {badge}
             <button
                 onClick={onClose}
-                className="w-8 h-8 rounded-md flex items-center justify-center text-white/40
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 border-none
                     hover:text-white hover:bg-white/8 transition-colors shrink-0 cursor-pointer">
                 <X size={16} />
             </button>
@@ -290,8 +304,8 @@ function ModalHeader({ title, subtitle, icon: Icon, iconCls = "text-primary", on
 function Section({ label, icon: Icon, iconCls = "text-primary/70", children }) {
     return (
         <div className="space-y-2">
-            <p className="text-xs font-black uppercase tracking-widest text-white/50 flex items-center gap-1.5">
-                {Icon && <Icon size={12} className={iconCls} />}
+            <p className="text-[11px] font-black uppercase tracking-widest text-white/40 flex items-center gap-1.5">
+                {Icon && <Icon size={11} className={iconCls} />}
                 {label}
             </p>
             {children}
@@ -301,9 +315,161 @@ function Section({ label, icon: Icon, iconCls = "text-primary/70", children }) {
 
 function FieldRow({ label, value }) {
     return (
-        <div className="flex justify-between items-center py-1.5 px-0 border-b border-white/[0.04] last:border-0">
+        <div className="flex justify-between items-center py-2 px-0 border-b border-white/4 last:border-0">
             <dt className="text-sm text-white/50 font-medium shrink-0 mr-4">{label}</dt>
-            <dd className="text-sm text-white/90 font-semibold text-right max-w-[60%] truncate">{value}</dd>
+            <dd className="text-sm text-white font-semibold text-right max-w-[60%] truncate">{value}</dd>
+        </div>
+    );
+}
+
+// ─── Stat Card ────────────────────────────────────────────────────────────────
+
+function StatCard({ icon: Icon, label, value, sub, iconCls = "text-primary", bgCls = "bg-primary/10" }) {
+    return (
+        <div className="bg-base-200/40 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5 hover:border-white/10 transition-colors">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${bgCls} ${iconCls}`}>
+                <Icon size={18} strokeWidth={1.8} />
+            </div>
+            <div className="min-w-0">
+                <p className="text-2xl font-black text-white tabular-nums leading-none">{value}</p>
+                <p className="text-xs text-white/50 mt-0.5 font-medium">{label}</p>
+                {sub && <p className="text-[10px] text-white/30 mt-0.5">{sub}</p>}
+            </div>
+        </div>
+    );
+}
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+function Skeleton({ className = "" }) {
+    return <div className={`animate-pulse bg-white/5 rounded ${className}`} />;
+}
+
+function TableSkeleton() {
+    return (
+        <div className="space-y-0">
+            {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3.5 border-b border-white/4">
+                    <Skeleton className="w-8 h-8 rounded-full shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                        <Skeleton className="h-3.5 w-36" />
+                        <Skeleton className="h-2.5 w-48" />
+                    </div>
+                    <Skeleton className="h-6 w-14 rounded-md" />
+                    <Skeleton className="h-6 w-18 rounded-md" />
+                    <Skeleton className="h-6 w-16 rounded-md hidden sm:block" />
+                    <div className="flex gap-1 ml-auto">
+                        <Skeleton className="w-8 h-8 rounded-md" />
+                        <Skeleton className="w-8 h-8 rounded-md" />
+                        <Skeleton className="w-8 h-8 rounded-md" />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// ─── Empty State ──────────────────────────────────────────────────────────────
+
+function EmptyState({ search, statusFilter, onClear }) {
+    const hasFilter = search || statusFilter;
+    return (
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-base-200/60 flex items-center justify-center mb-4 border border-white/6">
+                <Users size={22} className="text-white/25" />
+            </div>
+            <p className="text-base font-bold text-white/50">{hasFilter ? "No users match your filters" : "No users found"}</p>
+            <p className="text-sm text-white/30 mt-1 max-w-xs">{hasFilter ? "Try adjusting your search or clearing the active filters." : "Users will appear here once they register."}</p>
+            {hasFilter && (
+                <button onClick={onClear} className="mt-4 px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer">
+                    Clear Filters
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+function Pagination({ page, pages, total, limit, onPage }) {
+    if (pages <= 1) return null;
+
+    const from = (page - 1) * limit + 1;
+    const to = Math.min(page * limit, total);
+
+    // Build visible page numbers (max 5 shown)
+    const makePages = () => {
+        if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+        const delta = 2;
+        const range = [];
+        const left = page - delta;
+        const right = page + delta;
+        for (let i = 1; i <= pages; i++) {
+            if (i === 1 || i === pages || (i >= left && i <= right)) {
+                range.push(i);
+            } else if (range[range.length - 1] !== "...") {
+                range.push("...");
+            }
+        }
+        return range;
+    };
+
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <p className="text-xs text-white/40 tabular-nums">
+                Showing{" "}
+                <span className="text-white/70 font-semibold">
+                    {from}–{to}
+                </span>{" "}
+                of <span className="text-white/70 font-semibold">{total}</span> users
+            </p>
+            <div className="flex items-center gap-1">
+                <button
+                    onClick={() => onPage(1)}
+                    disabled={page <= 1}
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none
+                        hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronFirst size={14} />
+                </button>
+                <button
+                    onClick={() => onPage(page - 1)}
+                    disabled={page <= 1}
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none
+                        hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronLeft size={14} />
+                </button>
+
+                {makePages().map((p, i) =>
+                    p === "..." ? (
+                        <span key={`dots-${i}`} className="w-8 h-8 flex items-center justify-center text-white/30 text-xs">
+                            …
+                        </span>
+                    ) : (
+                        <button
+                            key={p}
+                            onClick={() => onPage(p)}
+                            className={`w-8 h-8 rounded-md text-xs font-bold transition-colors border-none cursor-pointer
+                                ${page === p ? "bg-primary text-primary-content shadow-sm" : "text-white/60 hover:bg-white/8 hover:text-white"}`}>
+                            {p}
+                        </button>
+                    ),
+                )}
+
+                <button
+                    onClick={() => onPage(page + 1)}
+                    disabled={page >= pages}
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none
+                        hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronRight size={14} />
+                </button>
+                <button
+                    onClick={() => onPage(pages)}
+                    disabled={page >= pages}
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none
+                        hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronLast size={14} />
+                </button>
+            </div>
         </div>
     );
 }
@@ -346,8 +512,8 @@ function InfoModal({ user, onClose }) {
 
     return (
         <Modal onClose={onClose} maxW="max-w-xl">
-            {/* header — avatar style */}
-            <div className="flex items-center gap-3.5 px-5 py-4 border-b border-white/[0.06]">
+            {/* header */}
+            <div className="flex items-center gap-3.5 px-5 py-4 border-b border-white/[0.07]">
                 <Avatar user={user} size="md" />
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -357,13 +523,16 @@ function InfoModal({ user, onClose }) {
                     </div>
                     <p className="text-[11px] text-white/40 font-mono mt-0.5 truncate">{user.email}</p>
                 </div>
-                <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-white/30 hover:text-white hover:bg-white/8 transition-colors cursor-pointer">
-                    <X size={14} />
+                <button
+                    onClick={onClose}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-white/30 border-none
+                        hover:text-white hover:bg-white/8 transition-colors cursor-pointer">
+                    <X size={15} />
                 </button>
             </div>
 
             {/* body */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.05] max-h-[68vh] overflow-y-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-white/5 max-h-[68vh] overflow-y-auto">
                 {/* left */}
                 <div className="p-5 space-y-5">
                     <Section label="Account" icon={User}>
@@ -390,7 +559,7 @@ function InfoModal({ user, onClose }) {
                             { label: "Logins", val: user._count?.sessions ?? sessions.length, cls: "text-primary" },
                             { label: "Watched", val: user._count?.watchHistory ?? "—", cls: "text-info" },
                         ].map(({ label, val, cls }) => (
-                            <div key={label} className="bg-base-200/25 rounded-md p-3 text-center border border-white/[0.05]">
+                            <div key={label} className="bg-base-200/30 rounded-lg p-3 text-center border border-white/5">
                                 <p className={`text-2xl font-black ${cls}`}>{val}</p>
                                 <p className="text-xs uppercase tracking-wide text-white/50 mt-0.5">{label}</p>
                             </div>
@@ -398,8 +567,8 @@ function InfoModal({ user, onClose }) {
                     </div>
 
                     {lastMs && (
-                        <p className="text-xs text-white/50 text-center">
-                            Last active: <span className="text-white/80 font-semibold">{fmtRel(lastMs)}</span>
+                        <p className="text-xs text-white/40 text-center">
+                            Last active: <span className="text-white/70 font-semibold">{fmtRel(lastMs)}</span>
                         </p>
                     )}
                 </div>
@@ -407,8 +576,8 @@ function InfoModal({ user, onClose }) {
                 {/* right — sessions */}
                 <div className="p-5">
                     <div className="flex items-center justify-between mb-3">
-                        <p className="text-xs font-black uppercase tracking-widest text-white/50 flex items-center gap-1.5">
-                            <Monitor size={12} className="text-success/70" /> Sessions
+                        <p className="text-[11px] font-black uppercase tracking-widest text-white/40 flex items-center gap-1.5">
+                            <Monitor size={11} className="text-success/70" /> Sessions
                         </p>
                         {active.length > 0 && <span className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-md">{active.length} live</span>}
                     </div>
@@ -418,21 +587,21 @@ function InfoModal({ user, onClose }) {
                             <span className="loading loading-spinner loading-sm text-primary" />
                         </div>
                     ) : active.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-10 rounded-xl border border-white/[0.05] border-dashed">
-                            <WifiOff size={20} className="text-white/30 mb-2" />
-                            <p className="text-sm text-white/50">No active sessions</p>
+                        <div className="flex flex-col items-center justify-center py-10 rounded-xl border border-white/5 border-dashed">
+                            <WifiOff size={20} className="text-white/20 mb-2" />
+                            <p className="text-sm text-white/40">No active sessions</p>
                         </div>
                     ) : (
                         <div className="space-y-2">
                             {active.map((s) => (
-                                <div key={s.id} className="flex items-center gap-2.5 bg-base-200/20 rounded-md px-3 py-2.5 border border-white/[0.05] group">
-                                    <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">{deviceIcon(s.userAgent ?? "")}</div>
+                                <div key={s.id} className="flex items-center gap-2.5 bg-base-200/20 rounded-lg px-3 py-2.5 border border-white/5 group">
+                                    <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">{deviceIcon(s.userAgent ?? "")}</div>
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-semibold text-white/90 truncate">{[s.browser, s.os].filter(Boolean).join(" · ") || s.userAgent || "Unknown"}</p>
+                                        <p className="text-sm font-semibold text-white truncate">{[s.browser, s.os].filter(Boolean).join(" · ") || s.userAgent || "Unknown"}</p>
                                         <div className="flex items-center gap-2 mt-0.5">
-                                            {s.ip && <span className="text-xs font-mono text-white/50">{s.ip}</span>}
+                                            {s.ip && <span className="text-xs font-mono text-white/40">{s.ip}</span>}
                                             {s.lastSeenAt && (
-                                                <span className="text-xs text-white/50 flex items-center gap-0.5">
+                                                <span className="text-xs text-white/40 flex items-center gap-0.5">
                                                     <Clock size={10} /> {fmtRel(s.lastSeenAt)}
                                                 </span>
                                             )}
@@ -442,7 +611,7 @@ function InfoModal({ user, onClose }) {
                                         onClick={() => revoke(s.id)}
                                         title="Revoke session"
                                         disabled={revoking === s.id}
-                                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/40
+                                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/40 border-none
                                             hover:bg-error/20 hover:text-error transition-colors shrink-0 disabled:opacity-40 cursor-pointer">
                                         {revoking === s.id ? <span className="loading loading-spinner loading-xs" /> : <LogOut size={13} />}
                                     </button>
@@ -512,7 +681,7 @@ function RequestModal({ user, onClose, onSave }) {
             <ModalHeader title="Manage Access" subtitle={user.email} icon={UserCheck} onClose={onClose} />
 
             {/* user pill */}
-            <div className="mx-5 mt-4 flex items-center gap-3 bg-base-200/30 rounded-md px-3.5 py-3 border border-white/[0.06]">
+            <div className="mx-5 mt-4 flex items-center gap-3 bg-base-200/30 rounded-lg px-3.5 py-3 border border-white/6">
                 <Avatar user={user} size="sm" />
                 <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-white truncate">{user.name || "Unnamed"}</p>
@@ -532,16 +701,23 @@ function RequestModal({ user, onClose, onSave }) {
                             type="button"
                             onClick={() => !isCurrent && act(key)}
                             disabled={isCurrent || saving !== null}
-                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-md transition-all text-left border
-                                ${isCurrent ? `${activeCls} opacity-60 cursor-not-allowed` : `${inactiveCls} cursor-pointer`}`}>
-                            <div className={`w-10 h-10 rounded-md flex items-center justify-center shrink-0 ${iconBgCls}`}>
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-left border-none
+                                ${isCurrent ? `${activeCls} opacity-60 cursor-not-allowed` : `${inactiveCls} cursor-pointer border border-white/6`}`}>
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${iconBgCls}`}>
                                 {isSaving ? <span className="loading loading-spinner loading-sm" /> : <Icon size={18} />}
                             </div>
                             <div className="flex-1 min-w-0">
                                 <p className={`text-sm font-bold ${isCurrent ? labelCls : "text-white"}`}>{label}</p>
-                                <p className="text-xs text-white/50 mt-0.5">{desc}</p>
+                                <p className="text-xs text-white/45 mt-0.5">{desc}</p>
                             </div>
-                            {isCurrent && <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${labelCls} bg-current/10`}>Current</span>}
+                            {isCurrent && (
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${labelCls}`} style={{ background: "currentColor", opacity: 0 }}>
+                                    <span className="opacity-100" style={{ color: "inherit" }}>
+                                        Current
+                                    </span>
+                                </span>
+                            )}
+                            {isCurrent && <CheckCircle size={16} className={`${labelCls} shrink-0`} />}
                         </button>
                     );
                 })}
@@ -575,7 +751,6 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
         setRole(user.role || "user");
         setStatus(user.status || "pending");
         setAccessType(user.accessType || "permanent");
-        // Parse permissions — support both permissionsJson (string) and permissions (obj)
         let parsed = {};
         try {
             const raw = user.permissionsJson || user.permissions;
@@ -598,7 +773,6 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
         fn();
         setDirty(true);
     };
-
     const filteredLibs = libraries.filter((l) => !libSearch || (l.label + l.path).toLowerCase().includes(libSearch.toLowerCase()));
     const enabledCount = Object.values(libPerms).filter(Boolean).length;
 
@@ -611,18 +785,9 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                 d.setDate(d.getDate() + duration);
                 accessExpiresAt = d.toISOString();
             }
-            // Send both formats so backend can pick what it needs
-            const permissions = { libraries: libPerms, allowAdult: allowAdult };
+            const permissions = { libraries: libPerms, allowAdult };
             const permissionsJson = JSON.stringify(permissions);
-            await onSave(user, {
-                role,
-                status,
-                accessType,
-                accessExpiresAt,
-                allowAdult: allowAdult,
-                permissions,
-                permissionsJson,
-            });
+            await onSave(user, { role, status, accessType, accessExpiresAt, allowAdult, permissions, permissionsJson });
             onClose();
         } catch {
             /* onSave shows toast */
@@ -645,22 +810,22 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                 subtitle={user.name || user.email}
                 icon={KeyRound}
                 onClose={onClose}
-                badge={dirty && <span className="text-xs font-bold text-warning bg-warning/10 px-2 py-0.5 rounded-md animate-pulse mr-1">Unsaved</span>}
+                badge={dirty && <span className="text-xs font-bold text-warning bg-warning/10 px-2 py-0.5 rounded-md animate-pulse mr-1 border border-warning/20">Unsaved</span>}
             />
 
-            <div className="overflow-y-auto max-h-[64vh] p-5 space-y-5">
-                {/* Role + Status */}
+            <div className="overflow-y-auto max-h-[62vh] p-5 space-y-5">
+                {/* Role + Status side by side */}
                 <div className="grid grid-cols-2 gap-4">
                     <Section label="Role" icon={Crown} iconCls="text-primary/60">
-                        <div className="flex gap-1 bg-base-200/30 p-0.5 rounded-md border border-white/[0.06]">
+                        <div className="flex gap-1 bg-base-200/30 p-0.5 rounded-lg border border-white/6">
                             {["user", "admin"].map((r) => (
                                 <button
                                     key={r}
                                     type="button"
                                     onClick={() => mark(() => setRole(r))}
-                                    className={`flex-1 py-2 rounded text-sm font-bold capitalize flex items-center justify-center gap-1.5 transition-all border-none cursor-pointer
+                                    className={`flex-1 py-2 rounded-md text-xs font-bold capitalize flex items-center justify-center gap-1 transition-all border-none cursor-pointer
                                         ${role === r ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white"}`}>
-                                    {r === "admin" ? <Crown size={14} /> : <User size={14} />} {r}
+                                    {r === "admin" ? <Crown size={12} /> : <User size={12} />} {r}
                                 </button>
                             ))}
                         </div>
@@ -673,7 +838,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                                     key={s}
                                     type="button"
                                     onClick={() => mark(() => setStatus(s))}
-                                    className={`py-2 rounded text-xs font-bold capitalize transition-all border cursor-pointer
+                                    className={`py-2 rounded-md text-xs font-bold capitalize transition-all border cursor-pointer
                                         ${status === s ? STATUS_BTN[s].active : STATUS_BTN[s].inactive}`}>
                                     {s}
                                 </button>
@@ -684,13 +849,13 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
 
                 {/* Access duration */}
                 <Section label="Access Duration" icon={Clock} iconCls="text-info/60">
-                    <div className="flex gap-1 bg-base-200/30 p-0.5 rounded-md border border-white/[0.06]">
+                    <div className="flex gap-1 bg-base-200/30 p-0.5 rounded-lg border border-white/6">
                         {["permanent", "temporary"].map((t) => (
                             <button
                                 key={t}
                                 type="button"
                                 onClick={() => mark(() => setAccessType(t))}
-                                className={`flex-1 py-2 rounded text-sm font-bold capitalize transition-all border-none cursor-pointer
+                                className={`flex-1 py-2 rounded-md text-xs font-bold capitalize transition-all border-none cursor-pointer
                                     ${accessType === t ? "bg-accent text-accent-content shadow-sm" : "text-white/50 hover:text-white"}`}>
                                 {t}
                             </button>
@@ -703,15 +868,15 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                                     key={days}
                                     type="button"
                                     onClick={() => mark(() => setDuration(days))}
-                                    className={`flex-1 py-2 rounded text-xs font-bold transition-all border cursor-pointer
-                                        ${duration === days ? "bg-accent/20 text-accent border-accent/30" : "bg-base-200/20 text-white/50 border-white/[0.06] hover:text-white"}`}>
+                                    className={`flex-1 py-2 rounded-md text-xs font-bold transition-all border cursor-pointer
+                                        ${duration === days ? "bg-accent/20 text-accent border-accent/30" : "bg-base-200/20 text-white/50 border-white/6 hover:text-white"}`}>
                                     {label}
                                 </button>
                             ))}
                         </div>
                     )}
                     {user.accessExpiresAt && (
-                        <p className={`text-xs mt-1.5 flex items-center gap-1 ${isExpired(user) ? "text-error" : "text-white/50"}`}>
+                        <p className={`text-xs mt-1.5 flex items-center gap-1 ${isExpired(user) ? "text-error" : "text-white/40"}`}>
                             {isExpired(user) ? <XCircle size={11} /> : <Clock size={11} />}
                             {isExpired(user) ? "Expired:" : "Expires:"} {fmtDate(user.accessExpiresAt)}
                         </p>
@@ -719,16 +884,16 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                 </Section>
 
                 {/* Adult content */}
-                <div className="flex items-center justify-between bg-base-200/20 rounded-md px-4 py-3 border border-white/[0.06]">
+                <div className="flex items-center justify-between bg-base-200/20 rounded-lg px-4 py-3 border border-white/6">
                     <div className="flex items-center gap-3">
                         <div
-                            className={`w-8 h-8 rounded-md flex items-center justify-center
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center
                             ${allowAdult ? "bg-warning/20 text-warning" : "bg-base-300/30 text-white/40"}`}>
                             {allowAdult ? <Eye size={15} /> : <EyeOff size={15} />}
                         </div>
                         <div>
                             <p className="text-sm font-bold text-white">Adult Content</p>
-                            <p className="text-xs text-white/50">Permit 18+ libraries</p>
+                            <p className="text-xs text-white/40">Permit 18+ libraries</p>
                         </div>
                     </div>
                     <Toggle value={allowAdult} onChange={(v) => mark(() => setAllowAdult(v))} />
@@ -747,7 +912,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                                         setLibPerms(m);
                                     })
                                 }
-                                className="text-xs font-bold text-primary hover:opacity-70 transition-opacity cursor-pointer">
+                                className="text-xs font-bold text-primary hover:opacity-70 transition-opacity cursor-pointer border-none bg-transparent">
                                 All
                             </button>
                             <button
@@ -759,13 +924,13 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                                         setLibPerms(m);
                                     })
                                 }
-                                className="text-xs font-bold text-white/50 hover:text-white transition-colors cursor-pointer">
+                                className="text-xs font-bold text-white/40 hover:text-white transition-colors cursor-pointer border-none bg-transparent">
                                 None
                             </button>
                         </div>
 
                         {libraries.length > 4 && (
-                            <div className="flex items-center gap-2 bg-base-200/20 rounded-md px-2.5 py-1.5 mb-1.5 border border-white/[0.05]">
+                            <div className="flex items-center gap-2 bg-base-200/20 rounded-lg px-2.5 py-1.5 mb-1.5 border border-white/5">
                                 <Search size={12} className="text-white/40 shrink-0" />
                                 <input
                                     value={libSearch}
@@ -780,15 +945,15 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                             {filteredLibs.map((lib) => {
                                 const on = libPerms[lib.id] ?? true;
                                 return (
-                                    <div key={lib.id} className="flex items-center gap-2.5 rounded-md px-3 py-2 bg-base-200/15 border border-white/[0.04] hover:bg-base-200/25 transition-colors">
+                                    <div key={lib.id} className="flex items-center gap-2.5 rounded-lg px-3 py-2 bg-base-200/15 border border-white/4 hover:bg-base-200/25 transition-colors">
                                         <div
-                                            className={`w-6 h-6 rounded flex items-center justify-center shrink-0
+                                            className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0
                                             ${on ? "bg-primary/20 text-primary" : "bg-base-300/20 text-white/30"}`}>
                                             <Library size={12} />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className={`text-sm font-semibold truncate ${on ? "text-white/90" : "text-white/40"}`}>{lib.label || lib.path}</p>
-                                            {lib.label && <p className="text-xs font-mono text-white/30 truncate">{lib.path}</p>}
+                                            <p className={`text-sm font-semibold truncate ${on ? "text-white" : "text-white/40"}`}>{lib.label || lib.path}</p>
+                                            {lib.label && <p className="text-xs font-mono text-white/25 truncate">{lib.path}</p>}
                                         </div>
                                         <Toggle value={on} onChange={() => mark(() => setLibPerms((p) => ({ ...p, [lib.id]: !p[lib.id] })))} />
                                     </div>
@@ -800,20 +965,20 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
             </div>
 
             {/* footer */}
-            <div className="flex gap-2 px-5 py-4 border-t border-white/[0.06]">
+            <div className="flex gap-2 px-5 py-4 border-t border-white/[0.07]">
                 <button
                     type="button"
                     onClick={onClose}
-                    className="flex-1 py-3 rounded-md text-sm font-bold text-white/60
-                        bg-base-200/30 hover:bg-base-200/50 hover:text-white transition-colors border-none cursor-pointer">
+                    className="flex-1 py-2.5 rounded-md text-sm font-bold text-white
+                        bg-base-200/50 hover:bg-base-200/70 transition-colors border-none cursor-pointer">
                     Cancel
                 </button>
                 <button
                     type="button"
                     onClick={handleSave}
                     disabled={saving || !dirty}
-                    className={`flex-1 py-3 rounded-md text-sm font-bold transition-all border-none
-                        ${dirty && !saving ? "bg-primary text-primary-content hover:opacity-90 shadow-sm cursor-pointer" : "bg-base-content/5 text-white/40 cursor-not-allowed"}`}>
+                    className={`flex-1 py-2.5 rounded-md text-sm font-bold transition-all border-none
+                        ${dirty && !saving ? "bg-primary text-primary-content hover:opacity-90 shadow-sm cursor-pointer" : "bg-base-content/5 text-white/30 cursor-not-allowed"}`}>
                     {saving ? (
                         <span className="flex items-center justify-center gap-1.5">
                             <span className="loading loading-spinner loading-xs" /> Saving…
@@ -833,9 +998,9 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
     if (!users.length) return null;
     return (
         <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
-            <table className="w-full table-auto border-collapse" style={{ minWidth: 700 }}>
+            <table className="w-full table-auto border-collapse" style={{ minWidth: 720 }}>
                 <thead>
-                    <tr className="text-xs font-bold uppercase tracking-wider text-white/50 bg-base-200/30 border-b border-white/[0.05]">
+                    <tr className="text-[11px] font-black uppercase tracking-wider text-white/40 bg-base-200/40 border-b border-white/6">
                         <th className="py-3 px-4 text-left">User</th>
                         <th className="py-3 px-3 text-left">Role</th>
                         <th className="py-3 px-3 text-left">Status</th>
@@ -851,13 +1016,13 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                     {users.map((u) => {
                         const exp = isExpired(u);
                         return (
-                            <tr key={u.id} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+                            <tr key={u.id} className="border-b border-white/4 hover:bg-white/2 transition-colors group">
                                 <td className="py-3 px-4">
                                     <div className="flex items-center gap-3">
                                         <Avatar user={u} />
                                         <div className="min-w-0">
-                                            <p className="text-sm font-bold text-white truncate max-w-[150px]">{u.name || "—"}</p>
-                                            <p className="text-xs text-white/60 font-mono truncate max-w-[150px]">{u.email}</p>
+                                            <p className="text-sm font-bold text-white truncate max-w-37.5">{u.name || "—"}</p>
+                                            <p className="text-xs text-white/50 font-mono truncate max-w-37.5">{u.email}</p>
                                         </div>
                                     </div>
                                 </td>
@@ -868,7 +1033,7 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                                     <StatusBadge status={u.status} />
                                 </td>
                                 <td className="py-3 px-3">
-                                    <span className={`text-base font-black ${u.emailVerified ? "text-success" : "text-white/40"}`}>{u.emailVerified ? "✓" : "✗"}</span>
+                                    <span className={`text-base font-black flex justify-center ${u.emailVerified ? "text-success" : "text-white/30"}`}>{u.emailVerified ? <Check /> : <X />}</span>
                                 </td>
                                 <td className="py-3 px-3">
                                     {exp ? (
@@ -877,29 +1042,35 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                                         <div>
                                             <span className="text-xs font-bold text-warning">Temp</span>
                                             {u.accessExpiresAt && (
-                                                <p className="text-xs text-white/50 mt-0.5 flex items-center gap-0.5">
+                                                <p className="text-xs text-white/40 mt-0.5 flex items-center gap-0.5">
                                                     <Calendar size={10} /> {fmtDateShort(u.accessExpiresAt)}
                                                 </p>
                                             )}
                                         </div>
                                     ) : (
-                                        <span className="text-xs text-white/50">Perm</span>
+                                        <span className="text-xs text-white/40">Permanent</span>
                                     )}
                                 </td>
                                 <td className="py-3 px-3 hidden sm:table-cell">
-                                    <span className="text-xs font-mono text-white/50">{u.lastIp || "—"}</span>
+                                    <span className="text-xs font-mono text-white/40">{u.lastIp || "—"}</span>
                                 </td>
                                 <td className="py-3 px-3 text-center">
-                                    <div className="inline-flex items-center gap-1.5 bg-base-300/20 px-2 py-1 rounded-md">
+                                    <div className="inline-flex items-center gap-1.5 bg-base-300/30 px-2 py-1 rounded-md">
                                         {(u._count?.sessions ?? 0) > 0 && <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shrink-0" />}
-                                        <span className="text-sm text-white/70 font-bold tabular-nums">{u._count?.sessions ?? 0}</span>
+                                        <span className="text-sm text-white font-bold tabular-nums">{u._count?.sessions ?? 0}</span>
                                     </div>
                                 </td>
-                                <td className="py-3 px-3 text-xs text-white/50 whitespace-nowrap hidden sm:table-cell">{u.createdAt ? fmtDateShort(u.createdAt) : "—"}</td>
+                                <td className="py-3 px-3 text-xs text-white/40 whitespace-nowrap hidden sm:table-cell">{u.createdAt ? fmtDateShort(u.createdAt) : "—"}</td>
                                 <td className="py-3 px-4">
                                     <div className="flex items-center justify-end gap-1">
                                         <ActionBtn icon={Info} label="Details" onClick={() => onInfo(u)} className="hover:bg-info/15 hover:text-info" />
-                                        <ActionBtn icon={UserCheck} label="Access" onClick={() => onRequest(u)} className="hover:bg-success/15 hover:text-success" pulse={u.status === "pending"} />
+                                        <ActionBtn
+                                            icon={UserCheck}
+                                            label="Manage Access"
+                                            onClick={() => onRequest(u)}
+                                            className="hover:bg-success/15 hover:text-success"
+                                            pulse={u.status === "pending"}
+                                        />
                                         <ActionBtn icon={KeyRound} label="Permissions" onClick={() => onPermission(u)} className="hover:bg-primary/15 hover:text-primary" />
                                         <ActionMenu user={u} onAction={onAction} />
                                     </div>
@@ -915,10 +1086,12 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
 
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 
+const LIMIT = 25;
+
 export default function DashUsers() {
     const [users, setUsers] = useState([]);
     const [total, setTotal] = useState(0);
-    const [pendingTotal, setPendingTotal] = useState(0); // FIX: track server-side pending count
+    const [pendingTotal, setPendingTotal] = useState(0);
     const [pages, setPages] = useState(1);
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState("");
@@ -932,6 +1105,7 @@ export default function DashUsers() {
     const [reqUser, setReqUser] = useState(null);
     const [permUser, setPermUser] = useState(null);
     const [libraries, setLibraries] = useState([]);
+    const [stats, setStats] = useState(null);
     const searchTimer = useRef(null);
 
     function showToast(msg, type = "success") {
@@ -947,7 +1121,14 @@ export default function DashUsers() {
             .catch(() => {});
     }, []);
 
-    // FIX: also fetch pending count separately so it's accurate regardless of current page filter
+    // load aggregate stats once
+    useEffect(() => {
+        dashApi
+            .stats()
+            .then((d) => setStats(d?.users ?? null))
+            .catch(() => {});
+    }, []);
+
     const loadPendingCount = useCallback(async () => {
         try {
             const d = await dashApi.users({ status: "pending", limit: 1, page: 1 });
@@ -957,13 +1138,12 @@ export default function DashUsers() {
         }
     }, []);
 
-    // ── load users ────────────────────────────────────────────────────────────
     const load = useCallback(
         async (pg = 1) => {
             setLoading(true);
             setError(null);
             try {
-                const p = { page: pg, limit: 25 };
+                const p = { page: pg, limit: LIMIT };
                 if (search) p.search = search;
                 if (statusFilter) p.status = statusFilter;
                 const d = await dashApi.users(p);
@@ -990,25 +1170,21 @@ export default function DashUsers() {
         return () => clearTimeout(searchTimer.current);
     }, [search, statusFilter, load, loadPendingCount]);
 
-    // ── CRUD ─────────────────────────────────────────────────────────────────
-
-    // FIX: handleSave awaits both update + reload, re-throws on error so modal stays open
+    // CRUD: handleSave
     async function handleSave(user, updates) {
         try {
             await dashApi.updateUser(user.id, updates);
-            // Optimistic local update
             setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...updates } : u)));
             showToast(`Updated: ${user.name || user.email}`);
-            // Refresh full page + pending count
             load(page);
             loadPendingCount();
         } catch (e) {
             showToast(e.message || "Update failed", "error");
-            throw e; // let modal know it failed (keeps modal open)
+            throw e; // keeps modal open on failure
         }
     }
 
-    // FIX: handleAction routes ⋮ menu to confirm dialog
+    // CRUD: handleAction (⋮ menu)
     function handleAction(user, key) {
         const statusMap = { approve: "approved", reject: "rejected", block: "blocked" };
         if (key === "delete") {
@@ -1033,17 +1209,14 @@ export default function DashUsers() {
         }
     }
 
-    // FIX: executeAction — PATCH status OR DELETE user, then reload
     async function executeAction() {
         if (!confirm?.user) return;
         setActionLoading(true);
         try {
             if (confirm.status) {
-                // status change via ⋮ menu
                 await dashApi.updateUser(confirm.user.id, { status: confirm.status });
                 setUsers((prev) => prev.map((u) => (u.id === confirm.user.id ? { ...u, status: confirm.status } : u)));
             } else {
-                // delete
                 await dashApi.deleteUser(confirm.user.id);
                 setUsers((prev) => prev.filter((u) => u.id !== confirm.user.id));
             }
@@ -1066,75 +1239,127 @@ export default function DashUsers() {
         { v: "rejected", label: "Rejected" },
     ];
 
+    function handleRefresh() {
+        load(page);
+        loadPendingCount();
+        dashApi
+            .stats()
+            .then((d) => setStats(d?.users ?? null))
+            .catch(() => {});
+    }
+
+    const clearFilters = () => {
+        setSearch("");
+        setStatusFilter("");
+    };
+
     return (
-        <div className="space-y-3 max-w-full">
-            {/* header */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="space-y-5 max-w-full">
+            {/* ── Page header ─────────────────────────────────────────────── */}
+            <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <h1 className="text-xl font-black text-white tracking-tight">Users</h1>
-                    <p className="text-sm text-white/60 mt-0.5 tabular-nums">
-                        {total} accounts
-                        {pendingTotal > 0 && <span className="ml-2 px-2 py-0.5 rounded-md bg-warning/15 text-warning text-xs font-bold">{pendingTotal} pending</span>}
+                    <h1 className="text-2xl font-black text-white tracking-tight">User Management</h1>
+                    <p className="text-sm text-white/50 mt-0.5">
+                        {loading ? (
+                            "Loading…"
+                        ) : (
+                            <>
+                                <span className="tabular-nums text-white/70 font-semibold">{total}</span> total accounts
+                                {pendingTotal > 0 && (
+                                    <span className="ml-2.5 px-2 py-0.5 rounded-md bg-warning/15 text-warning text-xs font-bold border border-warning/20">{pendingTotal} pending approval</span>
+                                )}
+                            </>
+                        )}
                     </p>
                 </div>
-                <button
-                    onClick={() => {
-                        load(page);
-                        loadPendingCount();
-                    }}
-                    className="btn btn-sm btn-ghost gap-1.5 text-white/60 hover:text-white">
-                    <RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={handleRefresh}
+                        title="Refresh"
+                        className="w-9 h-9 rounded-md flex items-center justify-center text-white/50 border-none
+                            hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
+                        <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+                    </button>
+                </div>
             </div>
 
-            {/* error */}
+            {/* ── Stats row ────────────────────────────────────────────────── */}
+            {stats ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <StatCard icon={Users} label="Total Users" value={stats.total ?? 0} iconCls="text-primary" bgCls="bg-primary/10" />
+                    <StatCard icon={CheckCircle} label="Approved" value={stats.approved ?? 0} iconCls="text-success" bgCls="bg-success/10" />
+                    <StatCard icon={Clock} label="Pending" value={stats.pending ?? 0} iconCls="text-warning" bgCls="bg-warning/10" />
+                    <StatCard icon={Crown} label="Admins" value={stats.admins ?? 0} iconCls="text-accent" bgCls="bg-accent/10" />
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                        <div key={i} className="bg-base-200/40 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5">
+                            <Skeleton className="w-10 h-10 rounded-lg" />
+                            <div className="space-y-2 flex-1">
+                                <Skeleton className="h-5 w-12" />
+                                <Skeleton className="h-3 w-20" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* ── Error ───────────────────────────────────────────────────── */}
             {error && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-error/10 text-error text-xs font-medium border border-error/20">
-                    <AlertTriangle size={12} /> {error}
-                    <button onClick={() => load(page)} className="ml-auto text-error/70 hover:text-error font-bold">
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-error/10 text-error text-xs font-semibold border border-error/20">
+                    <AlertTriangle size={13} />
+                    <span className="flex-1">{error}</span>
+                    <button onClick={() => load(page)} className="text-error/70 hover:text-error font-bold border-none bg-transparent cursor-pointer">
                         Retry
                     </button>
                 </div>
             )}
 
-            {/* pending banner */}
+            {/* ── Pending banner ──────────────────────────────────────────── */}
             {!loading && pendingTotal > 0 && statusFilter !== "pending" && (
                 <button
                     onClick={() => setStatusFilter("pending")}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-warning/8 border border-warning/15
-                        text-warning text-xs font-semibold hover:bg-warning/12 transition-colors text-left">
-                    <span className="relative flex h-2 w-2 shrink-0">
+                    className="w-full flex items-center gap-2.5 px-4 py-3 rounded-xl bg-warning/8 border border-warning/15
+                        text-warning text-sm font-semibold hover:bg-warning/12 transition-colors text-left cursor-pointer border-none"
+                    style={{ background: "rgba(var(--color-warning)/0.06)", border: "1px solid rgba(var(--color-warning)/0.15)" }}>
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
                         <span className="animate-ping absolute h-full w-full rounded-full bg-warning opacity-75" />
-                        <span className="relative block h-2 w-2 rounded-full bg-warning" />
+                        <span className="relative block h-2.5 w-2.5 rounded-full bg-warning" />
                     </span>
-                    {pendingTotal} user{pendingTotal > 1 ? "s" : ""} awaiting approval
-                    <ChevronRight size={11} className="ml-auto opacity-40" />
+                    <span>
+                        {pendingTotal} user{pendingTotal > 1 ? "s" : ""} awaiting approval
+                    </span>
+                    <ChevronRight size={14} className="ml-auto opacity-50" />
                 </button>
             )}
 
-            {/* search + tabs */}
+            {/* ── Toolbar ─────────────────────────────────────────────────── */}
             <div className="space-y-2">
-                <div className="flex items-center gap-2 bg-base-100 rounded-lg px-3 h-10 border border-base-content/10 focus-within:border-primary/30 transition-colors">
-                    <Search size={15} className="text-white/40 shrink-0" />
+                {/* Search */}
+                <div className="flex items-center gap-2 bg-base-100 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
+                    <Search size={15} className="text-white/35 shrink-0" />
                     <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search name or email…"
-                        className="flex-1 bg-transparent text-sm text-white placeholder:text-white/40 focus:outline-none"
+                        placeholder="Search by name or email…"
+                        className="flex-1 bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
                     />
                     {search && (
-                        <button onClick={() => setSearch("")} className="text-white/40 hover:text-white transition-colors">
+                        <button onClick={() => setSearch("")} className="text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer">
                             <X size={14} />
                         </button>
                     )}
                 </div>
-                <div className="flex bg-base-200/40 rounded-md p-1 gap-1 overflow-x-auto border border-base-content/5" style={{ scrollbarWidth: "none" }}>
+
+                {/* Status tabs */}
+                <div className="flex bg-base-200/30 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
                     {STATUS_TABS.map((t) => (
                         <button
                             key={t.v}
                             onClick={() => setStatusFilter(t.v)}
-                            className={`px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer
-                                ${statusFilter === t.v ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white"}`}>
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-none
+                                ${statusFilter === t.v ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white hover:bg-white/5"}`}>
                             {t.label}
                             {t.alert && pendingTotal > 0 && <span className="px-1.5 py-0.5 rounded-md bg-warning text-warning-content text-[10px] font-black tabular-nums">{pendingTotal}</span>}
                         </button>
@@ -1142,50 +1367,21 @@ export default function DashUsers() {
                 </div>
             </div>
 
-            {/* table */}
-            <div className="bg-base-100 rounded-xl overflow-hidden border border-base-content/5 shadow-sm">
+            {/* ── Table card ──────────────────────────────────────────────── */}
+            <div className="bg-base-100 rounded-xl overflow-hidden border border-white/6 shadow-sm">
                 {loading ? (
-                    <div className="flex justify-center py-16">
-                        <span className="loading loading-spinner loading-md text-primary" />
-                    </div>
+                    <TableSkeleton />
                 ) : users.length === 0 ? (
-                    <div className="py-14 text-center">
-                        <Search size={22} className="text-white/20 mx-auto mb-2" />
-                        <p className="text-white/30 text-xs">No users found</p>
-                        {(search || statusFilter) && (
-                            <button
-                                onClick={() => {
-                                    setSearch("");
-                                    setStatusFilter("");
-                                }}
-                                className="text-xs text-primary hover:underline mt-1.5">
-                                Clear filters
-                            </button>
-                        )}
-                    </div>
+                    <EmptyState search={search} statusFilter={statusFilter} onClear={clearFilters} />
                 ) : (
                     <UsersTable users={users} onInfo={setInfoUser} onRequest={setReqUser} onPermission={setPermUser} onAction={handleAction} />
                 )}
             </div>
 
-            {/* pagination */}
-            {pages > 1 && (
-                <div className="flex items-center justify-between">
-                    <span className="text-xs text-white/30 tabular-nums">
-                        Page {page} of {pages}
-                    </span>
-                    <div className="flex gap-1">
-                        <button onClick={() => load(page - 1)} disabled={page <= 1} className="w-7 h-7 rounded-lg btn btn-ghost btn-xs text-white/50 disabled:opacity-25">
-                            <ChevronLeft size={12} />
-                        </button>
-                        <button onClick={() => load(page + 1)} disabled={page >= pages} className="w-7 h-7 rounded-lg btn btn-ghost btn-xs text-white/50 disabled:opacity-25">
-                            <ChevronRight size={12} />
-                        </button>
-                    </div>
-                </div>
-            )}
+            {/* ── Pagination ──────────────────────────────────────────────── */}
+            <Pagination page={page} pages={pages} total={total} limit={LIMIT} onPage={(pg) => load(pg)} />
 
-            {/* modals */}
+            {/* ── Modals ──────────────────────────────────────────────────── */}
             <InfoModal user={infoUser} onClose={() => setInfoUser(null)} />
             <RequestModal user={reqUser} onClose={() => setReqUser(null)} onSave={handleSave} />
             <PermissionModal user={permUser} onClose={() => setPermUser(null)} onSave={handleSave} libraries={libraries} />
@@ -1200,6 +1396,13 @@ export default function DashUsers() {
                 loading={actionLoading}
             />
             <Toast toast={toast} />
+
+            <style>{`
+                @keyframes slideUp {
+                    from { opacity: 0; transform: translateY(8px); }
+                    to   { opacity: 1; transform: translateY(0); }
+                }
+            `}</style>
         </div>
     );
 }

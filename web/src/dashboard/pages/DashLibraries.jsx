@@ -226,7 +226,9 @@ function EditModal({ lib, onClose, onSaved }) {
 
                     {/* label */}
                     <div className="space-y-1.5">
-                        <label htmlFor="edit-lib-label" className="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">Display Name</label>
+                        <label htmlFor="edit-lib-label" className="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+                            Display Name
+                        </label>
                         <input
                             id="edit-lib-label"
                             name="label"
@@ -240,7 +242,9 @@ function EditModal({ lib, onClose, onSaved }) {
 
                     {/* path */}
                     <div className="space-y-1.5">
-                        <label htmlFor="edit-lib-path" className="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">Folder Path</label>
+                        <label htmlFor="edit-lib-path" className="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+                            Folder Path
+                        </label>
                         <input
                             id="edit-lib-path"
                             name="path"

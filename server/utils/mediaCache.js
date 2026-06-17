@@ -48,11 +48,13 @@ async function getOrScan(folder) {
 
     const files = await scanFolder(folder.path);
 
-    // FIX (Problem 2): If file count changed since last scan, the grouped cache
-    // is stale. Invalidate it so the next getGroupedCached() call rebuilds it.
-    const prevCount = entry ? entry.files.length : -1;
-    if (files.length !== prevCount) {
+    // FIX (Problem 2): Compare actual file IDs, not just count — catches renames/
+    // replacements where count stays the same but files changed.
+    const prevIds = entry ? new Set(entry.files.map((f) => f.id)) : null;
+    const fileListChanged = !prevIds || files.length !== prevIds.size || files.some((f) => !prevIds.has(f.id));
+    if (fileListChanged) {
         _groupedCache = null;
+        const prevCount = entry ? entry.files.length : -1;
         console.log(`[Cache] Folder "${folder.label}" changed (${prevCount} → ${files.length} files) — grouped cache invalidated`);
     }
 
@@ -132,7 +134,7 @@ async function getGroupedCached(allMedia) {
         return {
             movies: [..._groupedCache.movies],
             series: [..._groupedCache.series],
-            anime:  [..._groupedCache.anime],
+            anime: [..._groupedCache.anime],
             unknown: [..._groupedCache.unknown],
         };
     }
@@ -140,10 +142,9 @@ async function getGroupedCached(allMedia) {
     return {
         movies: [..._groupedCache.movies],
         series: [..._groupedCache.series],
-        anime:  [..._groupedCache.anime],
+        anime: [..._groupedCache.anime],
         unknown: [..._groupedCache.unknown],
     };
 }
 
 module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached, fileIndex };
-

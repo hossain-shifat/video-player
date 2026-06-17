@@ -34,6 +34,7 @@ const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 const mime = require("mime-types");
+const { spawn } = require("child_process");
 
 const { readFolders } = require("./libraryController");
 const { sanitizePath, isSubtitleFile } = require("../utils/fileHelpers");
@@ -642,6 +643,98 @@ async function streamSubtitle(req, res) {
     }
 }
 
+// ─── Embedded Subtitle Extractor (FFmpeg on-the-fly) ─────────────────────────
+// Route: GET /stream/subtitle/embedded/:encodedVideo/:streamIndex
+//
+// Uses FFmpeg to extract a specific embedded subtitle track from the source
+// file and convert it to WebVTT format, streamed directly to the client.
+//
+// Safety measures:
+//   - Path traversal guard on decoded video path
+//   - streamIndex validated as integer 0–127
+//   - FFmpeg subprocess is killed on client disconnect
+//   - No temp file created — pure pipe to response
+async function streamEmbeddedSubtitle(req, res) {
+    try {
+        const { encodedVideo, streamIndex } = req.params;
+
+        // Validate stream index (must be a small non-negative integer)
+        const trackIndex = parseInt(streamIndex, 10);
+        if (!Number.isFinite(trackIndex) || trackIndex < 0 || trackIndex > 127) {
+            return res.status(400).json({ error: "Invalid stream index" });
+        }
+
+        // Decode and sanitize video path
+        let videoPath;
+        try {
+            videoPath = Buffer.from(encodedVideo, "base64url").toString();
+        } catch {
+            return res.status(400).json({ error: "Invalid video path encoding" });
+        }
+
+        const safePath = path.resolve(videoPath);
+        if (!fs.existsSync(safePath)) {
+            return res.status(404).json({ error: "Video file not found" });
+        }
+
+        // Build FFmpeg args to extract the subtitle track as WebVTT
+        // -map 0:<globalIndex>     — select the specific stream by global index
+        // -f webvtt                — output format
+        // pipe:1                  — write to stdout
+        let ffmpegBin = process.env.FFMPEG_PATH || "ffmpeg";
+        if (process.platform === "win32" && !ffmpegBin.toLowerCase().endsWith(".exe")) {
+            ffmpegBin = ffmpegBin + ".exe";
+        }
+
+        const args = [
+            "-hide_banner", "-loglevel", "error",
+            "-i", safePath,
+            "-map", `0:${trackIndex}`,
+            "-f", "webvtt",
+            "-",   // pipe to stdout
+        ];
+
+        const ffmpegProc = spawn(ffmpegBin, args, {
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+        });
+
+        res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+        res.setHeader("Cache-Control", "max-age=3600"); // 1h — subtitle rarely changes
+        res.setHeader("Access-Control-Allow-Origin", "*");
+
+        // Stream FFmpeg stdout → client
+        ffmpegProc.stdout.pipe(res);
+
+        // On client disconnect, kill FFmpeg to avoid zombie process
+        req.on("close", () => {
+            if (!ffmpegProc.killed) ffmpegProc.kill("SIGKILL");
+        });
+
+        // Buffer stderr for error logging
+        let stderrBuf = "";
+        ffmpegProc.stderr.on("data", (d) => {
+            if (stderrBuf.length < 4096) stderrBuf += d.toString();
+        });
+
+        ffmpegProc.on("error", (err) => {
+            console.error("[Stream] embedded subtitle FFmpeg error:", err.message);
+            if (!res.headersSent) res.status(500).json({ error: "Subtitle extraction failed" });
+        });
+
+        ffmpegProc.on("exit", (code) => {
+            if (code !== 0 && code !== null) {
+                console.error(`[Stream] embedded subtitle FFmpeg exit ${code} for stream ${trackIndex} of ${path.basename(safePath)}`);
+                if (stderrBuf) console.error("[Stream] FFmpeg stderr:", stderrBuf.slice(-800));
+                if (!res.headersSent) res.status(500).json({ error: "Subtitle extraction failed" });
+            }
+        });
+    } catch (err) {
+        console.error("[Stream] streamEmbeddedSubtitle error:", err.message);
+        if (!res.headersSent) res.status(500).json({ error: "Embedded subtitle error" });
+    }
+}
+
 module.exports = {
     streamVideo,
     serveHLSFile,
@@ -649,5 +742,6 @@ module.exports = {
     stopSession,
     listSessions,
     streamSubtitle,
+    streamEmbeddedSubtitle,
     pingSessionHandler,
 };

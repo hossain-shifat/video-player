@@ -37,10 +37,10 @@ export function saveProgress(id, data) {
 
 /** DELETE /api/history/:id — remove one entry for this client */
 export function deleteHistory(id) {
-    return api.delete(`/api/history/${id}`, { headers: clientHeaders() });
+    return api.delete(`/api/history/${id}`, { skipAuthHandler: true, headers: clientHeaders() });
 }
 
 /** DELETE /api/history — clear all history for this client */
 export function clearHistory() {
-    return api.delete("/api/history", { headers: clientHeaders() });
+    return api.delete("/api/history", { skipAuthHandler: true, headers: clientHeaders() });
 }

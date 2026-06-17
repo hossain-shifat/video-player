@@ -1,6 +1,17 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { usePlayerState } from "./UsePlayerState";
 
+// Backend base URL — subtitle URLs from the API are relative paths like
+// /stream/subtitle/embedded/... and must be absolutified before fetch.
+// Without this, the browser hits the Vite dev server which returns index.html.
+const BACKEND = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+function absoluteUrl(url) {
+    if (!url) return url;
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    return `${BACKEND}${url}`;
+}
+
 // ─── Parsers ─────────────────────────────────────────────────────────────────
 
 function srtTimeToSeconds(str) {
@@ -44,8 +55,13 @@ function parseSRT(raw) {
         if (timingIdx < 0) continue;
         const [startStr, endStr] = lines[timingIdx].split("-->").map((s) => s.trim());
         const start = srtTimeToSeconds(startStr);
-        const end   = srtTimeToSeconds(endStr);
-        const text  = stripHtmlTags(lines.slice(timingIdx + 1).join("\n").trim());
+        const end = srtTimeToSeconds(endStr);
+        const text = stripHtmlTags(
+            lines
+                .slice(timingIdx + 1)
+                .join("\n")
+                .trim(),
+        );
         if (text) cues.push({ start, end, text });
     }
     return cues;
@@ -61,8 +77,13 @@ function parseVTT(raw) {
         if (timingIdx < 0) continue;
         const [startStr, endStr] = lines[timingIdx].split("-->").map((s) => s.trim().split(" ")[0]);
         const start = vttTimeToSeconds(startStr);
-        const end   = vttTimeToSeconds(endStr);
-        const text  = stripHtmlTags(lines.slice(timingIdx + 1).join("\n").trim());
+        const end = vttTimeToSeconds(endStr);
+        const text = stripHtmlTags(
+            lines
+                .slice(timingIdx + 1)
+                .join("\n")
+                .trim(),
+        );
         if (text) cues.push({ start, end, text });
     }
     return cues;
@@ -76,12 +97,21 @@ function parseASS(raw) {
 
     for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed.toLowerCase() === "[events]") { inEvents = true; continue; }
-        if (trimmed.startsWith("[") && inEvents) { inEvents = false; continue; }
+        if (trimmed.toLowerCase() === "[events]") {
+            inEvents = true;
+            continue;
+        }
+        if (trimmed.startsWith("[") && inEvents) {
+            inEvents = false;
+            continue;
+        }
         if (!inEvents) continue;
 
         if (trimmed.toLowerCase().startsWith("format:")) {
-            formatOrder = trimmed.replace(/^format:\s*/i, "").split(",").map((s) => s.trim().toLowerCase());
+            formatOrder = trimmed
+                .replace(/^format:\s*/i, "")
+                .split(",")
+                .map((s) => s.trim().toLowerCase());
             continue;
         }
 
@@ -101,13 +131,13 @@ function parseASS(raw) {
             };
 
             const startStr = get("start");
-            const endStr   = get("end");
-            const text     = stripAssTags(textPart.trim());
+            const endStr = get("end");
+            const text = stripAssTags(textPart.trim());
 
             if (!startStr || !endStr || !text) continue;
 
             const start = assTimeToSeconds(startStr);
-            const end   = assTimeToSeconds(endStr);
+            const end = assTimeToSeconds(endStr);
             if (text) cues.push({ start, end, text });
         }
     }
@@ -135,14 +165,9 @@ function parseCues(raw, ext) {
 
 export default function SubtitleRenderer() {
     const { state } = usePlayerState();
-    const {
-        activeSubtitle, subtitleDelay, subtitleFontSize,
-        subtitleColor = "#ffffff",
-        subtitleBgOpacity = 0.72,
-        currentTime, controlsVisible,
-    } = state;
+    const { activeSubtitle, subtitleDelay, subtitleFontSize, subtitleColor = "#ffffff", subtitleBgOpacity = 0.72, currentTime, controlsVisible } = state;
 
-    const [cues, setCues]       = useState([]);
+    const [cues, setCues] = useState([]);
     const [loading, setLoading] = useState(false);
     const abortRef = useRef(null);
 
@@ -159,10 +184,17 @@ export default function SubtitleRenderer() {
         abortRef.current = ctrl;
 
         setLoading(true);
-        fetch(activeSubtitle.url, { signal: ctrl.signal })
+        fetch(absoluteUrl(activeSubtitle.url), { signal: ctrl.signal })
             .then((r) => r.text())
             .then((raw) => {
-                const ext = activeSubtitle.ext || activeSubtitle.filename?.match(/\.\w+$/)?.[0] || "";
+                // For embedded tracks the backend always returns WebVTT.
+                // Force 'vtt' extension so parseCues uses parseVTT regardless
+                // of missing .ext / .filename fields.
+                let ext = activeSubtitle.ext || activeSubtitle.filename?.match(/\.\w+$/)?.[0] || "";
+
+                if (!ext && activeSubtitle.source === "embedded") ext = ".vtt";
+                if (!ext && raw.trimStart().startsWith("WEBVTT")) ext = ".vtt";
+
                 setCues(parseCues(raw, ext.toLowerCase()));
                 setLoading(false);
             })
@@ -186,10 +218,7 @@ export default function SubtitleRenderer() {
     const bottomOffset = controlsVisible ? "5.5rem" : "2rem";
 
     return (
-        <div
-            className="flux-subtitle-container"
-            style={{ bottom: bottomOffset }}
-        >
+        <div className="flux-subtitle-container" style={{ bottom: bottomOffset }}>
             <div
                 className="flux-subtitle-text"
                 style={{
@@ -197,8 +226,7 @@ export default function SubtitleRenderer() {
                     color: subtitleColor || "#fff",
                     background: `rgba(0,0,0,${subtitleBgOpacity ?? 0.72})`,
                     textShadow: "0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.7)",
-                }}
-            >
+                }}>
                 {activeCue.text.split("\n").map((line, i, arr) => (
                     <span key={i}>
                         {line}
