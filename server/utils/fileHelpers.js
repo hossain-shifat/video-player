@@ -29,6 +29,69 @@ function isSubtitleFile(filename) {
   return SUBTITLE_EXTENSIONS.includes(ext);
 }
 
+/**
+ * parseSubtitleFilename(baseName, subFilename)
+ *
+ * Extracts the language label and forced flag from a subtitle filename
+ * that matches a known video base name.
+ *
+ * Handles patterns:
+ *   Movie.srt               → { lang: 'und', label: 'Unknown', forced: false }
+ *   Movie.en.srt            → { lang: 'en', label: 'English', forced: false }
+ *   Movie.en-US.srt         → { lang: 'en-US', label: 'English (US)', forced: false }
+ *   Movie.en.forced.srt     → { lang: 'en', label: 'English', forced: true }
+ *   Movie.bn.srt            → { lang: 'bn', label: 'Bengali', forced: false }
+ *
+ * Returns null if subFilename doesn't start with baseName.
+ */
+const LANG_NAMES = {
+  en: 'English', 'en-us': 'English (US)', 'en-gb': 'English (UK)',
+  bn: 'Bengali', hi: 'Hindi', fr: 'French', de: 'German',
+  es: 'Spanish', pt: 'Portuguese', 'pt-br': 'Portuguese (BR)',
+  ja: 'Japanese', ko: 'Korean', zh: 'Chinese', 'zh-cn': 'Chinese (Simplified)',
+  'zh-tw': 'Chinese (Traditional)', ar: 'Arabic', ru: 'Russian',
+  it: 'Italian', nl: 'Dutch', tr: 'Turkish', pl: 'Polish',
+  sv: 'Swedish', da: 'Danish', no: 'Norwegian', fi: 'Finnish',
+  cs: 'Czech', sk: 'Slovak', ro: 'Romanian', hu: 'Hungarian',
+  uk: 'Ukrainian', he: 'Hebrew', fa: 'Persian', th: 'Thai',
+  vi: 'Vietnamese', id: 'Indonesian', ms: 'Malay', und: 'Unknown',
+};
+
+function parseSubtitleFilename(videoBaseName, subFilename) {
+  const subExt = path.extname(subFilename).toLowerCase();
+  const subBase = path.basename(subFilename, subExt);
+
+  // Must start with video base name (case-insensitive)
+  if (!subBase.toLowerCase().startsWith(videoBaseName.toLowerCase())) return null;
+
+  // Strip the video base name prefix
+  const suffix = subBase.slice(videoBaseName.length); // e.g. '' | '.en' | '.en.forced' | '.en-US.forced'
+
+  if (!suffix) {
+    // Exact match (e.g. Movie.srt)
+    return { lang: 'und', label: 'Unknown', forced: false };
+  }
+
+  if (!suffix.startsWith('.')) return null; // not a valid separator
+
+  // Split remaining parts on '.'
+  const parts = suffix.slice(1).split('.').filter(Boolean); // e.g. ['en'] | ['en', 'forced'] | ['en-US', 'forced']
+
+  let lang = 'und';
+  let forced = false;
+
+  for (const part of parts) {
+    if (part.toLowerCase() === 'forced') {
+      forced = true;
+    } else if (/^[a-z]{2,3}(-[a-zA-Z]{2,4})?$/.test(part)) {
+      lang = part;
+    }
+  }
+
+  const label = LANG_NAMES[lang.toLowerCase()] || lang.toUpperCase();
+  return { lang, label: forced ? `${label} (Forced)` : label, forced };
+}
+
 // Resolves and normalizes a path, blocking traversal attacks
 function sanitizePath(inputPath) {
   const resolved = path.resolve(inputPath);
@@ -60,6 +123,7 @@ module.exports = {
   SUBTITLE_EXTENSIONS,
   isVideoFile,
   isSubtitleFile,
+  parseSubtitleFilename,
   sanitizePath,
   generateFileId,
   decodeFileId,

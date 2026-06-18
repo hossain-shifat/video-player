@@ -1,21 +1,25 @@
 import { api } from "./client";
+import { getOrCreateClientId } from "./stream";
+
+// ─── Client header helper ─────────────────────────────────────────────────────
+function clientHeaders() {
+    return { "X-Flux-Client": getOrCreateClientId() };
+}
 
 // ─── Watch History ────────────────────────────────────────────────────────────
 
-/** GET /api/history — full watch history sorted by most recent */
+/** GET /api/history — full watch history for this client */
 export function getHistory() {
-    // skipAuthHandler: background fetch — don't open modal on 401
-    return api.get("/api/history", { skipAuthHandler: true });
+    return api.get("/api/history", { skipAuthHandler: true, headers: clientHeaders() });
 }
 
 /**
- * GET /api/history/:id — get resume position for one file.
- * Returns null if the file has never been watched.
+ * GET /api/history/:id — get resume position for this client+media.
+ * Returns null if never watched.
  */
 export async function getResumePoint(id) {
     try {
-        const data = await api.get(`/api/history/${id}`, { skipAuthHandler: true });
-        // FIX: handle new 200+null pattern (exists:false) and old 404 pattern
+        const data = await api.get(`/api/history/${id}`, { skipAuthHandler: true, headers: clientHeaders() });
         if (!data || data.position === null || data.position === undefined) return null;
         return data;
     } catch (err) {
@@ -25,28 +29,18 @@ export async function getResumePoint(id) {
 }
 
 /**
- * POST /api/history/:id — save watch progress.
- * Call this periodically while playing (e.g. every 10 seconds).
- *
- * @param {string} id
- * @param {object} data
- * @param {string}  data.name       — display name
- * @param {string}  data.type       — "movie" | "series" | "anime"
- * @param {string}  data.poster     — poster image URL
- * @param {string}  data.streamUrl  — stream URL
- * @param {number}  data.position   — current position in seconds
- * @param {number}  data.duration   — total duration in seconds
+ * POST /api/history/:id — save watch progress for this client.
  */
 export function saveProgress(id, data) {
-    return api.post(`/api/history/${id}`, data, { skipAuthHandler: true });
+    return api.post(`/api/history/${id}`, data, { skipAuthHandler: true, headers: clientHeaders() });
 }
 
-/** DELETE /api/history/:id — remove one entry from history */
+/** DELETE /api/history/:id — remove one entry for this client */
 export function deleteHistory(id) {
-    return api.delete(`/api/history/${id}`);
+    return api.delete(`/api/history/${id}`, { skipAuthHandler: true, headers: clientHeaders() });
 }
 
-/** DELETE /api/history — clear all watch history */
+/** DELETE /api/history — clear all history for this client */
 export function clearHistory() {
-    return api.delete("/api/history");
+    return api.delete("/api/history", { skipAuthHandler: true, headers: clientHeaders() });
 }

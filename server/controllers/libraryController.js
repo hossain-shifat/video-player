@@ -5,7 +5,8 @@ const path = require("path");
 const crypto = require("crypto");
 
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
-const { invalidateFolder, invalidateAll } = require("../utils/mediaCache");
+const { invalidateFolder, invalidateAll, fileIndex, getAllCached, getCachedStats } = require("../utils/mediaCache");
+const { reconcile } = require("../utils/metadataStore");
 
 // In-memory folders cache — eliminates disk I/O on every API call.
 // Populated on first read, updated atomically on every write.
@@ -61,11 +62,18 @@ async function _atomicWrite(folders) {
     _cachedFolders = folders;
 }
 
-// GET /api/library — returns all saved folders
+// GET /api/library — returns all saved folders with media count per folder
 async function getFolders(req, res) {
     try {
         const folders = await readFolders();
-        return res.json({ folders });
+        // Attach media count to each folder using cached scan results only — no rescans
+        const folderStats = getCachedStats(folders);
+        const statMap = new Map(folderStats.map((s) => [s.id, s.count]));
+        const foldersWithCount = folders.map((f) => ({
+            ...f,
+            count: statMap.get(f.id) ?? 0,
+        }));
+        return res.json({ folders: foldersWithCount });
     } catch (err) {
         console.error("[Library] getFolders error:", err);
         return res.status(500).json({ error: "Failed to read folders" });
@@ -122,6 +130,12 @@ async function removeFolder(req, res) {
         if (index === -1) {
             return res.status(404).json({ error: "Folder not found" });
         }
+
+        // Run reconcile BEFORE committing the deletion — if these fail, folder is not yet removed
+        const remainingFolders = folders.filter((_, i) => i !== index);
+        const { allMedia } = await getAllCached(remainingFolders);
+        const activeIds = new Set(allMedia.map((f) => f.id));
+        await reconcile(activeIds);
 
         folders.splice(index, 1);
         await writeFolders(folders);

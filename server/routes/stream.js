@@ -12,11 +12,12 @@
  * DELETE /stream/session/:sessionId   → kill session
  * GET  /stream/sessions               → list active sessions
  * GET  /stream/subtitle/:encodedPath  → serve subtitle (srt→vtt on-the-fly)
+ * GET  /stream/subtitle/embedded/:encodedVideo/:streamIndex → extract embedded subtitle via FFmpeg
  */
 
 const express = require("express");
 const router = express.Router();
-const { streamVideo, serveHLSFile, startTranscode, stopSession, listSessions, streamSubtitle, pingSessionHandler } = require("../controllers/streamController");
+const { streamVideo, serveHLSFile, startTranscode, stopSession, listSessions, streamSubtitle, streamEmbeddedSubtitle, pingSessionHandler } = require("../controllers/streamController");
 
 // No auth — single-user LAN install
 router.get("/video/:id", streamVideo);
@@ -33,7 +34,8 @@ router.delete("/sessions/:sessionId", stopSession); // frontend uses plural
 router.post("/sessions/:sessionId/ping", pingSessionHandler);
 router.get("/sessions", listSessions);
 
-// Subtitles
+// Subtitles — NOTE: embedded route MUST be registered before the wildcard :encodedPath route
+router.get("/subtitle/embedded/:encodedVideo/:streamIndex", streamEmbeddedSubtitle);
 router.get("/subtitle/:encodedPath", streamSubtitle);
 
 module.exports = router;

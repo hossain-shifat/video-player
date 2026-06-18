@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle, useCallback } from "react";
 import { usePlayerState } from "./UsePlayerState";
 
 // ─── Language code → display name ─────────────────────────────────────────────
@@ -60,6 +60,39 @@ function getAspectStyle(aspectRatio) {
             return { objectFit: "fill", width: "100%", height: "100%" };
         default:
             return { objectFit: "contain", width: "100%", height: "100%" };
+    }
+}
+
+// ─── Intrinsic-dimension letterbox calc ───────────────────────────────────────
+//
+// FIX (ultra-wide top-align bug): relying on CSS object-fit:contain with a
+// width:100%/height:100% box is ambiguous on some mobile browsers (Android
+// Chrome/Firefox/Samsung Internet/WebView) — the contain box is computed from
+// the parent's flex-resolved cross-axis size, which can settle before video
+// metadata loads, or interact oddly with cinematic (<1) aspect ratios vs the
+// container's portrait aspect, producing a top-anchored render instead of a
+// vertically centered one.
+//
+// Fix: compute the exact letterboxed pixel box ourselves from the video's
+// real intrinsic dimensions (videoWidth/videoHeight) and the container's
+// real dimensions, then set explicit width/height in px on the <video>
+// element. No object-fit guesswork — same approach YouTube/VLC use.
+function computeLetterboxBox(containerW, containerH, videoW, videoH) {
+    if (!containerW || !containerH || !videoW || !videoH) {
+        return { width: "100%", height: "100%" };
+    }
+    const containerRatio = containerW / containerH;
+    const videoRatio = videoW / videoH;
+    if (videoRatio > containerRatio) {
+        // Video is wider relative to container → fit width, letterbox top/bottom
+        const width = containerW;
+        const height = Math.round(containerW / videoRatio);
+        return { width, height };
+    } else {
+        // Video is taller/narrower relative to container → fit height, letterbox sides
+        const height = containerH;
+        const width = Math.round(containerH * videoRatio);
+        return { width, height };
     }
 }
 
@@ -138,12 +171,92 @@ function getHlsConfig() {
  *  5. Adaptive buffering config for large remux/4K files.
  *  6. Network error auto-retry with exponential backoff.
  */
-const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek }, ref) {
+const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated, zoomScale = 1, panX = 0, panY = 0 }, ref) {
     const videoRef = useRef(null);
+    const wrapperRef = useRef(null);
     const hlsRef = useRef(null);
     const retryCount = useRef(0);
     const latestOnReadyToSeek = useRef(onReadyToSeek);
     const { state, actions } = usePlayerState();
+
+    // Intrinsic video dimensions (real decoded size, not container size) +
+    // live container box size — recomputed on metadata load, resize, rotation,
+    // and fullscreen transitions so the letterbox math always matches reality.
+    const [videoDims, setVideoDims] = useState({ w: 0, h: 0 });
+    const [containerDims, setContainerDims] = useState({ w: 0, h: 0 });
+
+    // ── Track container size (resize / rotation / fullscreen enter+exit) ─────
+    useEffect(() => {
+        const el = wrapperRef.current;
+        if (!el) return;
+
+        const remeasure = () => {
+            const rect = el.getBoundingClientRect();
+            setContainerDims({ w: rect.width, h: rect.height });
+        };
+
+        let ro = null;
+        if (typeof ResizeObserver !== "undefined") {
+            ro = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (!entry) return;
+                const { width, height } = entry.contentRect;
+                setContainerDims({ w: width, h: height });
+            });
+            ro.observe(el);
+        }
+        remeasure();
+
+        // FIX: on some Android devices (punch-hole cutout phones — OnePlus,
+        // Xiaomi/Redmi), the layout box reported right at the instant of a
+        // fullscreen/orientation transition doesn't yet reflect the final
+        // cutout-adjusted viewport — ResizeObserver's first post-transition
+        // callback can fire with stale numbers. Force a couple of delayed
+        // remeasures after these events so containerDims always ends up
+        // matching the true final rendered box, not a transient one.
+        const remeasureSettled = () => {
+            remeasure();
+            requestAnimationFrame(remeasure);
+            setTimeout(remeasure, 100);
+            setTimeout(remeasure, 350);
+        };
+        document.addEventListener("fullscreenchange", remeasureSettled);
+        document.addEventListener("webkitfullscreenchange", remeasureSettled);
+        window.addEventListener("orientationchange", remeasureSettled);
+
+        return () => {
+            ro?.disconnect();
+            document.removeEventListener("fullscreenchange", remeasureSettled);
+            document.removeEventListener("webkitfullscreenchange", remeasureSettled);
+            window.removeEventListener("orientationchange", remeasureSettled);
+        };
+    }, []);
+
+    // ── Track intrinsic video dimensions ──────────────────────────────────────
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        const updateDims = () => {
+            if (video.videoWidth && video.videoHeight) {
+                setVideoDims({ w: video.videoWidth, h: video.videoHeight });
+            }
+        };
+        // loadedmetadata fires earliest with real dims; resize fires on quality
+        // switch (HLS level change can alter decoded resolution).
+        video.addEventListener("loadedmetadata", updateDims);
+        video.addEventListener("resize", updateDims);
+        updateDims(); // in case metadata already loaded (e.g. fast cache hit)
+        return () => {
+            video.removeEventListener("loadedmetadata", updateDims);
+            video.removeEventListener("resize", updateDims);
+        };
+    }, [streamUrl]);
+
+    // Reset intrinsic dims when stream changes so stale dims don't briefly
+    // apply to the new video before its own metadata loads.
+    useEffect(() => {
+        setVideoDims({ w: 0, h: 0 });
+    }, [streamUrl]);
 
     // Keep ref current so closed-over handlers always call latest callback
     useEffect(() => {
@@ -183,6 +296,8 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                 const hls = new Hls(getHlsConfig());
                 hlsRef.current = hls;
+                // Notify parent so it can call hls.startLoad() for accurate resume seeking
+                onHlsCreated?.(hls);
                 hls.loadSource(streamUrl);
                 hls.attachMedia(video);
 
@@ -526,40 +641,97 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         }
     };
 
+    // For "auto" (default) mode: compute exact letterbox pixel box from real
+    // intrinsic dims + real container dims — no object-fit ambiguity, no
+    // top-anchoring on ultra-wide/cinematic content. Explicit override modes
+    // (fill/16:9/4:3/1:1/stretch) are a deliberate user choice and keep using
+    // CSS object-fit, since "fill"/"stretch" intentionally ignore native ratio.
+    const isAutoMode = state.aspectRatio === "auto" || !state.aspectRatio;
+    const computedBox = isAutoMode ? computeLetterboxBox(containerDims.w, containerDims.h, videoDims.w, videoDims.h) : null;
+
+    const hasIntrinsicDims = videoDims.w > 0 && videoDims.h > 0 && containerDims.w > 0 && containerDims.h > 0;
+
+    const videoStyle = isAutoMode
+        ? hasIntrinsicDims
+            ? {
+                  width: computedBox.width,
+                  height: computedBox.height,
+                  objectFit: "fill", // box is already exact letterbox size — no further fit needed
+              }
+            : {
+                  // Pre-metadata fallback: contain avoids a stretch flash before
+                  // real dims are known. Box is briefly ambiguous but corrects
+                  // itself the instant loadedmetadata fires (no visible jump
+                  // since both produce a centered, non-stretched result).
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+              }
+        : getAspectStyle(state.aspectRatio);
+
     return (
-        <video
-            ref={videoRef}
-            className="absolute inset-0 w-full h-full"
+        // FIX: outer wrapper is flex-centered absolute inset-0 so the video box
+        // stays centered inside whatever box the parent (fixed/fullscreen)
+        // container resolves to — no fixed vh units here that could mismatch
+        // native Fullscreen API sizing on Android Chrome.
+        <div
+            ref={wrapperRef}
             style={{
-                ...getAspectStyle(state.aspectRatio),
-                filter: `brightness(${state.brightness})`,
-                background: "#000",
-                display: "block",
-                // GPU acceleration for smooth playback
-                willChange: "contents",
-                transform: "translateZ(0)",
-            }}
-            playsInline
-            preload="auto"
-            crossOrigin="anonymous"
-            onClick={onVideoClick}
-            onTimeUpdate={handleTimeUpdate}
-            onDurationChange={handleDurationChange}
-            onPlay={handlePlay}
-            onPause={handlePause}
-            onWaiting={handleWaiting}
-            onCanPlay={handleCanPlay}
-            onEnded={handleEnded}
-            onError={handleError}
-            onVolumeChange={handleVolumeChange}
-            onProgress={handleProgress}
-            onStalled={() => {
-                actions.setBuffering(true);
-                actions.incrementStall();
-            }}
-            onSeeking={() => actions.setBuffering(true)}
-            onSeeked={() => actions.setBuffering(false)}
-        />
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                display: "grid",
+                placeItems: "center",
+                overflow: "hidden",
+            }}>
+            <video
+                ref={videoRef}
+                style={{
+                    ...videoStyle,
+                    filter: `brightness(${state.brightness})`,
+                    background: "#000",
+                    display: "block",
+                    margin: "auto",
+                    justifySelf: "center",
+                    alignSelf: "center",
+                    // Real pinch-zoom: scale + pan via transform, anchored center.
+                    // Pan only meaningful once zoomScale > 1 (enforced by caller).
+                    transform: `translate3d(${panX}px, ${panY}px, 0) scale(${zoomScale})`,
+                    transformOrigin: "center center",
+                    // FIX: "contents" is not a valid will-change pairing here
+                    // and some Android WebView/Chrome builds have a known bug
+                    // where a GPU compositing layer created at a larger
+                    // transform:scale() doesn't properly repaint smaller on
+                    // shrink — it can visually stick at the bigger size even
+                    // though the transform value did update. willChange:
+                    // "transform" alone (not "contents") avoids creating an
+                    // ambiguous layer hint and lets the browser correctly
+                    // re-rasterize on both grow and shrink.
+                    willChange: "transform",
+                }}
+                playsInline
+                preload="auto"
+                crossOrigin="anonymous"
+                onClick={onVideoClick}
+                onTimeUpdate={handleTimeUpdate}
+                onDurationChange={handleDurationChange}
+                onPlay={handlePlay}
+                onPause={handlePause}
+                onWaiting={handleWaiting}
+                onCanPlay={handleCanPlay}
+                onEnded={handleEnded}
+                onError={handleError}
+                onVolumeChange={handleVolumeChange}
+                onProgress={handleProgress}
+                onStalled={() => {
+                    actions.setBuffering(true);
+                    actions.incrementStall();
+                }}
+                onSeeking={() => actions.setBuffering(true)}
+                onSeeked={() => actions.setBuffering(false)}
+            />
+        </div>
     );
 });
 

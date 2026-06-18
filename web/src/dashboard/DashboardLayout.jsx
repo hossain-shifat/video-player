@@ -101,7 +101,7 @@ function Sidebar({ collapsed, onNav, user, logout }) {
                                 <p className="text-[10px] text-base-content/35 truncate">{user?.email}</p>
                             </div>
                             <button onClick={logout} title="Sign out" className="w-6 h-6 flex items-center justify-center text-base-content/30 hover:text-error transition-colors rounded shrink-0">
-                                <LogOut size={14} className="text-error/80" />
+                                <LogOut size={14} className="text-error/80 cursor-pointer" />
                             </button>
                         </>
                     )}

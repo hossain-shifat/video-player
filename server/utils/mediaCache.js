@@ -47,6 +47,24 @@ async function getOrScan(folder) {
     }
 
     const files = await scanFolder(folder.path);
+
+    // FIX (Problem 2): Compare actual file IDs, not just count — catches renames/
+    // replacements where count stays the same but files changed.
+    const prevIds = entry ? new Set(entry.files.map((f) => f.id)) : null;
+    const fileListChanged = !prevIds || files.length !== prevIds.size || files.some((f) => !prevIds.has(f.id));
+    if (fileListChanged) {
+        _groupedCache = null;
+        const prevCount = entry ? entry.files.length : -1;
+        console.log(`[Cache] Folder "${folder.label}" changed (${prevCount} → ${files.length} files) — grouped cache invalidated`);
+        // Remove stale IDs that no longer exist in new scan
+        if (prevIds) {
+            const newIds = new Set(files.map((f) => f.id));
+            for (const oldId of prevIds) {
+                if (!newIds.has(oldId)) fileIndex.delete(oldId);
+            }
+        }
+    }
+
     cache.set(folder.id, { files, label: folder.label, path: folder.path, folderId: folder.id, scannedAt: now });
     // Update file index with new scan results
     for (const f of files) {
@@ -123,7 +141,7 @@ async function getGroupedCached(allMedia) {
         return {
             movies: [..._groupedCache.movies],
             series: [..._groupedCache.series],
-            anime:  [..._groupedCache.anime],
+            anime: [..._groupedCache.anime],
             unknown: [..._groupedCache.unknown],
         };
     }
@@ -131,9 +149,18 @@ async function getGroupedCached(allMedia) {
     return {
         movies: [..._groupedCache.movies],
         series: [..._groupedCache.series],
-        anime:  [..._groupedCache.anime],
+        anime: [..._groupedCache.anime],
         unknown: [..._groupedCache.unknown],
     };
 }
 
-module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached };
+// Returns folder stats using only what's already in cache — no rescans triggered.
+// Folders with no cached entry return count: 0.
+function getCachedStats(folders) {
+    return folders.map((f) => {
+        const entry = cache.get(f.id);
+        return { id: f.id, path: f.path, label: f.label, count: entry ? entry.files.length : 0 };
+    });
+}
+
+module.exports = { getAllCached, getCachedStats, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached, fileIndex };

@@ -7,13 +7,26 @@ const HISTORY_FILE = path.join(__dirname, "../data/history.json");
 const USERDATA_FILE = path.join(__dirname, "../data/userdata.json");
 
 // ─── Safe ID validation ───────────────────────────────────────────────────────
-// IDs are base64url strings — only allow those characters to block __proto__ etc.
 const VALID_ID_RE = /^[A-Za-z0-9_=-]+$/;
 function isValidId(id) {
     return typeof id === "string" && id.length > 0 && id.length < 512 && VALID_ID_RE.test(id);
 }
 
-// Safe own-property read — never returns inherited keys
+// clientId validation — allow alphanumeric + hyphen/underscore (UUID-like)
+const VALID_CLIENT_RE = /^[A-Za-z0-9_-]+$/;
+function isValidClientId(id) {
+    return typeof id === "string" && id.length > 0 && id.length < 128 && VALID_CLIENT_RE.test(id);
+}
+
+// Fallback clientId when none supplied (e.g. direct API calls / old clients)
+const DEFAULT_CLIENT = "default";
+
+function resolveClientId(clientId) {
+    if (clientId && isValidClientId(clientId)) return clientId;
+    return DEFAULT_CLIENT;
+}
+
+// Safe own-property read
 function safeGet(obj, id) {
     return Object.prototype.hasOwnProperty.call(obj, id) ? obj[id] : null;
 }
@@ -32,19 +45,14 @@ function readJson(file) {
     try {
         raw = fs.readFileSync(file, "utf-8");
     } catch (err) {
-        // File does not exist yet — return empty object
         if (err.code === "ENOENT") return {};
-        throw err; // any other fs error (permissions etc.) should surface
+        throw err;
     }
-    // FIX (Report-23): 0-byte or whitespace-only file causes JSON.parse("") to
-    // throw SyntaxError → unhandled 500. Treat empty content as empty store.
     if (!raw || !raw.trim()) return {};
-    // JSON parse errors are not swallowed — they propagate to the caller
     return JSON.parse(raw);
 }
 
 function writeJson(file, data) {
-    // Ensure parent directory exists (handles fresh installs)
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
     } catch {}
@@ -54,53 +62,77 @@ function writeJson(file, data) {
 }
 
 // ─── History ─────────────────────────────────────────────────────────────────
-// Schema per entry:
-// history[id] = {
-//   id, name, type, poster, streamUrl,
-//   watchedAt,       — ISO string of last watch
-//   position,        — seconds from start (resume point)
-//   duration,        — total duration in seconds
-//   completed,       — true if watched ≥90%
-//   watchCount,      — number of distinct sessions started
-//   lastSessionStart — position recorded at session-start ping; used to gate watchCount
+// Schema (multi-client namespaced):
+// {
+//   "<clientId>": {
+//     "<mediaId>": {
+//       id, name, type, poster, streamUrl,
+//       watchedAt, position, duration, completed, watchCount, lastSessionStart
+//     }
+//   }
 // }
+//
+// Each browser/device has its own clientId (generated in localStorage by the
+// frontend). History is isolated per clientId — no user collisions.
+// Single file: history.json. No per-user files.
 
-function getHistory() {
-    return readJson(HISTORY_FILE);
+/**
+ * Read the full history store. Returns { clientId: { mediaId: entry } }.
+ */
+function getHistory(clientId) {
+    const store = readJson(HISTORY_FILE);
+    const cid = resolveClientId(clientId);
+    // If clientId supplied → return only that namespace
+    if (clientId) return safeGet(store, cid) || {};
+    // No clientId → return flat merged view across all clients (for admin/dashboard)
+    const merged = {};
+    for (const cStore of Object.values(store)) {
+        if (cStore && typeof cStore === "object") {
+            Object.assign(merged, cStore);
+        }
+    }
+    return merged;
 }
 
-function getHistoryEntry(id) {
+/**
+ * Read single history entry for a clientId+mediaId pair.
+ */
+function getHistoryEntry(id, clientId) {
     if (!isValidId(id)) return null;
-    const history = readJson(HISTORY_FILE);
-    return safeGet(history, id);
+    const store = readJson(HISTORY_FILE);
+    const cid = resolveClientId(clientId);
+    const clientStore = safeGet(store, cid);
+    if (!clientStore) return null;
+    return safeGet(clientStore, id);
 }
 
 /**
  * saveProgress — called periodically by the client while playing.
- *
- * watchCount increments only when a NEW session starts, detected by:
- *   previous stored position was 0 (fresh or completed) AND incoming position > 0
- *   OR no existing entry at all (first ever play)
- *
- * This means rapid progress-pings during a single playback session never
- * re-increment watchCount.
+ * Namespaced by clientId so multiple clients never collide.
  */
-function saveProgress(id, data) {
+function saveProgress(id, data, clientId) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
 
-    const history = readJson(HISTORY_FILE);
-    const existing = safeGet(history, id) || { watchCount: 0, position: 0, lastSessionStart: 0 };
+    const cid = resolveClientId(clientId);
+    const store = readJson(HISTORY_FILE);
+
+    // Ensure namespace exists
+    if (!Object.prototype.hasOwnProperty.call(store, cid) || typeof store[cid] !== "object") {
+        store[cid] = {};
+    }
+
+    const clientStore = store[cid];
+    const existing = safeGet(clientStore, id) || { watchCount: 0, position: 0, lastSessionStart: 0 };
 
     const position = typeof data.position === "number" ? data.position : (existing.position ?? 0);
     const duration = typeof data.duration === "number" ? data.duration : (existing.duration ?? 0);
     const completed = duration > 0 ? position / duration >= 0.9 : false;
 
-    // New session = previously at 0 (start/reset) and now past the first 3 seconds
     const prevPosition = existing.position ?? 0;
     const isNewSession = !existing.id || (prevPosition === 0 && position > 3);
     const watchCount = (existing.watchCount || 0) + (isNewSession ? 1 : 0);
 
-    history[id] = {
+    clientStore[id] = {
         id,
         name: data.name || existing.name || "",
         type: data.type || existing.type || "movie",
@@ -112,22 +144,42 @@ function saveProgress(id, data) {
         completed,
         watchCount,
         lastSessionStart: isNewSession ? position : existing.lastSessionStart,
+        // Subtitle preference: null means "off", object means the chosen track
+        subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref") ? data.subtitlePref : (existing.subtitlePref ?? null),
     };
 
-    writeJson(HISTORY_FILE, history);
-    return history[id];
+    writeJson(HISTORY_FILE, store);
+    return clientStore[id];
 }
 
-function deleteHistoryEntry(id) {
+/**
+ * Delete single history entry for a clientId+mediaId pair.
+ */
+function deleteHistoryEntry(id, clientId) {
     if (!isValidId(id)) return false;
-    const history = readJson(HISTORY_FILE);
-    if (!safeDelete(history, id)) return false;
-    writeJson(HISTORY_FILE, history);
+    const cid = resolveClientId(clientId);
+    const store = readJson(HISTORY_FILE);
+    const clientStore = safeGet(store, cid);
+    if (!clientStore) return false;
+    if (!safeDelete(clientStore, id)) return false;
+    writeJson(HISTORY_FILE, store);
     return true;
 }
 
-function clearHistory() {
-    writeJson(HISTORY_FILE, {});
+/**
+ * Clear all history for a clientId (or entire store if no clientId).
+ */
+function clearHistory(clientId) {
+    if (clientId !== null && clientId !== undefined) {
+        // Explicit clientId supplied — must be valid
+        if (!isValidClientId(clientId)) throw new Error("Invalid clientId");
+        const store = readJson(HISTORY_FILE);
+        store[resolveClientId(clientId)] = {};
+        writeJson(HISTORY_FILE, store);
+    } else {
+        // null/undefined = intentional full-store clear
+        writeJson(HISTORY_FILE, {});
+    }
 }
 
 // ─── Userdata (watchlist + favourites) ───────────────────────────────────────

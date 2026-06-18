@@ -1,13 +1,42 @@
 "use strict";
 
 const fs = require("fs");
+const fsp = fs.promises;
 const path = require("path");
+const multer = require("multer");
 const { readFolders } = require("./libraryController");
 const { getAllCached, findById, getGroupedCached } = require("../utils/mediaCache");
-const { SUBTITLE_EXTENSIONS, decodeFileId } = require("../utils/fileHelpers");
+const { SUBTITLE_EXTENSIONS, decodeFileId, parseSubtitleFilename, isSubtitleFile } = require("../utils/fileHelpers");
 const { getMetadata } = require("../utils/metadataStore");
 const { groupMedia } = require("../utils/grouper");
 const { getPermission } = require("../utils/permissionsStore");
+const { probe } = require("../utils/ffprobe");
+const { searchSubtitles, downloadSubtitle } = require("../services/subDLService");
+const subtitleStore = require("../utils/subtitleStore");
+
+// ─── Multer upload config (memory → then we move to media dir) ────────────────
+// Store in memory; we validate and write to disk manually so we can place it
+// next to the media file instead of a random temp path.
+const _upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max per subtitle
+    fileFilter: (_req, file, cb) => {
+        if (isSubtitleFile(file.originalname)) {
+            cb(null, true);
+        } else {
+            cb(new Error("Only subtitle files (.srt, .vtt, .ass, .ssa) are accepted"));
+        }
+    },
+}).single("subtitle");
+
+function handleUploadMiddleware(req, res) {
+    return new Promise((resolve, reject) => {
+        _upload(req, res, (err) => {
+            if (err) reject(err);
+            else resolve();
+        });
+    });
+}
 
 // Attaches TMDB metadata and category (genres) to a single file object
 async function enrich(file) {
@@ -195,6 +224,9 @@ async function searchMedia(req, res) {
 }
 
 // GET /api/media/:id/subtitles
+// Returns unified subtitle list:
+//   source=embedded  — tracks extracted from the media file itself via FFmpeg
+//   source=external  — .srt/.vtt/.ass/.ssa files found alongside the media file
 async function getMediaSubtitles(req, res) {
     try {
         const { id } = req.params;
@@ -210,20 +242,88 @@ async function getMediaSubtitles(req, res) {
         }
 
         const dir = path.dirname(filePath);
-        const ext = path.extname(filePath);
+        const ext = path.extname(filePath).toLowerCase();
         const baseName = path.basename(filePath, ext);
         const subtitles = [];
 
-        for (const subExt of SUBTITLE_EXTENSIONS) {
-            const subPath = path.join(dir, baseName + subExt);
-            if (fs.existsSync(subPath)) {
+        // ── 1. Embedded subtitle tracks (MKV / MP4 / etc.) ───────────────────
+        // Probe is cached in ffprobe.js (10-min TTL) so this is O(1) on repeat calls.
+        try {
+            const mediaInfo = await probe(filePath);
+            if (mediaInfo?.subtitles?.length) {
+                for (const track of mediaInfo.subtitles) {
+                    // Build a URL the frontend can request to extract this track.
+                    // streamController will handle the actual FFmpeg extraction.
+                    const encodedVideo = Buffer.from(filePath).toString("base64url");
+                    subtitles.push({
+                        source: "embedded",
+                        trackIndex: track.index, // ffprobe global stream index
+                        codec: track.codec,
+                        lang: track.language || "und",
+                        label: track.language ? track.language.toUpperCase() : "Unknown",
+                        forced: track.forced,
+                        // URL pattern: /stream/subtitle/embedded/<base64url_video>/<streamIndex>
+                        url: `/stream/subtitle/embedded/${encodedVideo}/${track.index}`,
+                    });
+                }
+            }
+        } catch (probeErr) {
+            // Non-fatal: if ffprobe fails (e.g. file not yet accessible), skip embedded
+            console.warn("[Media] ffprobe for embedded subtitles failed:", probeErr.message);
+        }
+
+        // ── 2. External subtitle files in the same directory ──────────────────
+        // Scans the directory once and matches any file that starts with baseName.
+        // Supports: Movie.srt  Movie.en.srt  Movie.bn.forced.srt  Movie.en-US.vtt
+        try {
+            const dirEntries = await fsp.readdir(dir);
+            for (const entry of dirEntries) {
+                if (!isSubtitleFile(entry)) continue;
+                const parsed = parseSubtitleFilename(baseName, entry);
+                if (!parsed) continue; // doesn't belong to this video
+
+                const subPath = path.join(dir, entry);
                 const encodedPath = Buffer.from(subPath).toString("base64url");
                 subtitles.push({
-                    filename: baseName + subExt,
-                    ext: subExt,
+                    source: "external",
+                    filename: entry,
+                    ext: path.extname(entry).toLowerCase(),
+                    lang: parsed.lang,
+                    label: parsed.label,
+                    forced: parsed.forced,
                     url: "/stream/subtitle/" + encodedPath,
                 });
             }
+        } catch (dirErr) {
+            // Non-fatal: if directory is unreadable, skip external
+            console.warn("[Media] directory scan for external subtitles failed:", dirErr.message);
+        }
+
+        // ── 3. Downloaded subtitles (from SubDL / user uploads in data/subtitles/) ──
+        try {
+            const meta = await subtitleStore.getMediaMeta(id);
+            for (const dl of meta.downloaded || []) {
+                // Quick in-memory check first, then verify file on disk
+                let fileOk = false;
+                try {
+                    fs.accessSync(dl.path);
+                    fileOk = true;
+                } catch {
+                    /* missing */
+                }
+                if (!fileOk) continue;
+                const langLabel = dl.lang === "bn" ? "Bangla" : dl.lang === "en" ? "English" : dl.lang.toUpperCase();
+                subtitles.push({
+                    source: "downloaded",
+                    lang: dl.lang,
+                    label: `${langLabel} (SubDL)`,
+                    filename: dl.filename,
+                    ext: path.extname(dl.filename).toLowerCase(),
+                    url: subtitleStore.getSubtitleStreamUrl(dl.path),
+                });
+            }
+        } catch (dlErr) {
+            console.warn("[Media] downloaded subtitles lookup failed:", dlErr.message);
         }
 
         return res.json({ subtitles });
@@ -233,4 +333,185 @@ async function getMediaSubtitles(req, res) {
     }
 }
 
-module.exports = { getAllMedia, getMediaById, searchMedia, getMediaSubtitles };
+// POST /api/media/:id/subtitle/upload
+// Accepts a subtitle file in multipart/form-data (field: "subtitle").
+// Saves it next to the media file so it's discovered by getMediaSubtitles.
+async function uploadSubtitle(req, res) {
+    try {
+        // Run multer middleware to parse the upload
+        await handleUploadMiddleware(req, res);
+    } catch (uploadErr) {
+        return res.status(400).json({ error: uploadErr.message || "File upload failed" });
+    }
+
+    if (!req.file) {
+        return res.status(400).json({ error: 'No subtitle file provided (field: "subtitle")' });
+    }
+
+    const { id } = req.params;
+    let filePath;
+    try {
+        filePath = decodeFileId(id);
+    } catch {
+        return res.status(400).json({ error: "Invalid media ID" });
+    }
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Media file not found on disk" });
+    }
+
+    const dir = path.dirname(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const baseName = path.basename(filePath, ext);
+
+    // Derive safe destination filename.
+    // Use the uploaded filename if it starts with baseName, otherwise prefix it.
+    const origName = req.file.originalname;
+    const origExt = path.extname(origName).toLowerCase();
+    const origBase = path.basename(origName, origExt);
+
+    let destName;
+    if (origBase.toLowerCase().startsWith(baseName.toLowerCase())) {
+        destName = origName; // already correctly named
+    } else {
+        // Prefix with video base name: user uploaded "english.srt" → "Movie.en.srt" if lang detected
+        const parsed = parseSubtitleFilename("", origName); // parse lang from just the filename
+        destName = parsed && parsed.lang !== "und" ? `${baseName}.${parsed.lang}${origExt}` : `${baseName}.uploaded${origExt}`;
+    }
+
+    const destPath = path.join(dir, destName);
+
+    try {
+        await fsp.writeFile(destPath, req.file.buffer);
+
+        // Also copy into data/subtitles/<hash16>/<language>/subtitle.srt
+        // so the store tracks it and it survives media file moves.
+        try {
+            const langMatch = destName.match(/\.([a-z]{2,3})\.\w+$/);
+            const lang = langMatch ? langMatch[1] : "und";
+            const subExt = path.extname(destName).toLowerCase();
+            const langDir = subtitleStore.getSubtitleLangDir(id, lang);
+            await fsp.mkdir(langDir, { recursive: true });
+            const storePath = path.join(langDir, `subtitle${subExt}`);
+            await fsp.writeFile(storePath, req.file.buffer);
+            await subtitleStore.recordDownloaded(id, {
+                lang,
+                filename: `subtitle${subExt}`,
+                destPath: storePath,
+            });
+        } catch (storeErr) {
+            // Non-fatal — file already saved next to media
+            console.warn("[Media] uploadSubtitle store copy failed:", storeErr.message);
+        }
+
+        const encodedPath = Buffer.from(destPath).toString("base64url");
+        return res.status(201).json({
+            message: "Subtitle uploaded successfully",
+            filename: destName,
+            url: "/stream/subtitle/" + encodedPath,
+        });
+    } catch (writeErr) {
+        console.error("[Media] uploadSubtitle write error:", writeErr);
+        return res.status(500).json({ error: "Failed to save subtitle file" });
+    }
+}
+
+// GET /api/media/:id/subtitle/search?lang=en,bn&tmdbId=&imdbId=&season=&episode=
+// Searches SubDL for available subtitles for this media item.
+async function searchOnlineSubtitles(req, res) {
+    try {
+        const { id } = req.params;
+        let filePath;
+        try {
+            filePath = decodeFileId(id);
+        } catch {
+            return res.status(400).json({ error: "Invalid media ID" });
+        }
+
+        const lang = String(req.query.lang || "en,bn").trim();
+        const tmdbId = req.query.tmdbId ? String(req.query.tmdbId) : null;
+        const imdbId = req.query.imdbId ? String(req.query.imdbId) : null;
+        const season = req.query.season != null ? parseInt(req.query.season, 10) : null;
+        const episode = req.query.episode != null ? parseInt(req.query.episode, 10) : null;
+        const title = String(req.query.q || path.basename(filePath, path.extname(filePath))).trim();
+        const year = req.query.year ? parseInt(req.query.year, 10) : null;
+        const type = req.query.type || "movie";
+
+        const languages = lang
+            .split(",")
+            .map((l) => l.trim().toLowerCase())
+            .filter(Boolean);
+
+        const result = await searchSubtitles({
+            title,
+            year,
+            imdbId,
+            tmdbId,
+            season: Number.isFinite(season) ? season : null,
+            episode: Number.isFinite(episode) ? episode : null,
+            type,
+            languages,
+        });
+
+        return res.json(result);
+    } catch (err) {
+        console.error("[Media] searchOnlineSubtitles error:", err);
+        return res.status(500).json({ error: "Online subtitle search failed" });
+    }
+}
+
+// POST /api/media/:id/subtitle/download
+// Body: { url: <subdl relative url>, lang: "en"|"bn", releaseName? }
+// Downloads subtitle from SubDL ZIP, extracts, saves to data/subtitles/{mediaId}/
+async function downloadOnlineSubtitle(req, res) {
+    try {
+        const { id } = req.params;
+        let filePath;
+        try {
+            filePath = decodeFileId(id);
+        } catch {
+            return res.status(400).json({ error: "Invalid media ID" });
+        }
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: "Media file not found on disk" });
+        }
+
+        const { url: subtitleUrl, lang = "en" } = req.body || {};
+        if (!subtitleUrl) return res.status(400).json({ error: "url is required" });
+
+        // Save into data/subtitles/<hash16>/<language>/subtitle.srt
+        const langDir = subtitleStore.getSubtitleLangDir(id, lang);
+        const result = await downloadSubtitle(subtitleUrl, langDir, "subtitle", lang);
+
+        if (!result.ok) {
+            return res.status(500).json({ error: result.error || "Download failed" });
+        }
+
+        await subtitleStore.recordDownloaded(id, {
+            lang,
+            filename: result.filename,
+            destPath: result.destPath,
+        });
+
+        return res.status(201).json({
+            message: "Subtitle downloaded from SubDL",
+            filename: result.filename,
+            lang,
+            url: subtitleStore.getSubtitleStreamUrl(result.destPath),
+        });
+    } catch (err) {
+        console.error("[Media] downloadOnlineSubtitle error:", err);
+        return res.status(500).json({ error: "Failed to download subtitle" });
+    }
+}
+
+module.exports = {
+    getAllMedia,
+    getMediaById,
+    searchMedia,
+    getMediaSubtitles,
+    uploadSubtitle,
+    searchOnlineSubtitles,
+    downloadOnlineSubtitle,
+};
