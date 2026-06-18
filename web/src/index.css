@@ -467,7 +467,7 @@ body {
     font-weight: 800;
 }
 
-//* ───────────────────────────────────────────────────────────────────────────
+/* ───────────────────────────────────────────────────────────────────────────
    FLUX Player — Premium CSS
    Cinematic overlays, GPU-accelerated animations, seek bar, subtitle styles
    ─────────────────────────────────────────────────────────────────────────── */
@@ -477,7 +477,7 @@ body {
 .flux-seek-root {
     position: relative;
     width: 100%;
-    padding: 14px 0 8px;
+    /* padding: 14px 0 8px; */
     cursor: pointer;
     touch-action: none;
     user-select: none;
@@ -912,7 +912,7 @@ body {
     width: 100%;
 }
 
-/* ── Play/pause center button (mobile) ────────────────────────────────────── */
+/*! ── Play/pause center button (mobile) ────────────────────────────────────── */
 
 .flux-center-play {
     width: 72px;
@@ -930,6 +930,22 @@ body {
         opacity 0.2s;
     -webkit-tap-highlight-color: transparent;
     color: #fff;
+
+    /* Add these two lines */
+    animation: fadeOutAndHide 0.4s ease 1s forwards;
+}
+
+/* Define the animation */
+@keyframes fadeOutAndHide {
+    from {
+        opacity: 1;
+        visibility: visible;
+    }
+    to {
+        opacity: 0;
+        visibility: hidden;
+        display: none; /* Drops it from the DOM layout */
+    }
 }
 
 .flux-center-play:active {

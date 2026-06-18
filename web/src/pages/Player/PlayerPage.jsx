@@ -11,11 +11,13 @@ import { useProgress } from "./useProgress";
 import { getMediaById, getSubtitles } from "../../api/media";
 import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream";
 import { useAuth } from "../../auth/AuthContext";
+import { useIsMobile } from "./useIsMobile";
 
 // ─── PlayerInner (inside PlayerProvider) ─────────────────────────────────────
 
 function PlayerInner({ mediaId }) {
     const navigate = useNavigate();
+    const isMobile = useIsMobile();
     const containerRef = useRef(null);
     const videoRef = useRef(null);
     const hideTimer = useRef(null);
@@ -27,7 +29,6 @@ function PlayerInner({ mediaId }) {
     const setDefaultSubRef = useRef(null);
     // HLS instance ref — populated by VideoCore via onHlsCreated, used by useProgress deferredSeek
     const hlsRef = useRef(null);
-
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
@@ -43,6 +44,15 @@ function PlayerInner({ mediaId }) {
     // while backend spins up FFmpeg and generates the first segments (3-5s).
     const [preparingStream, setPreparingStream] = useState(false);
     const [prepareLabel, setPrepareLabel] = useState("Preparing stream…");
+
+    // ── Pinch-zoom state (real scale/pan, lifted so VideoCore can apply transform) ──
+    const [zoomState, setZoomState] = useState({ scale: 1, panX: 0, panY: 0 });
+    const handleZoomChange = useCallback((z) => setZoomState(z), []);
+
+    // Reset zoom whenever a new stream loads
+    useEffect(() => {
+        setZoomState({ scale: 1, panX: 0, panY: 0 });
+    }, [streamUrl]);
 
     useEffect(() => {
         sessionIdRef.current = sessionId;
@@ -83,25 +93,99 @@ function PlayerInner({ mediaId }) {
         showAudioTrack: audioTrackOverlay.visible,
     };
 
-    // ── Auto-hide controls ────────────────────────────────────────────────────
-    const showControls = useCallback(() => {
-        actions.setControlsVisible(true);
-        clearTimeout(hideTimer.current);
-        hideTimer.current = setTimeout(() => {
-            if (state.playing) actions.setControlsVisible(false);
-        }, 3500);
-    }, [actions, state.playing]);
+    // ── Controls visibility state machine ─────────────────────────────────────
+    //
+    // ROOT CAUSE AUDIT (doc section 9) of the previous implementation:
+    //  1. onVideoClick was wired to showControls() (always-show), not a
+    //     toggle — tapping while controls were visible just reset the timer
+    //     instead of hiding them. Fixed last session via toggleControls(),
+    //     kept here.
+    //  2. showControls()/the hide timer was ONLY called from: keyboard
+    //     shortcuts, and the center-play-bubble tap. Touch-drag gestures
+    //     (brightness/volume/seek swipe) and PlayerControls' own buttons
+    //     (play/pause, seek±10, subtitle/audio/speed menus, SeekBar drag)
+    //     never restarted the timer — controls could vanish out from under
+    //     an open menu or mid-swipe. Doc section 4 requires ALL of these to
+    //     count as activity. Fixed by exposing one markActivity() function
+    //     that everything in the tree now calls.
+    //  3. Only one boolean (controlsVisible) existed — no distinction
+    //     between "hidden" and "currently fading out", so a fast re-tap
+    //     during the fade could restart the show timer while the hide CSS
+    //     transition was still animating, causing a visible flicker/race.
+    //     Fixed with an explicit 4-phase machine; the boolean exposed to
+    //     PlayerControls is just phase === VISIBLE || ANIMATING_OUT (so it
+    //     stays mounted/rendered during the fade-out, and CSS opacity does
+    //     the animating — see flux-controls-fade class).
+    //
+    // Single timer source of truth: hideTimer ref, always cleared before any
+    // new one is set. No other timer for this concern exists anywhere else
+    // in the tree after this change.
+    const PHASE = { HIDDEN: "HIDDEN", ANIMATING_IN: "ANIMATING_IN", VISIBLE: "VISIBLE", ANIMATING_OUT: "ANIMATING_OUT" };
+    const [controlsPhase, setControlsPhase] = useState(PHASE.VISIBLE);
+    const animTimer = useRef(null);
+    const HIDE_DELAY = 3000; // doc section 3: 3 seconds
+    const FADE_MS = 200; // doc section 10: 150-250ms
 
+    const clearAllControlsTimers = useCallback(() => {
+        clearTimeout(hideTimer.current);
+        clearTimeout(animTimer.current);
+    }, []);
+
+    // markActivity — THE one function any interaction anywhere should call.
+    // Always shows controls (or keeps them shown) and restarts the 3s timer.
+    const markActivity = useCallback(() => {
+        clearAllControlsTimers();
+        setControlsPhase((prev) => (prev === PHASE.VISIBLE ? PHASE.VISIBLE : PHASE.ANIMATING_IN));
+        actions.setControlsVisible(true);
+        if (controlsPhase !== PHASE.VISIBLE) {
+            animTimer.current = setTimeout(() => setControlsPhase(PHASE.VISIBLE), FADE_MS);
+        }
+        if (state.playing) {
+            hideTimer.current = setTimeout(() => {
+                setControlsPhase(PHASE.ANIMATING_OUT);
+                animTimer.current = setTimeout(() => {
+                    setControlsPhase(PHASE.HIDDEN);
+                    actions.setControlsVisible(false);
+                }, FADE_MS);
+            }, HIDE_DELAY);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [actions, state.playing, controlsPhase, clearAllControlsTimers]);
+
+    // Back-compat name used by existing call sites (keyboard shortcuts, etc).
+    const showControls = markActivity;
+
+    // toggleControls — used only by the actual single-tap-on-video path.
+    // Visible → hide immediately (still respects "don't hide while paused").
+    // Hidden/animating → markActivity (show + restart timer).
+    const toggleControls = useCallback(() => {
+        if ((controlsPhase === PHASE.VISIBLE || controlsPhase === PHASE.ANIMATING_IN) && state.playing) {
+            clearAllControlsTimers();
+            setControlsPhase(PHASE.ANIMATING_OUT);
+            animTimer.current = setTimeout(() => {
+                setControlsPhase(PHASE.HIDDEN);
+                actions.setControlsVisible(false);
+            }, FADE_MS);
+        } else {
+            markActivity();
+        }
+    }, [controlsPhase, state.playing, clearAllControlsTimers, markActivity]);
+
+    // Pausing must always reveal controls and hold them (no auto-hide while
+    // paused — doc section 5 "never become stuck", matches prior behavior).
     useEffect(() => {
         if (!state.playing) {
-            clearTimeout(hideTimer.current);
+            clearAllControlsTimers();
+            setControlsPhase(PHASE.VISIBLE);
             actions.setControlsVisible(true);
         } else {
-            showControls();
+            markActivity();
         }
-    }, [state.playing]); // eslint-disable-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.playing]);
 
-    useEffect(() => () => clearTimeout(hideTimer.current), []);
+    // Cleanup on unmount — doc section 8.
+    useEffect(() => clearAllControlsTimers, [clearAllControlsTimers]);
 
     useEffect(() => {
         setOverlayState((s) => ({ ...s, brightness: state.brightness, volume: state.volume, muted: state.muted }));
@@ -173,7 +257,11 @@ function PlayerInner({ mediaId }) {
         return () => {
             if (sessionIdRef.current) stopSession(sessionIdRef.current, clientIdRef.current);
             if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-            if (screen.orientation?.unlock) screen.orientation.unlock();
+            try {
+                screen.orientation?.unlock?.();
+            } catch {
+                // Unsupported — fail silently per doc section 2.
+            }
         };
     }, []);
 
@@ -239,10 +327,7 @@ function PlayerInner({ mediaId }) {
                         // Deferred so history load (below) can override.
                         if (subs.length > 0) {
                             // Prefer English track; fall back to first track
-                            const english = subs.find((s) =>
-                                (s.lang || "").toLowerCase().startsWith("en") ||
-                                (s.label || "").toLowerCase().startsWith("english")
-                            );
+                            const english = subs.find((s) => (s.lang || "").toLowerCase().startsWith("en") || (s.label || "").toLowerCase().startsWith("english"));
                             const defaultSub = english || null; // null = off by default if no English
                             // Will be overridden below if history has a saved subtitle pref
                             setDefaultSubRef.current = { subs, defaultSub };
@@ -268,11 +353,52 @@ function PlayerInner({ mediaId }) {
 
     // ── Lock orientation ──────────────────────────────────────────────────────
     useEffect(() => {
-        if (screen.orientation?.lock) screen.orientation.lock("landscape").catch(() => {});
+        try {
+            screen.orientation?.lock?.("landscape").catch(() => {});
+        } catch {
+            // Unsupported on this browser — fail silently per doc section 2.
+        }
         return () => {
-            if (screen.orientation?.unlock) screen.orientation.unlock();
+            try {
+                screen.orientation?.unlock?.();
+            } catch {
+                // Unsupported — fail silently.
+            }
         };
     }, []);
+
+    // ── Auto-fullscreen + landscape on mobile when playback starts ────────────
+    // FIX: screen.orientation.lock() generally only succeeds while the
+    // document is actually in fullscreen on mobile browsers — calling it
+    // outside fullscreen (as the effect above does on mount) silently fails
+    // on most devices. So on mobile we also need to actively request
+    // fullscreen once playback begins, then lock landscape once fullscreen
+    // has actually engaged (fullscreenchange fires, THEN lock — locking
+    // before the transition completes is unreliable).
+    //
+    // autoFullscreenDone ref ensures this only fires ONCE per mount — if the
+    // user manually exits fullscreen mid-playback, we must not force them
+    // back in on every subsequent play/pause toggle.
+    const autoFullscreenDone = useRef(false);
+    useEffect(() => {
+        if (!isMobile || autoFullscreenDone.current || !state.playing) return;
+        const container = containerRef.current;
+        if (!container || document.fullscreenElement) {
+            autoFullscreenDone.current = true;
+            return;
+        }
+        autoFullscreenDone.current = true;
+        container
+            .requestFullscreen?.({ navigationUI: "hide" })
+            .then(() => {
+                screen.orientation?.lock?.("landscape").catch(() => {});
+            })
+            .catch(() => {
+                // Fullscreen request can be rejected if not triggered by a
+                // direct user gesture on some browsers — harmless no-op,
+                // user can still tap the manual fullscreen button.
+            });
+    }, [isMobile, state.playing]);
 
     // ── Progress tracking ─────────────────────────────────────────────────────
     const progressProps = useProgress({
@@ -300,12 +426,58 @@ function PlayerInner({ mediaId }) {
             if (!subs?.length) return;
             // Match saved subtitle by lang + source
             const saved = entry.subtitlePref;
-            const match = subs.find(
-                (s) => s.url === saved.url || (s.lang === saved.lang && s.source === saved.source)
-            );
+            const match = subs.find((s) => s.url === saved.url || (s.lang === saved.lang && s.source === saved.source));
             actions.setActiveSubtitle(match || null);
         },
     });
+
+    // ── Autoplay (doc section 1) ───────────────────────────────────────────────
+    // useProgress never calls setPlaying — playback start has always been
+    // fully manual (user taps play). Root cause for "autoplay doesn't work":
+    // there was no autoplay trigger anywhere in this codebase.
+    //
+    // Implemented WITHOUT touching useProgress.jsx (it's load-bearing for
+    // resume/seek/history-save — editing it blind risks regressing those).
+    // Instead: wrap the onReadyToSeek callback already passed into VideoCore.
+    // If no resume dialog is about to show (fresh video, or already past 10s
+    // threshold check), start playback right after ready. If the resume
+    // dialog WILL show, hold off — autoplay fires instead from the
+    // Resume/Start Over button handlers below, after the user's explicit
+    // choice (you don't want it auto-playing under the dialog while they're
+    // still deciding where to resume from).
+    const handleReadyToSeek = useCallback(() => {
+        progressProps.onReadyToSeek?.();
+        if (!progressProps.showResumeDialog) {
+            actions.setPlaying(true);
+        }
+    }, [progressProps, actions]);
+
+    const handleResumeWithAutoplay = useCallback(() => {
+        progressProps.handleResume?.();
+        actions.setPlaying(true);
+    }, [progressProps, actions]);
+
+    const handleStartOverWithAutoplay = useCallback(() => {
+        progressProps.handleStartOver?.();
+        actions.setPlaying(true);
+    }, [progressProps, actions]);
+
+    // Browser autoplay restriction fallback: if the play() promise rejects
+    // (no prior user gesture on this page load — common when navigating
+    // straight into the player), retry once on the very next tap/click
+    // anywhere on the page, so the video never just sits paused with no
+    // explanation (doc: "never leave the player paused without explanation").
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !state.playing) return;
+        video.play().catch(() => {
+            const retryOnce = () => {
+                video.play().catch(() => {});
+                document.removeEventListener("pointerdown", retryOnce);
+            };
+            document.addEventListener("pointerdown", retryOnce, { once: true });
+        });
+    }, [state.playing, streamUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleBack = () => navigate(-1);
 
@@ -371,10 +543,32 @@ function PlayerInner({ mediaId }) {
     return (
         <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
             {/* Video core */}
-            {streamUrl && <VideoCore ref={videoRef} streamUrl={streamUrl} onVideoClick={showControls} mediaDuration={mediaDurationRef.current} onReadyToSeek={progressProps.onReadyToSeek} onHlsCreated={(hls) => { hlsRef.current = hls; }} />}
+            {streamUrl && (
+                <VideoCore
+                    ref={videoRef}
+                    streamUrl={streamUrl}
+                    onVideoClick={toggleControls}
+                    mediaDuration={mediaDurationRef.current}
+                    onReadyToSeek={handleReadyToSeek}
+                    onHlsCreated={(hls) => {
+                        hlsRef.current = hls;
+                    }}
+                    zoomScale={zoomState.scale}
+                    panX={zoomState.panX}
+                    panY={zoomState.panY}
+                />
+            )}
 
             {/* Gesture layer */}
-            <PlayerGestures videoRef={videoRef} containerRef={containerRef} overlayTriggers={overlayTriggers} setOverlayState={setOverlayState} showControls={showControls} />
+            <PlayerGestures
+                videoRef={videoRef}
+                containerRef={containerRef}
+                overlayTriggers={overlayTriggers}
+                setOverlayState={setOverlayState}
+                showControls={showControls}
+                onTap={toggleControls}
+                onZoomChange={handleZoomChange}
+            />
 
             {/* Visual overlays */}
             <PlayerOverlays overlayState={overlayState} overlayVis={overlayVis} />
@@ -386,7 +580,15 @@ function PlayerInner({ mediaId }) {
             <PlayerLock />
 
             {/* Controls UI */}
-            <PlayerControls mediaInfo={mediaInfo} videoRef={videoRef} containerRef={containerRef} subtitles={subtitles} onBack={handleBack} onShowControls={showControls} />
+            <PlayerControls
+                mediaInfo={mediaInfo}
+                videoRef={videoRef}
+                containerRef={containerRef}
+                subtitles={subtitles}
+                onBack={handleBack}
+                onShowControls={showControls}
+                controlsPhase={controlsPhase}
+            />
 
             {/* Resume dialog */}
             {progressProps.showResumeDialog && (
@@ -402,14 +604,14 @@ function PlayerInner({ mediaId }) {
                             </p>
                         </div>
                         <button
-                            onClick={progressProps.handleStartOver}
+                            onClick={handleStartOverWithAutoplay}
                             className="px-3 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs
                                        hover:bg-white/20 transition-colors shrink-0">
                             Start Over
                             <span className="ml-1 text-white/40">({progressProps.resumeCountdown})</span>
                         </button>
                         <button
-                            onClick={progressProps.handleResume}
+                            onClick={handleResumeWithAutoplay}
                             className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs
                                        font-semibold hover:bg-red-500 transition-colors shrink-0">
                             Resume
@@ -432,8 +634,7 @@ function PlayerInner({ mediaId }) {
                         <p className="text-red-400 text-sm font-medium">{state.error}</p>
                         <button
                             onClick={() => actions.setError(null)}
-                            className="pointer-events-auto mt-3 px-4 py-1.5 rounded-lg
-                                       bg-white/10 text-white/70 text-xs hover:bg-white/20 transition-colors">
+                            className="pointer-events-auto mt-3 px-4 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs hover:bg-white/20 transition-colors">
                             Dismiss
                         </button>
                     </div>

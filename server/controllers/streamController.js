@@ -687,11 +687,16 @@ async function streamEmbeddedSubtitle(req, res) {
         }
 
         const args = [
-            "-hide_banner", "-loglevel", "error",
-            "-i", safePath,
-            "-map", `0:${trackIndex}`,
-            "-f", "webvtt",
-            "-",   // pipe to stdout
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            safePath,
+            "-map",
+            `0:${trackIndex}`,
+            "-f",
+            "webvtt",
+            "-", // pipe to stdout
         ];
 
         const ffmpegProc = spawn(ffmpegBin, args, {

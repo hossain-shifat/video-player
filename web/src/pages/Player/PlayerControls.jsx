@@ -228,15 +228,11 @@ function SubtitlePicker({ open, onClose, subtitles }) {
         const styles = {
             embedded: { background: "rgba(99,102,241,0.25)", color: "#a5b4fc" },
             external: { background: "rgba(16,185,129,0.2)", color: "#6ee7b7" },
-            online:   { background: "rgba(251,191,36,0.2)",  color: "#fcd34d" },
+            online: { background: "rgba(251,191,36,0.2)", color: "#fcd34d" },
         };
         const label = { embedded: "EMB", external: "EXT", online: "WEB" }[source] || source.toUpperCase();
         const style = styles[source] || { background: "rgba(255,255,255,0.1)", color: "#ccc" };
-        return (
-            <span style={{ ...style, fontSize: 9, padding: "1px 5px", borderRadius: 4, marginLeft: 6, fontWeight: 700, letterSpacing: "0.04em" }}>
-                {label}
-            </span>
-        );
+        return <span style={{ ...style, fontSize: 9, padding: "1px 5px", borderRadius: 4, marginLeft: 6, fontWeight: 700, letterSpacing: "0.04em" }}>{label}</span>;
     }
 
     return (
@@ -468,7 +464,7 @@ function TimeDisplay({ style = {} }) {
 
 // ─── PlayerControls ───────────────────────────────────────────────────────────
 
-export default function PlayerControls({ mediaInfo, videoRef, containerRef, subtitles = [], onBack, onShowControls }) {
+export default function PlayerControls({ mediaInfo, videoRef, containerRef, subtitles = [], onBack, onShowControls, controlsPhase = "VISIBLE" }) {
     const { state, actions } = usePlayerState();
     const isMobile = useIsMobile();
     const [openMenu, setOpenMenu] = useState(null);
@@ -515,7 +511,15 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
     }
 
     return (
-        <div className="absolute inset-0 z-30 flex flex-col justify-between pointer-events-none">
+        <div
+            className="absolute inset-0 z-30 flex flex-col justify-between"
+            style={{
+                opacity: controlsPhase === "ANIMATING_OUT" ? 0 : 1,
+                transition: "opacity 200ms ease",
+                pointerEvents: controlsPhase === "ANIMATING_OUT" ? "none" : "auto",
+            }}
+            onClickCapture={onShowControls}
+            onPointerDownCapture={onShowControls}>
             {/* ── Top bar ──────────────────────────────────────────────────────── */}
             <div className="pointer-events-auto flex items-start justify-between px-3 pt-3 pb-16 flux-controls-top">
                 {/* Left: back + title */}

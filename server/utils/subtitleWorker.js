@@ -61,6 +61,7 @@ async function processNext() {
         await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
 
         // Single search for both langs together
+        // Pass spokenLanguage so provider can filter Bangla intelligently
         const search = await searchSubtitles({
             title: entry.title,
             year: entry.year,
@@ -70,6 +71,7 @@ async function processNext() {
             episode: entry.episode,
             type: entry.type === "movie" ? "movie" : "tv",
             languages: langsNeeded,
+            spokenLanguage: entry.spokenLanguage || null,
         });
 
         if (!search.ok) {
@@ -105,9 +107,12 @@ async function processNext() {
             const match = search.results.find((r) => r.lang === lang);
             if (!match) continue;
 
-            // Save to data/subtitles/<hash16>/<language>/subtitle.srt
-            const langDir = store.getSubtitleLangDir(entry.mediaId, lang);
-            const result = await downloadSubtitle(match.fullUrl, langDir, "subtitle", lang);
+            // Resolve deterministic path: e.g. data/subtitles/Interstellar_a1b2c3d4/english/
+            const langDir = store.getSubtitleLangDir(entry.mediaId, lang, entry);
+            // Pass the full match object so SubSource can resolve the download token
+            // (match.url = subId, match.linkName + match.ssLang needed for getSub step)
+            const subtitleRef = match;
+            const result = await downloadSubtitle(subtitleRef, langDir, "subtitle", lang);
 
             if (!result.ok) {
                 console.warn(`[SubtitleWorker] Download failed (${lang}) "${entry.title}": ${result.error}`);

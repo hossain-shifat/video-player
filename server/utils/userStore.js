@@ -145,9 +145,7 @@ function saveProgress(id, data, clientId) {
         watchCount,
         lastSessionStart: isNewSession ? position : existing.lastSessionStart,
         // Subtitle preference: null means "off", object means the chosen track
-        subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref")
-            ? data.subtitlePref
-            : (existing.subtitlePref ?? null),
+        subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref") ? data.subtitlePref : (existing.subtitlePref ?? null),
     };
 
     writeJson(HISTORY_FILE, store);
@@ -172,11 +170,14 @@ function deleteHistoryEntry(id, clientId) {
  * Clear all history for a clientId (or entire store if no clientId).
  */
 function clearHistory(clientId) {
-    if (clientId && isValidClientId(clientId)) {
+    if (clientId !== null && clientId !== undefined) {
+        // Explicit clientId supplied — must be valid
+        if (!isValidClientId(clientId)) throw new Error("Invalid clientId");
         const store = readJson(HISTORY_FILE);
         store[resolveClientId(clientId)] = {};
         writeJson(HISTORY_FILE, store);
     } else {
+        // null/undefined = intentional full-store clear
         writeJson(HISTORY_FILE, {});
     }
 }

@@ -56,6 +56,13 @@ async function getOrScan(folder) {
         _groupedCache = null;
         const prevCount = entry ? entry.files.length : -1;
         console.log(`[Cache] Folder "${folder.label}" changed (${prevCount} → ${files.length} files) — grouped cache invalidated`);
+        // Remove stale IDs that no longer exist in new scan
+        if (prevIds) {
+            const newIds = new Set(files.map((f) => f.id));
+            for (const oldId of prevIds) {
+                if (!newIds.has(oldId)) fileIndex.delete(oldId);
+            }
+        }
     }
 
     cache.set(folder.id, { files, label: folder.label, path: folder.path, folderId: folder.id, scannedAt: now });
@@ -147,4 +154,13 @@ async function getGroupedCached(allMedia) {
     };
 }
 
-module.exports = { getAllCached, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached, fileIndex };
+// Returns folder stats using only what's already in cache — no rescans triggered.
+// Folders with no cached entry return count: 0.
+function getCachedStats(folders) {
+    return folders.map((f) => {
+        const entry = cache.get(f.id);
+        return { id: f.id, path: f.path, label: f.label, count: entry ? entry.files.length : 0 };
+    });
+}
+
+module.exports = { getAllCached, getCachedStats, findById, invalidateFolder, invalidateAll, getFileById, updateFromFiles, getGroupedCached, fileIndex };

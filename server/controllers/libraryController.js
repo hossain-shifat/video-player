@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
-const { invalidateFolder, invalidateAll, fileIndex, getAllCached } = require("../utils/mediaCache");
+const { invalidateFolder, invalidateAll, fileIndex, getAllCached, getCachedStats } = require("../utils/mediaCache");
 const { reconcile } = require("../utils/metadataStore");
 
 // In-memory folders cache — eliminates disk I/O on every API call.
@@ -66,8 +66,8 @@ async function _atomicWrite(folders) {
 async function getFolders(req, res) {
     try {
         const folders = await readFolders();
-        // Attach media count to each folder using cached scan results
-        const { folderStats } = await getAllCached(folders);
+        // Attach media count to each folder using cached scan results only — no rescans
+        const folderStats = getCachedStats(folders);
         const statMap = new Map(folderStats.map((s) => [s.id, s.count]));
         const foldersWithCount = folders.map((f) => ({
             ...f,
@@ -131,17 +131,15 @@ async function removeFolder(req, res) {
             return res.status(404).json({ error: "Folder not found" });
         }
 
+        // Run reconcile BEFORE committing the deletion — if these fail, folder is not yet removed
+        const remainingFolders = folders.filter((_, i) => i !== index);
+        const { allMedia } = await getAllCached(remainingFolders);
+        const activeIds = new Set(allMedia.map((f) => f.id));
+        await reconcile(activeIds);
+
         folders.splice(index, 1);
         await writeFolders(folders);
         invalidateFolder(id);
-
-        // FIX (Problem 1): Build authoritative set of ALL active file IDs from
-        // remaining folders before reconciling, so we don't incorrectly purge
-        // metadata for files in other (still-active) folders.
-        // Also await reconcile() — it is async and must complete before response.
-        const { allMedia } = await getAllCached(folders);
-        const activeIds = new Set(allMedia.map((f) => f.id));
-        await reconcile(activeIds);
 
         return res.json({ message: "Folder removed", id });
     } catch (err) {

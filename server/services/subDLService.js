@@ -1,255 +1,414 @@
 "use strict";
 
 /**
- * subDLService.js — FLUX SubDL Integration
+ * subDLService.js — FLUX Subtitle Provider (SubSource API v1)
  *
- * Wraps SubDL API (https://api.subdl.com/api/v1/subtitles).
- * Handles: search, ZIP download, SRT extraction.
+ * API base: https://api.subsource.net/api/v1
+ * Auth: X-API-Key header
+ * Env: SUBSOURCE_API
+ * Rate limits: 60/min · 1800/hr · 7200/day
  *
- * Env: SUBDL_API
+ * Flow:
+ *   1. GET /movies/search?searchType=imdb&imdb=tt... (preferred)
+ *      OR GET /movies/search?searchType=text&q=title&year=...
+ *      → { success, data: [{ movieId, title, type, ... }] }
  *
- * Rate limits (free): 2000 req/day.
- * Downloads: 300/day (IP-based, anonymous).
+ *   2. GET /subtitles?movieId=...&language=english&sort=popular&limit=5
+ *      → { success, data: [{ subtitleId, language, downloads, rating, ... }] }
+ *      (one call per language needed)
+ *
+ *   3. GET /subtitles/{subtitleId}/download
+ *      → ZIP binary stream
+ *      Extract .srt/.vtt/.ass → write to disk
+ *
+ * Exported (same signatures as before):
+ *   searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type, languages, spokenLanguage })
+ *   downloadSubtitle(subtitleRef, destDir, baseName, lang)
+ *   SUPPORTED_LANGS
  */
 
 const https = require("https");
 const http = require("http");
-const fs = require("fs");
-const fsp = fs.promises;
+const fsp = require("fs").promises;
 const path = require("path");
 const zlib = require("zlib");
 
-const SUBDL_BASE = "https://api.subdl.com/api/v1/subtitles";
-const SUBDL_DL_BASE = "https://dl.subdl.com";
-const API_KEY = process.env.SUBDL_API || "";
+const API_BASE = "https://api.subsource.net/api/v1";
+const API_KEY = process.env.SUBSOURCE_API || "";
 
-// Supported language codes for SubDL
-const LANG_MAP = { en: "EN", bn: "BN" };
-const SUPPORTED_LANGS = ["EN", "BN"];
+// SubSource uses full language names (lowercase)
+const LANG_TO_SS = { en: "english", bn: "bengali" };
+const LANG_LABEL = { en: "English", bn: "Bangla" };
+const SUPPORTED_LANGS = ["en", "bn"];
 
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
+// ─── Rate limiter (provider layer only) ──────────────────────────────────────
+const RL_MAX = 55; // stay under 60/min limit
+const RL_WIN = 60_000;
+let _rlCount = 0;
+let _rlStart = Date.now();
 
-function fetchJSON(url, timeoutMs = 12000) {
+async function _throttle() {
+    const now = Date.now();
+    if (now - _rlStart > RL_WIN) {
+        _rlCount = 0;
+        _rlStart = now;
+    }
+    if (_rlCount >= RL_MAX) {
+        const wait = RL_WIN - (Date.now() - _rlStart) + 200;
+        console.log(`[SubSource] Rate limit — waiting ${Math.round(wait / 1000)}s`);
+        await new Promise((r) => setTimeout(r, wait));
+        _rlCount = 0;
+        _rlStart = Date.now();
+    }
+    _rlCount++;
+}
+
+// ─── HTTP GET helper ──────────────────────────────────────────────────────────
+
+function _get(urlStr, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
-        const lib = parsed.protocol === "https:" ? https : http;
+        const url = new URL(urlStr);
+        const options = {
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname + url.search,
+            method: "GET",
+            headers: {
+                "X-API-Key": API_KEY,
+                "User-Agent": "FLUX/1.0",
+                Accept: "application/json",
+            },
+            timeout: timeoutMs,
+        };
 
-        const req = lib.get(
-            url,
+        const req = https.request(options, (res) => {
+            const chunks = [];
+            let stream = res;
+            const enc = (res.headers["content-encoding"] || "").toLowerCase();
+            if (enc === "gzip") stream = res.pipe(zlib.createGunzip());
+            else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
+
+            stream.on("data", (c) => chunks.push(c));
+            stream.on("end", () => {
+                const raw = Buffer.concat(chunks).toString("utf-8");
+                // Guard: if response is HTML (error page), surface it clearly
+                if (raw.trimStart().startsWith("<")) {
+                    return reject(new Error(`SubSource returned HTML (HTTP ${res.statusCode}) — check API key or endpoint`));
+                }
+                try {
+                    resolve({ status: res.statusCode, body: JSON.parse(raw) });
+                } catch (e) {
+                    reject(new Error("SubSource JSON parse error: " + e.message));
+                }
+            });
+            stream.on("error", reject);
+        });
+
+        req.on("timeout", () => req.destroy(new Error("SubSource request timed out")));
+        req.on("error", reject);
+        req.end();
+    });
+}
+
+/** Download ZIP as Buffer (follows one redirect) */
+function _getBuffer(urlStr, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+        const lib = urlStr.startsWith("https:") ? https : http;
+        lib.get(
+            urlStr,
             {
-                headers: {
-                    Accept: "application/json",
-                    "User-Agent": "FLUX/1.0",
-                },
+                headers: { "X-API-Key": API_KEY, "User-Agent": "FLUX/1.0" },
                 timeout: timeoutMs,
             },
             (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    return _getBuffer(res.headers.location, timeoutMs).then(resolve).catch(reject);
+                }
+                if (res.statusCode !== 200) {
+                    return reject(new Error(`SubSource download HTTP ${res.statusCode}`));
+                }
                 const chunks = [];
-                let stream = res;
-                const enc = (res.headers["content-encoding"] || "").toLowerCase();
-                if (enc === "gzip") stream = res.pipe(zlib.createGunzip());
-                else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
-
-                stream.on("data", (c) => chunks.push(c));
-                stream.on("end", () => {
-                    try {
-                        resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString("utf-8")) });
-                    } catch (e) {
-                        reject(new Error("SubDL JSON parse error: " + e.message));
-                    }
-                });
-                stream.on("error", reject);
+                res.on("data", (c) => chunks.push(c));
+                res.on("end", () => resolve(Buffer.concat(chunks)));
+                res.on("error", reject);
             },
-        );
-        req.on("timeout", () => req.destroy(new Error("SubDL request timed out")));
-        req.on("error", reject);
+        )
+            .on("timeout", function () {
+                this.destroy(new Error("SubSource download timed out"));
+            })
+            .on("error", reject);
     });
 }
 
-/**
- * Download raw bytes from URL to Buffer.
- * Used for ZIP files.
- */
-function fetchBuffer(url, timeoutMs = 30000) {
-    return new Promise((resolve, reject) => {
-        const lib = url.startsWith("https:") ? https : http;
-        const req = lib.get(url, { timeout: timeoutMs }, (res) => {
-            // Follow one redirect
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                return fetchBuffer(res.headers.location, timeoutMs).then(resolve).catch(reject);
-            }
-            if (res.statusCode !== 200) {
-                return reject(new Error(`SubDL download HTTP ${res.statusCode}`));
-            }
-            const chunks = [];
-            res.on("data", (c) => chunks.push(c));
-            res.on("end", () => resolve(Buffer.concat(chunks)));
-            res.on("error", reject);
-        });
-        req.on("timeout", () => req.destroy(new Error("SubDL download timed out")));
-        req.on("error", reject);
-    });
-}
+// ─── ZIP extraction (pure Node) ──────────────────────────────────────────────
 
-// ─── ZIP extraction (no external deps — pure Node) ───────────────────────────
-
-/**
- * Minimal ZIP parser — extracts first .srt / .vtt / .ass file found.
- * Returns { filename, data: Buffer } or null.
- *
- * ZIP local file header: PK\x03\x04
- * Offsets:
- *   [6]  general purpose bit flag (2 bytes, LE)
- *   [8]  compression method (2 bytes): 0=store, 8=deflate
- *   [18] compressed size (4 bytes, LE)
- *   [22] uncompressed size (4 bytes, LE)
- *   [26] file name length (2 bytes, LE)
- *   [28] extra field length (2 bytes, LE)
- *   [30] file name (variable)
- */
-function extractSubFromZip(buf) {
+function _extractSubFromZip(buf) {
     const SUB_EXTS = [".srt", ".vtt", ".ass", ".ssa"];
     let offset = 0;
-
     while (offset < buf.length - 4) {
-        // Find local file header signature PK\x03\x04
         if (buf[offset] !== 0x50 || buf[offset + 1] !== 0x4b || buf[offset + 2] !== 0x03 || buf[offset + 3] !== 0x04) {
             offset++;
             continue;
         }
-
         if (offset + 30 > buf.length) break;
 
         const compression = buf.readUInt16LE(offset + 8);
-        const compressedSize = buf.readUInt32LE(offset + 18);
-        const uncompressedSize = buf.readUInt32LE(offset + 22);
-        const fileNameLen = buf.readUInt16LE(offset + 26);
-        const extraLen = buf.readUInt16LE(offset + 28);
-        const dataOffset = offset + 30 + fileNameLen + extraLen;
-        const filename = buf.slice(offset + 30, offset + 30 + fileNameLen).toString("utf-8");
+        const compSz = buf.readUInt32LE(offset + 18);
+        const uncompSz = buf.readUInt32LE(offset + 22);
+        const fnLen = buf.readUInt16LE(offset + 26);
+        const exLen = buf.readUInt16LE(offset + 28);
+        const dataOff = offset + 30 + fnLen + exLen;
+        const filename = buf.slice(offset + 30, offset + 30 + fnLen).toString("utf-8");
         const ext = path.extname(filename).toLowerCase();
 
         if (SUB_EXTS.includes(ext) && !filename.includes("__MACOSX")) {
             try {
-                let data;
-                if (compression === 0) {
-                    // Store
-                    data = buf.slice(dataOffset, dataOffset + uncompressedSize);
-                } else if (compression === 8) {
-                    // Deflate (raw, no zlib header)
-                    data = zlib.inflateRawSync(buf.slice(dataOffset, dataOffset + compressedSize));
-                } else {
-                    // Unknown compression — skip
-                    offset = dataOffset + compressedSize;
-                    continue;
-                }
-                return { filename: path.basename(filename), ext, data };
+                const data = compression === 0 ? buf.slice(dataOff, dataOff + uncompSz) : compression === 8 ? zlib.inflateRawSync(buf.slice(dataOff, dataOff + compSz)) : null;
+                if (data) return { filename: path.basename(filename), ext, data };
             } catch {
-                // Corrupted entry — skip
+                /* corrupted, skip */
             }
         }
-
-        offset = dataOffset + compressedSize;
+        offset = dataOff + compSz;
     }
     return null;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── SubSource v1 API calls ───────────────────────────────────────────────────
 
 /**
- * searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type, languages })
+ * Step 1 — find SubSource movieId using multiple strategies with fallback.
  *
- * `languages` — array of "en"|"bn" (lowercase). Defaults to ["en","bn"].
+ * Strategy order:
+ *   1. IMDb ID search (most accurate — if imdbId available)
+ *   2. Text search: title + year + type
+ *   3. Text search: title + year (no type — broader)
+ *   4. Text search: title only (no year, no type — widest net)
+ *   5. Text search: first 3 words of title (catches partial matches)
+ */
+async function _findMovieId(title, year, imdbId, type, season) {
+    // ── Strategy 1: IMDb ID ───────────────────────────────────────────────────
+    if (imdbId) {
+        const imdb = String(imdbId).startsWith("tt") ? imdbId : `tt${imdbId}`;
+        const res1 = await _searchAPI(`searchType=imdb&imdb=${encodeURIComponent(imdb)}`, season);
+        if (res1) {
+            console.log(`[SubSource] Found "${title}" via imdbId=${imdb} → movieId=${res1}`);
+            return res1;
+        }
+    }
+
+    // ── Strategy 2: Title + year + type ──────────────────────────────────────
+    const ssType = type === "tv" ? "series" : "movie";
+    const res2 = await _searchText(title, year, ssType, season);
+    if (res2) {
+        console.log(`[SubSource] Found "${title}" via text+year+type → movieId=${res2}`);
+        return res2;
+    }
+
+    // ── Strategy 3: Title + year (no type) ───────────────────────────────────
+    if (year) {
+        const res3 = await _searchText(title, year, null, season);
+        if (res3) {
+            console.log(`[SubSource] Found "${title}" via text+year → movieId=${res3}`);
+            return res3;
+        }
+    }
+
+    // ── Strategy 4: Title only ────────────────────────────────────────────────
+    const res4 = await _searchText(title, null, null, season);
+    if (res4) {
+        console.log(`[SubSource] Found "${title}" via title-only → movieId=${res4}`);
+        return res4;
+    }
+
+    // ── Strategy 5: Shortened title (first 3 words) ───────────────────────────
+    const words = title.trim().split(/\s+/);
+    if (words.length > 3) {
+        const shortTitle = words.slice(0, 3).join(" ");
+        const res5 = await _searchText(shortTitle, year, null, season);
+        if (res5) {
+            console.log(`[SubSource] Found "${title}" via short title "${shortTitle}" → movieId=${res5}`);
+            return res5;
+        }
+    }
+
+    console.log(`[SubSource] No match for "${title}" (year=${year}, imdbId=${imdbId}) after all strategies`);
+    return null;
+}
+
+/** Single /movies/search call. Returns best movieId or null. */
+async function _searchAPI(queryString, season) {
+    await _throttle();
+    let url = `${API_BASE}/movies/search?${queryString}`;
+    if (season != null) url += `&season=${season}`;
+
+    let status, body;
+    try {
+        ({ status, body } = await _get(url));
+    } catch (err) {
+        throw err; // re-throw rate_limit / auth_error etc.
+    }
+
+    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (status === 401 || status === 403) throw Object.assign(new Error("auth_error"), { code: "auth_error" });
+    if (!body?.success || !body.data?.length) return null;
+    return body.data[0]?.movieId || null;
+}
+
+/** Text search with optional year and type. Returns best movieId or null. */
+async function _searchText(title, year, type, season) {
+    await _throttle();
+    let url = `${API_BASE}/movies/search?searchType=text&q=${encodeURIComponent(title)}`;
+    if (year) url += `&year=${year}`;
+    if (type) url += `&type=${type}`;
+    if (season != null) url += `&season=${season}`;
+
+    let status, body;
+    try {
+        ({ status, body } = await _get(url));
+    } catch (err) {
+        throw err;
+    }
+
+    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (status === 401 || status === 403) throw Object.assign(new Error("auth_error"), { code: "auth_error" });
+    if (!body?.success || !body.data?.length) return null;
+
+    const results = body.data;
+    const needle = title.toLowerCase();
+
+    // Prefer exact title + year match, then exact title, then first result
+    const best =
+        (year && results.find((r) => r.title?.toLowerCase() === needle && String(r.releaseYear) === String(year))) ||
+        results.find((r) => r.title?.toLowerCase() === needle) ||
+        // Partial match: result title starts with our query
+        results.find((r) => r.title?.toLowerCase().startsWith(needle.slice(0, 10))) ||
+        results[0];
+
+    return best?.movieId || null;
+}
+
+/**
+ * Step 2 — get subtitles for a movieId + language.
+ * Returns best subtitleId (highest rating/downloads).
+ */
+async function _findSubtitleId(movieId, ssLang) {
+    await _throttle();
+    const url = `${API_BASE}/subtitles?movieId=${movieId}&language=${encodeURIComponent(ssLang)}&sort=popular&limit=5`;
+    const { status, body } = await _get(url);
+    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (!body?.success || !body.data?.length) return null;
+
+    // Pick subtitle with best rating (good votes), fallback to most downloaded
+    const subs = body.data;
+    const best = subs.sort((a, b) => {
+        const ra = (a.rating?.good || 0) - (a.rating?.bad || 0);
+        const rb = (b.rating?.good || 0) - (b.rating?.bad || 0);
+        return rb !== ra ? rb - ra : (b.downloads || 0) - (a.downloads || 0);
+    })[0];
+
+    return best?.subtitleId || null;
+}
+
+// ─── Exported public API ──────────────────────────────────────────────────────
+
+/**
+ * searchSubtitles — same signature as before.
+ *
+ * spokenLanguage logic:
+ *   Always fetch English.
+ *   Fetch Bangla only if spokenLanguage is bn/ben/bangla/bengali OR languages[] includes "bn".
  *
  * Returns:
- * {
- *   ok: true,
- *   results: [{
- *     url,        — relative SubDL path e.g. /subtitle/xxx.zip
- *     fullUrl,    — absolute download URL
- *     lang,       — "en" | "bn"
- *     label,      — "English" | "Bangla"
- *     releaseName,
- *     season, episode,
- *     hi,
- *   }]
- * }
- * or { ok: false, error }
+ *   { ok: true, results: [{ subtitleId, lang, label, ssLang, releaseName, url, fullUrl }] }
+ *   url = "/subtitles/{id}/download" (relative)
+ *   fullUrl = full download URL
  */
-async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type = "movie", languages = ["en", "bn"] } = {}) {
-    if (!API_KEY) return { ok: false, error: "SUBDL_API not configured" };
+async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type = "movie", languages = ["en", "bn"], spokenLanguage } = {}) {
+    if (!API_KEY) return { ok: false, error: "SUBSOURCE_API not configured" };
 
-    const langCodes = languages.map((l) => LANG_MAP[l] || l.toUpperCase()).join(",");
+    // Determine langs to fetch
+    let langsNeeded = languages.length ? [...new Set(languages)] : ["en"];
+    // Always include EN
+    if (!langsNeeded.includes("en")) langsNeeded.unshift("en");
 
-    const params = new URLSearchParams({ api_key: API_KEY, languages: langCodes, subs_per_page: "30" });
-
-    if (imdbId) {
-        const imdbStr = String(imdbId);
-        params.set("imdb_id", imdbStr.startsWith("tt") ? imdbStr : `tt${imdbStr}`);
-    } else if (tmdbId) params.set("tmdb_id", String(tmdbId));
-    else if (title) params.set("film_name", title);
-
-    if (year) params.set("year", String(year));
-    if (type === "tv" || season != null) params.set("type", "tv");
-    else params.set("type", "movie");
-    if (season != null) params.set("season_number", String(season));
-    if (episode != null) params.set("episode_number", String(episode));
-
-    const url = `${SUBDL_BASE}?${params}`;
+    // spokenLanguage filter: only add BN if spoken lang is Bangla
+    if (spokenLanguage) {
+        const spoken = (Array.isArray(spokenLanguage) ? spokenLanguage : [spokenLanguage]).map((l) => l.toLowerCase());
+        const isBangla = spoken.some((l) => ["bn", "ben", "bangla", "bengali"].includes(l));
+        langsNeeded = ["en", ...(isBangla ? ["bn"] : [])];
+    }
 
     try {
-        const { status, body } = await fetchJSON(url);
+        // Step 1: find movieId
+        const movieId = await _findMovieId(title, year, imdbId, type, season);
+        if (!movieId) {
+            console.log(`[SubSource] No movie found for "${title}"`);
+            return { ok: true, results: [] };
+        }
 
-        if (status === 429) return { ok: false, error: "rate_limit", retryAfter: 3600 };
-        if (status === 403) return { ok: false, error: "quota_exceeded", retryAfter: 86400 };
-        if (!body.status) return { ok: false, error: body.error || `SubDL error ${status}` };
+        // Step 2: find best subtitleId per lang (parallel)
+        const results = [];
+        await Promise.all(
+            langsNeeded.map(async (lang) => {
+                const ssLang = LANG_TO_SS[lang];
+                if (!ssLang) return;
+                const subtitleId = await _findSubtitleId(movieId, ssLang);
+                if (!subtitleId) return;
+                results.push({
+                    subtitleId,
+                    lang,
+                    ssLang,
+                    label: LANG_LABEL[lang] || lang,
+                    releaseName: "",
+                    url: `/subtitles/${subtitleId}/download`,
+                    fullUrl: `${API_BASE}/subtitles/${subtitleId}/download`,
+                    hi: false,
+                });
+            }),
+        );
 
-        const LANG_LABEL = { EN: "English", BN: "Bangla" };
-
-        const results = (body.subtitles || []).map((s) => {
-            // SubDL returns language at subtitle level as s.language (uppercase code like "EN", "BN")
-            const langCode = (s.language || "EN").toUpperCase();
-            return {
-                url: s.url,
-                fullUrl: `${SUBDL_DL_BASE}${s.url}`,
-                lang: langCode.toLowerCase(),
-                label: LANG_LABEL[langCode] || langCode,
-                releaseName: s.release_name || s.name || "",
-                season: s.season ?? null,
-                episode: s.episode ?? null,
-                hi: !!s.hi,
-            };
-        });
-
-        console.log(`[SubDL] Search "${title || imdbId || tmdbId}" → ${results.length} results (langs: ${langCodes})`);
+        console.log(`[SubSource] "${title}" (movieId=${movieId}) → ${results.length} subtitle(s)`);
         return { ok: true, results };
     } catch (err) {
-        console.error("[SubDL] searchSubtitles error:", err.message);
+        if (err.code === "rate_limit") return { ok: false, error: "rate_limit", retryAfter: err.retryAfter || 60 };
+        if (err.code === "auth_error") return { ok: false, error: "SUBSOURCE_API key invalid or missing" };
+        if (err.code === "quota_exceeded") return { ok: false, error: "quota_exceeded", retryAfter: 86400 };
+        console.error("[SubSource] searchSubtitles error:", err.message);
         return { ok: false, error: err.message };
     }
 }
 
 /**
- * downloadSubtitle(subtitleUrl, destDir, baseName, lang)
+ * downloadSubtitle(subtitleRef, destDir, baseName, lang)
  *
- * Downloads ZIP from SubDL, extracts first subtitle file,
- * saves as `{destDir}/{baseName}.{lang}.{ext}`.
+ * subtitleRef: result object from searchSubtitles (has fullUrl),
+ *              OR a plain URL string (for frontend manual downloads).
  *
- * Returns { ok: true, destPath, filename, ext }
- * or      { ok: false, error }
+ * Downloads ZIP from SubSource, extracts first subtitle file, writes to destDir/subtitle.srt.
+ * Returns { ok: true, destPath, filename, ext } or { ok: false, error }.
  */
-async function downloadSubtitle(subtitleUrl, destDir, baseName, lang = "en") {
-    if (!API_KEY) return { ok: false, error: "SUBDL_API not configured" };
-
-    const fullUrl = subtitleUrl.startsWith("http") ? subtitleUrl : `${SUBDL_DL_BASE}${subtitleUrl}`;
+async function downloadSubtitle(subtitleRef, destDir, baseName = "subtitle", lang = "en") {
+    if (!API_KEY) return { ok: false, error: "SUBSOURCE_API not configured" };
 
     try {
-        const zipBuf = await fetchBuffer(fullUrl);
-        const extracted = extractSubFromZip(zipBuf);
-
-        if (!extracted) {
-            return { ok: false, error: "No subtitle file found in ZIP" };
+        // Resolve download URL
+        let dlUrl;
+        if (typeof subtitleRef === "string") {
+            dlUrl = subtitleRef.startsWith("http") ? subtitleRef : `${API_BASE}${subtitleRef}`;
+        } else if (subtitleRef?.fullUrl) {
+            dlUrl = subtitleRef.fullUrl;
+        } else if (subtitleRef?.subtitleId) {
+            dlUrl = `${API_BASE}/subtitles/${subtitleRef.subtitleId}/download`;
+        } else {
+            return { ok: false, error: "Invalid subtitle reference" };
         }
+
+        await _throttle();
+        const zipBuf = await _getBuffer(dlUrl);
+        const extracted = _extractSubFromZip(zipBuf);
+
+        if (!extracted) return { ok: false, error: "No subtitle file found in ZIP" };
 
         await fsp.mkdir(destDir, { recursive: true });
 
@@ -259,7 +418,7 @@ async function downloadSubtitle(subtitleUrl, destDir, baseName, lang = "en") {
 
         return { ok: true, destPath, filename: destFilename, ext: extracted.ext };
     } catch (err) {
-        console.error("[SubDL] downloadSubtitle error:", err.message);
+        console.error("[SubSource] downloadSubtitle error:", err.message);
         return { ok: false, error: err.message };
     }
 }

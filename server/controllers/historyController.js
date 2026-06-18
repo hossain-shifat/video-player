@@ -10,6 +10,9 @@ function getClientId(req) {
 // GET /api/history — full watch history for this client, sorted by most recent
 function getAllHistory(req, res) {
     const clientId = getClientId(req);
+    if (!clientId) {
+        return res.status(400).json({ error: "X-Flux-Client header required" });
+    }
     const history = getHistory(clientId);
     const items = Object.values(history).sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt));
     return res.json({ total: items.length, history: items });

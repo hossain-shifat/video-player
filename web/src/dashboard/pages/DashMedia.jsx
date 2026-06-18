@@ -125,11 +125,7 @@ function MetricCard({ title, value, icon: Icon, accent, sub, isLoading }) {
                     <Icon size={15} style={{ color: accent }} />
                 </div>
             </div>
-            {isLoading ? (
-                <div className="h-8 w-20 rounded-md bg-base-content/8 animate-pulse" />
-            ) : (
-                <p className="text-2xl font-black text-base-content leading-none tabular-nums tracking-tight">{value}</p>
-            )}
+            {isLoading ? <div className="h-8 w-20 rounded-md bg-base-content/8 animate-pulse" /> : <p className="text-2xl font-black text-white tabular-nums leading-none">{value}</p>}
             {sub && <p className="text-[10px] text-base-content/30 font-medium">{sub}</p>}
         </div>
     );
@@ -233,7 +229,7 @@ function ModalFooter({ children }) {
 function SectionLabel({ label }) {
     return (
         <div className="flex items-center gap-2 mb-3">
-            <span className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">{label}</span>
+            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/40">{label}</span>
             <div className="flex-1 h-px bg-base-content/8" />
         </div>
     );
@@ -344,10 +340,13 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
             </div>
 
             <ModalFooter>
-                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
+                <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-bold text-white/50 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
                     Cancel
                 </button>
-                <button onClick={handleSubmit} disabled={isPending} className="btn btn-sm btn-primary rounded-xl gap-1.5 disabled:opacity-50 focus:outline-none min-w-20">
+                <button
+                    onClick={handleSubmit}
+                    disabled={isPending}
+                    className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
                     {isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
                     {isPending ? "Saving…" : "Save changes"}
                 </button>
@@ -362,7 +361,7 @@ function InfoRow({ label, value, mono = false, full = false, copyText }) {
     return (
         <div className={full ? "col-span-2" : ""}>
             <div className="flex items-center gap-1.5 mb-1">
-                <p className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">{label}</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/40">{label}</p>
                 {copyText && <CopyBtn text={copyText} title={`Copy ${label}`} />}
             </div>
             {mono ? (
@@ -491,10 +490,13 @@ function DetailsModal({ media, onClose }) {
             </div>
 
             <ModalFooter>
-                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
+                <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-bold text-white/50 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
                     Close
                 </button>
-                <Link to={linkDest} target="_blank" className="btn btn-sm btn-primary rounded-xl gap-1.5 focus:outline-none">
+                <Link
+                    to={linkDest}
+                    target="_blank"
+                    className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer flex items-center gap-1.5">
                     <Play size={12} className="ml-0.5" />
                     Play Now
                 </Link>
@@ -535,7 +537,10 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
                 <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
                     Cancel
                 </button>
-                <button onClick={() => onConfirm(media._id)} disabled={isPending} className="btn btn-sm btn-error rounded-xl gap-1.5 disabled:opacity-50 focus:outline-none min-w-20">
+                <button
+                    onClick={() => onConfirm(media._id)}
+                    disabled={isPending}
+                    className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
                     {isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                     {isPending ? "Deleting…" : "Delete"}
                 </button>
@@ -548,12 +553,6 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
 
 function Toast({ toast }) {
     if (!toast) return null;
-    const styles = {
-        success: "bg-success/15 border-success/25 text-success",
-        error: "bg-error/15 border-error/25 text-error",
-        info: "bg-info/15 border-info/25 text-info",
-    };
-    const color = styles[toast.type] || styles.info;
     return createPortal(
         <div className={`fixed bottom-6 right-6 z-99999 flex items-center gap-3 border rounded-xl px-4 py-3 shadow-2xl text-xs font-semibold max-w-xs backdrop-blur-sm ${color}`}>
             {toast.type === "success" && <CheckCircle2 size={14} className="shrink-0" />}
@@ -568,47 +567,47 @@ function Toast({ toast }) {
 
 function SkeletonRow() {
     return (
-        <tr className="border-b border-base-content/5">
-            <td className="pl-5 pr-3 py-4 w-10">
-                <div className="h-2 w-5 rounded bg-base-content/6 animate-pulse" />
+        <tr className="border-b border-white/4">
+            <td className="pl-4 pr-2 py-3.5">
+                <div className="h-2 w-4 rounded bg-white/5 animate-pulse" />
             </td>
-            <td className="px-3 py-4">
+            <td className="px-3 py-3.5">
                 <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-11 rounded-lg bg-base-content/6 animate-pulse shrink-0" />
+                    <div className="w-8 h-11 rounded-lg bg-white/5 animate-pulse shrink-0" />
                     <div className="space-y-1.5">
-                        <div className="h-2.5 w-32 rounded bg-base-content/6 animate-pulse" />
-                        <div className="h-2 w-20 rounded bg-base-content/5 animate-pulse" />
+                        <div className="h-3 w-32 rounded bg-white/5 animate-pulse" />
+                        <div className="h-2 w-20 rounded bg-white/4 animate-pulse" />
                     </div>
                 </div>
             </td>
-            <td className="px-3 py-4 hidden sm:table-cell">
-                <div className="h-4 w-14 rounded-md bg-base-content/6 animate-pulse" />
+            <td className="px-3 py-3.5 hidden sm:table-cell">
+                <div className="h-5 w-14 rounded-md bg-white/5 animate-pulse" />
             </td>
-            <td className="px-3 py-4 hidden lg:table-cell">
-                <div className="h-4 w-12 rounded-md bg-base-content/6 animate-pulse mx-auto" />
+            <td className="px-3 py-3.5 hidden lg:table-cell">
+                <div className="h-5 w-12 rounded-md bg-white/5 animate-pulse mx-auto" />
             </td>
-            <td className="px-3 py-4 hidden xl:table-cell">
+            <td className="px-3 py-3.5 hidden xl:table-cell">
                 <div className="flex gap-1 justify-center">
-                    <div className="h-4 w-10 rounded-md bg-base-content/6 animate-pulse" />
-                    <div className="h-4 w-8 rounded-md bg-base-content/6 animate-pulse" />
+                    <div className="h-5 w-10 rounded-md bg-white/5 animate-pulse" />
+                    <div className="h-5 w-8 rounded-md bg-white/5 animate-pulse" />
                 </div>
             </td>
-            <td className="px-3 py-4 hidden md:table-cell text-right">
-                <div className="h-2.5 w-12 rounded bg-base-content/6 animate-pulse ml-auto" />
+            <td className="px-3 py-3.5 hidden md:table-cell text-right">
+                <div className="h-3 w-12 rounded bg-white/5 animate-pulse ml-auto" />
             </td>
-            <td className="px-3 py-4 hidden lg:table-cell">
-                <div className="h-2.5 w-16 rounded bg-base-content/6 animate-pulse" />
+            <td className="px-3 py-3.5 hidden lg:table-cell">
+                <div className="h-3 w-16 rounded bg-white/5 animate-pulse" />
             </td>
-            <td className="px-3 py-4 hidden xl:table-cell">
-                <div className="h-2.5 w-20 rounded bg-base-content/6 animate-pulse" />
+            <td className="px-3 py-3.5 hidden xl:table-cell">
+                <div className="h-3 w-20 rounded bg-white/5 animate-pulse" />
             </td>
-            <td className="px-3 py-4 hidden lg:table-cell">
-                <div className="h-4 w-16 rounded-md bg-base-content/6 animate-pulse mx-auto" />
+            <td className="px-3 py-3.5 hidden lg:table-cell">
+                <div className="h-5 w-16 rounded-md bg-white/5 animate-pulse mx-auto" />
             </td>
-            <td className="pl-3 pr-5 py-4">
+            <td className="pl-2 pr-4 py-3.5">
                 <div className="flex gap-1 justify-end">
                     {[1, 2, 3].map((i) => (
-                        <div key={i} className="w-7 h-7 rounded-lg bg-base-content/6 animate-pulse" />
+                        <div key={i} className="w-8 h-8 rounded-md bg-white/5 animate-pulse" />
                     ))}
                 </div>
             </td>
@@ -640,39 +639,39 @@ function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChang
 
     return (
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-            <p className="text-[11px] text-base-content/40 tabular-nums">
+            <p className="text-xs text-white/40 tabular-nums">
                 Showing{" "}
-                <span className="font-semibold text-base-content/60">
+                <span className="text-white/70 font-semibold">
                     {start.toLocaleString()}–{end.toLocaleString()}
                 </span>{" "}
-                of <span className="font-semibold text-base-content/60">{totalItems.toLocaleString()}</span> items
+                of <span className="text-white/70 font-semibold">{totalItems.toLocaleString()}</span> items
             </p>
             <div className="flex items-center gap-1">
                 <button
                     onClick={() => onPageChange(1)}
                     disabled={currentPage <= 1}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors text-[10px] font-bold focus:outline-none">
-                    «
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronLeft size={12} strokeWidth={2.5} className="inline" />
+                    <ChevronLeft size={12} strokeWidth={2.5} className="-ml-2" />
                 </button>
                 <button
                     onClick={() => onPageChange(currentPage - 1)}
                     disabled={currentPage <= 1}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors focus:outline-none">
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
                     <ChevronLeft size={14} />
                 </button>
 
                 {pages.map((p, i) =>
                     p === "..." ? (
-                        <span key={`ellipsis-${i}`} className="w-7 h-7 flex items-center justify-center text-base-content/25 text-[11px]">
-                            ···
+                        <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-white/30 text-xs">
+                            …
                         </span>
                     ) : (
                         <button
                             key={p}
                             onClick={() => onPageChange(p)}
-                            className={`w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-semibold transition-colors focus:outline-none ${
-                                p === currentPage ? "bg-primary text-primary-content" : "text-base-content/50 hover:text-base-content hover:bg-base-content/8"
-                            }`}>
+                            className={`w-8 h-8 rounded-md text-xs font-bold transition-colors border-none cursor-pointer
+                                ${p === currentPage ? "bg-primary text-primary-content shadow-sm" : "text-white/60 hover:bg-white/8 hover:text-white"}`}>
                             {p}
                         </button>
                     ),
@@ -681,14 +680,15 @@ function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChang
                 <button
                     onClick={() => onPageChange(currentPage + 1)}
                     disabled={currentPage >= totalPages}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors focus:outline-none">
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
                     <ChevronRight size={14} />
                 </button>
                 <button
                     onClick={() => onPageChange(totalPages)}
                     disabled={currentPage >= totalPages}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-base-content hover:bg-base-content/8 disabled:opacity-20 transition-colors text-[10px] font-bold focus:outline-none">
-                    »
+                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
+                    <ChevronRight size={12} strokeWidth={2.5} className="inline" />
+                    <ChevronRight size={12} strokeWidth={2.5} className="-ml-2" />
                 </button>
             </div>
         </div>
@@ -896,14 +896,9 @@ export default function DashMedia() {
 
     if (isError) {
         return (
-            <div className="flex items-start gap-4 text-sm text-error bg-error/8 border border-error/20 rounded-2xl p-5">
-                <div className="w-10 h-10 rounded-xl bg-error/15 flex items-center justify-center shrink-0">
-                    <AlertTriangle size={16} className="text-error" />
-                </div>
-                <div>
-                    <p className="font-bold mb-1">Failed to load media library</p>
-                    <p className="text-error/70 text-xs">{queryError?.message}</p>
-                </div>
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-error/10 text-error text-xs font-semibold border border-error/20">
+                <AlertTriangle size={13} />
+                <span className="flex-1">Failed to load media library: {queryError?.message}</span>
             </div>
         );
     }
@@ -911,7 +906,7 @@ export default function DashMedia() {
     // ─── Render ───────────────────────────────────────────────────────────────
 
     return (
-        <div className="space-y-6 pb-12 relative">
+        <div className="space-y-5 max-w-full">
             <Toast toast={toast} />
 
             {editMedia && (
@@ -938,15 +933,18 @@ export default function DashMedia() {
                         <div className="w-8 h-8 rounded-xl bg-primary/15 flex items-center justify-center">
                             <Database size={15} className="text-primary" />
                         </div>
-                        <h1 className="text-xl font-black text-base-content tracking-tight">Media Library</h1>
-                        {isFetching && !isLoading && (
-                            <span className="flex items-center gap-1 text-[10px] text-primary/70 font-semibold bg-primary/10 border border-primary/15 px-2 py-0.5 rounded-full">
-                                <Loader2 size={9} className="animate-spin" />
-                                Syncing
-                            </span>
-                        )}
+                        <h1 className="text-2xl font-black text-white tracking-tight">Media Library</h1>
+                        {isFetching && !isLoading && <span className="text-xs text-primary/70 font-semibold">Syncing…</span>}
                     </div>
-                    <p className="text-xs text-base-content/35 ml-10.5">{isLoading ? "Scanning library…" : `${metrics.total.toLocaleString()} titles indexed across all folders`}</p>
+                    <p className="text-sm text-white/50 mt-0.5">
+                        {isLoading ? (
+                            "Scanning library…"
+                        ) : (
+                            <>
+                                <span className="tabular-nums text-white/70 font-semibold">{metrics.total.toLocaleString()}</span> titles indexed
+                            </>
+                        )}
+                    </p>
                 </div>
 
                 <button onClick={() => refetch()} disabled={isFetching} className="btn btn-sm btn-primary rounded-xl gap-2 disabled:opacity-50 focus:outline-none">
@@ -970,10 +968,40 @@ export default function DashMedia() {
                 <MetricCard title="Storage Used" value={fmtBytes(metrics.size)} icon={HardDrive} accent="oklch(var(--a))" isLoading={isLoading} />
             </div>
 
-            {/* ── Toolbar: tabs + search ── */}
-            <div className="bg-base-200 border border-base-content/8 rounded-2xl p-3 flex flex-wrap items-center gap-3">
-                {/* Type tabs */}
-                <div className="flex items-center gap-1 p-1 bg-base-300/60 rounded-xl">
+            {/* ── Toolbar ── */}
+            <div className="space-y-2">
+                {/* Search bar — full width, DashUsers style */}
+                <div className="flex items-center gap-2 bg-base-100 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
+                    <Search size={15} className="text-white/35 shrink-0" />
+                    <input
+                        type="text"
+                        placeholder="Search titles, filenames…"
+                        value={search}
+                        onChange={(e) => {
+                            setSearch(e.target.value);
+                            setPage(1);
+                        }}
+                        className="flex-1 bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
+                    />
+                    {search && (
+                        <button
+                            onClick={() => {
+                                setSearch("");
+                                setPage(1);
+                            }}
+                            className="text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer">
+                            <X size={14} />
+                        </button>
+                    )}
+                    {!isLoading && search && (
+                        <span className="text-xs text-white/40 font-medium shrink-0 tabular-nums">
+                            {sortedMedia.length} result{sortedMedia.length !== 1 ? "s" : ""}
+                        </span>
+                    )}
+                </div>
+
+                {/* Type tabs — DashUsers style */}
+                <div className="flex bg-base-200/30 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
                     {[
                         { key: "all", label: "All", count: metrics.total },
                         { key: "movie", label: "Movies", count: metrics.movies, icon: Film },
@@ -988,71 +1016,39 @@ export default function DashMedia() {
                                     setActiveTab(key);
                                     setPage(1);
                                 }}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 focus:outline-none ${
-                                    active ? "bg-base-100 text-base-content shadow-sm" : "text-base-content/45 hover:text-base-content/70"
-                                }`}>
+                                className={`px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-none
+                                    ${active ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white hover:bg-white/5"}`}>
                                 {Icon && <Icon size={11} />}
                                 {label}
-                                {!isLoading && <span className={`tabular-nums text-[10px] px-1 py-0.5 rounded-md ${active ? "bg-primary/15 text-primary" : "text-base-content/30"}`}>{count}</span>}
+                                {!isLoading && (
+                                    <span
+                                        className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tabular-nums
+                                        ${active ? "bg-primary-content/20 text-primary-content" : "bg-white/8 text-white/50"}`}>
+                                        {count}
+                                    </span>
+                                )}
                             </button>
                         );
                     })}
                 </div>
-
-                {/* Search */}
-                <div className="relative ml-auto">
-                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/30 pointer-events-none" />
-                    <input
-                        type="text"
-                        placeholder="Search titles, files…"
-                        value={search}
-                        onChange={(e) => {
-                            setSearch(e.target.value);
-                            setPage(1);
-                        }}
-                        className="input input-sm w-52 pl-8 bg-base-100 border border-base-content/10 rounded-xl text-xs focus:outline-none focus:border-primary/40 focus:w-72 transition-all duration-200"
-                    />
-                    {search && (
-                        <button
-                            onClick={() => {
-                                setSearch("");
-                                setPage(1);
-                            }}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/30 hover:text-base-content transition-colors">
-                            <X size={12} />
-                        </button>
-                    )}
-                </div>
-
-                {/* Result count pill */}
-                {!isLoading && search && (
-                    <span className="text-[10px] text-base-content/40 font-medium">
-                        {sortedMedia.length.toLocaleString()} result{sortedMedia.length !== 1 ? "s" : ""}
-                    </span>
-                )}
             </div>
 
             {/* ── Table ── */}
-            <div className="bg-base-200 border border-base-content/8 rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto min-h-90">
+            <div className="bg-base-100 rounded-xl overflow-hidden border border-white/6 shadow-sm">
+                <div className="overflow-x-auto">
                     <table className="table w-full text-sm">
                         <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
-                            <tr className="text-[9px] font-bold uppercase tracking-widest text-base-content/35">
-                                <th className="pl-5 pr-3 py-4 w-10">#</th>
-                                <th className="px-3 py-4">
-                                    <span className="flex items-center gap-1.5">
-                                        <SortAsc size={10} />
-                                        Title
-                                    </span>
-                                </th>
-                                <th className="px-3 py-4 hidden sm:table-cell">Type</th>
-                                <th className="px-3 py-4 hidden lg:table-cell text-center">Quality</th>
-                                <th className="px-3 py-4 hidden xl:table-cell text-center">Codec</th>
-                                <th className="px-3 py-4 hidden md:table-cell text-right">Size</th>
-                                <th className="px-3 py-4 hidden lg:table-cell">Library</th>
-                                <th className="px-3 py-4 hidden xl:table-cell">Added</th>
-                                <th className="px-3 py-4 hidden lg:table-cell text-center">Access</th>
-                                <th className="pl-3 pr-5 py-4 text-right">Actions</th>
+                            <tr className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/40">
+                                <th className="pl-4 pr-2 py-3 w-8">#</th>
+                                <th className="px-3 py-3">Title</th>
+                                <th className="px-3 py-3 hidden sm:table-cell">Type</th>
+                                <th className="px-3 py-3 hidden lg:table-cell text-center">Quality</th>
+                                <th className="px-3 py-3 hidden xl:table-cell text-center">Codec</th>
+                                <th className="px-3 py-3 hidden md:table-cell text-right">Size</th>
+                                <th className="px-3 py-3 hidden lg:table-cell">Library</th>
+                                <th className="px-3 py-3 hidden xl:table-cell">Added</th>
+                                <th className="px-3 py-3 hidden lg:table-cell text-center">Access</th>
+                                <th className="pl-3 pr-4 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
 
@@ -1062,19 +1058,22 @@ export default function DashMedia() {
                             ) : paginatedMedia.length === 0 ? (
                                 <tr>
                                     <td colSpan={10} className="py-24">
-                                        <div className="flex flex-col items-center gap-4 text-center">
-                                            <div className="w-16 h-16 rounded-2xl bg-base-300 flex items-center justify-center">
-                                                <Search size={24} className="text-base-content/15" />
+                                        <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                                            <div className="w-14 h-14 rounded-2xl bg-base-200/60 flex items-center justify-center mb-4 border border-white/6">
+                                                <Search size={22} className="text-white/25" />
                                             </div>
-                                            <div>
-                                                <p className="font-bold text-sm text-base-content/55">{search ? "No results found" : "No media in library"}</p>
-                                                <p className="text-xs text-base-content/30 mt-1">
-                                                    {search ? `Nothing matches "${search}" — try different keywords` : "Add folders to your library to get started"}
-                                                </p>
-                                            </div>
+                                            <p className="text-base font-bold text-white/50">{search ? "No results match your search" : "No media in library"}</p>
+                                            <p className="text-sm text-white/30 mt-1 max-w-xs">
+                                                {search ? `Nothing matches "${search}" — try different keywords.` : "Add folders to your library to get started."}
+                                            </p>
                                             {search && (
-                                                <button onClick={() => setSearch("")} className="text-xs text-primary hover:text-primary/80 transition-colors font-medium">
-                                                    Clear search
+                                                <button
+                                                    onClick={() => {
+                                                        setSearch("");
+                                                        setPage(1);
+                                                    }}
+                                                    className="mt-4 px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer">
+                                                    Clear Search
                                                 </button>
                                             )}
                                         </div>
@@ -1087,12 +1086,12 @@ export default function DashMedia() {
                                     const typeConfig = TYPE_CONFIG[item._type] || TYPE_CONFIG.movie;
 
                                     return (
-                                        <tr key={item._id} className="group border-b border-base-content/5 last:border-0 hover:bg-base-100/50 transition-colors duration-150">
+                                        <tr key={item._id} className="group border-b border-white/4 last:border-0 hover:bg-white/[0.03] transition-colors duration-150">
                                             {/* # */}
-                                            <td className="pl-5 pr-3 py-3.5 text-base-content/20 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
+                                            <td className="pl-4 pr-2 py-3.5 text-white/25 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
 
                                             {/* Title */}
-                                            <td className="px-3 py-3.5">
+                                            <td className="px-3 py-3.5 min-w-0">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-8 h-11 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/8">
                                                         {item._poster ? (
@@ -1102,13 +1101,13 @@ export default function DashMedia() {
                                                         )}
                                                     </div>
                                                     <div className="min-w-0">
-                                                        <p className="font-semibold text-base-content/90 text-[13px] truncate max-w-35 md:max-w-60 lg:max-w-75" title={item._title}>
+                                                        <p className="font-semibold text-white/90 text-sm truncate max-w-[9rem] sm:max-w-[14rem] md:max-w-[20rem] lg:max-w-[26rem]" title={item._title}>
                                                             {item._title}
                                                         </p>
                                                         <div className="flex items-center gap-1.5 mt-0.5">
-                                                            {item._year && <span className="text-[10px] text-base-content/35 tabular-nums font-medium">{item._year}</span>}
-                                                            {item._year && <span className="text-base-content/20">·</span>}
-                                                            <span className="text-[10px] font-mono text-base-content/25 truncate max-w-22.5">{item._filename}</span>
+                                                            {item._year && <span className="text-[10px] text-white/40 tabular-nums font-medium">{item._year}</span>}
+                                                            {item._year && <span className="text-white/20">·</span>}
+                                                            <span className="text-[10px] font-mono text-white/25 truncate max-w-[8rem] sm:max-w-[14rem]">{item._filename}</span>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1117,7 +1116,7 @@ export default function DashMedia() {
                                             {/* Type */}
                                             <td className="px-3 py-3.5 hidden sm:table-cell">
                                                 <div className="flex items-center gap-1.5">
-                                                    <TypeIcon size={11} className="text-base-content/30 shrink-0" />
+                                                    <TypeIcon size={11} className="text-white/30 shrink-0" />
                                                     <Badge label={item._typeLabel} variant={item._type} />
                                                 </div>
                                             </td>
@@ -1125,8 +1124,8 @@ export default function DashMedia() {
                                             {/* Quality */}
                                             <td className="px-3 py-3.5 hidden lg:table-cell">
                                                 <div className="flex flex-col items-center gap-0.5">
-                                                    {item.res ? <QualityChip label={item.res} /> : <span className="text-[10px] text-base-content/15">—</span>}
-                                                    {item._duration && <span className="text-[9px] text-base-content/25 tabular-nums">{fmtDuration(item._duration)}</span>}
+                                                    {item.res ? <QualityChip label={item.res} /> : <span className="text-[10px] text-white/20">—</span>}
+                                                    {item._duration && <span className="text-[9px] text-white/30 tabular-nums">{fmtDuration(item._duration)}</span>}
                                                 </div>
                                             </td>
 
@@ -1135,37 +1134,37 @@ export default function DashMedia() {
                                                 <div className="flex items-center justify-center gap-1 flex-wrap">
                                                     {item.vcodec && <CodecChip label={item.vcodec} />}
                                                     {item.acodec && <CodecChip label={item.acodec} />}
-                                                    {!item.vcodec && !item.acodec && <span className="text-base-content/15 text-[10px]">—</span>}
+                                                    {!item.vcodec && !item.acodec && <span className="text-white/20 text-[10px]">—</span>}
                                                 </div>
                                             </td>
 
                                             {/* Size */}
                                             <td className="px-3 py-3.5 hidden md:table-cell text-right">
-                                                <span className="text-[11px] font-semibold text-base-content/55 tabular-nums">{fmtBytes(item._size)}</span>
+                                                <span className="text-xs font-semibold text-white/55 tabular-nums">{fmtBytes(item._size)}</span>
                                             </td>
 
                                             {/* Library */}
                                             <td className="px-3 py-3.5 hidden lg:table-cell">
-                                                <div className="flex items-center gap-1.5 text-base-content/35">
+                                                <div className="flex items-center gap-1.5 text-white/35">
                                                     <FolderOpen size={10} className="shrink-0" />
-                                                    <span className="text-[11px] truncate max-w-20">{item._library}</span>
+                                                    <span className="text-xs truncate max-w-[5rem]">{item._library}</span>
                                                 </div>
                                             </td>
 
                                             {/* Added */}
                                             <td className="px-3 py-3.5 hidden xl:table-cell">
-                                                <span className="text-[11px] text-base-content/35 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
+                                                <span className="text-xs text-white/40 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
                                             </td>
 
                                             {/* Permission */}
                                             <td className="px-3 py-3.5 hidden lg:table-cell text-center">
                                                 {!item.permission ? (
-                                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-error/12 border border-error/15 text-error text-[9px] font-bold uppercase tracking-wider">
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-error/10 border-error/30 text-error text-xs font-bold">
                                                         <ShieldOff size={8} />
                                                         Restricted
                                                     </span>
                                                 ) : (
-                                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-base-content/6 border border-base-content/8 text-base-content/35 text-[9px] font-bold uppercase tracking-wider">
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-white/5 border-white/10 text-white/40 text-xs font-bold">
                                                         <Shield size={8} />
                                                         Normal
                                                     </span>
@@ -1173,25 +1172,25 @@ export default function DashMedia() {
                                             </td>
 
                                             {/* Actions */}
-                                            <td className="pl-3 pr-5 py-3.5">
-                                                <div className="flex items-center justify-end gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                                            <td className="pl-2 pr-4 py-3.5">
+                                                <div className="flex items-center justify-end gap-0.5">
                                                     <button
                                                         onClick={() => setEditMedia(item)}
                                                         title="Edit"
-                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-info hover:bg-info/12 transition-all duration-150">
-                                                        <SquarePen size={13} strokeWidth={2} />
+                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
+                                                        <SquarePen size={15} strokeWidth={1.8} />
                                                     </button>
                                                     <button
                                                         onClick={() => setDetailsMedia(item)}
                                                         title="Details"
-                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-primary hover:bg-primary/12 transition-all duration-150">
-                                                        <Info size={13} strokeWidth={2} />
+                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
+                                                        <Info size={15} strokeWidth={1.8} />
                                                     </button>
                                                     <button
                                                         onClick={() => setDeleteMedia(item)}
                                                         title="Delete"
-                                                        className="w-7 h-7 rounded-lg flex items-center justify-center text-base-content/40 hover:text-error hover:bg-error/12 transition-all duration-150">
-                                                        <Trash2 size={13} strokeWidth={2} />
+                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/50 border-none hover:bg-error/10 hover:text-error transition-all duration-150 cursor-pointer">
+                                                        <Trash2 size={15} strokeWidth={1.8} />
                                                     </button>
                                                 </div>
                                             </td>

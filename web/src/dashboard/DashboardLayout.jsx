@@ -101,7 +101,7 @@ function Sidebar({ collapsed, onNav, user, logout }) {
                                 <p className="text-[10px] text-base-content/35 truncate">{user?.email}</p>
                             </div>
                             <button onClick={logout} title="Sign out" className="w-6 h-6 flex items-center justify-center text-base-content/30 hover:text-error transition-colors rounded shrink-0">
-                                <LogOut size={14} className="text-error/80" />
+                                <LogOut size={14} className="text-error/80 cursor-pointer" />
                             </button>
                         </>
                     )}
@@ -199,7 +199,7 @@ export default function DashboardLayout() {
                         )}
                     </div>
                 </header>
-                <main className="flex-1 overflow-auto p-4 sm:p-6 bg-base-200">
+                <main className="flex-1 overflow-auto p-4 sm:p-6 bg-base-100">
                     <Outlet />
                 </main>
             </div>

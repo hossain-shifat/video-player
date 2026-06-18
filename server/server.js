@@ -36,8 +36,8 @@ const { authenticateJWT } = require("./auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("./auth/middleware/requireApprovedUser");
 const { requireRole } = require("./auth/middleware/requireRole");
 
-// const subtitleStore = require("./utils/subtitleStore");
-// const subtitleWorker = require("./utils/subtitleWorker");
+const subtitleStore = require("./utils/subtitleStore");
+const subtitleWorker = require("./utils/subtitleWorker");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -221,7 +221,9 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
                     tmdbId: meta?.tmdbId ? String(meta.tmdbId) : null,
                     season: meta?.parsed?.season ?? null,
                     episode: meta?.parsed?.episode ?? null,
+                    part: meta?.parsed?.part ?? null,
                     type: meta?.type === "series" || meta?.type === "anime" ? "tv" : "movie",
+                    spokenLanguage: meta?.language || null, // ISO 639-1 from TMDB e.g. "hi", "en", "bn"
                 });
             }
             const added = await subtitleStore.enqueueBatch(batchItems);
