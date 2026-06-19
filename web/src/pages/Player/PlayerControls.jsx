@@ -12,7 +12,7 @@ import {
     PictureInPicture2,
     Subtitles,
     ChevronLeft,
-    Lock,
+    Unlock,
     MonitorPlay,
     Headphones,
     Check,
@@ -24,6 +24,7 @@ import {
     Settings,
     Type,
     AlignCenter,
+    UnlockKeyhole,
 } from "lucide-react";
 import { usePlayerState } from "./UsePlayerState";
 import { useIsMobile } from "./useIsMobile";
@@ -543,7 +544,7 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         }}
                         className="flux-icon-btn p-2"
                         aria-label="Lock screen">
-                        <Lock size={18} strokeWidth={1.8} />
+                        <UnlockKeyhole size={20} strokeWidth={2.5} stroke="#fff" />
                     </button>
                 </div>
             </div>

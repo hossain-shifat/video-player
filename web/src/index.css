@@ -477,7 +477,7 @@ body {
 .flux-seek-root {
     position: relative;
     width: 100%;
-    /* padding: 14px 0 8px; */
+    /* padding: 14px 8px; */
     cursor: pointer;
     touch-action: none;
     user-select: none;
@@ -511,7 +511,7 @@ body {
 .flux-seek-played {
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, #e53e3e 0%, #ff6b35 100%);
+    background: var(--color-primary);
     border-radius: 99px;
     transform-origin: left;
     will-change: transform;

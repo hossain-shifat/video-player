@@ -1,41 +1,49 @@
 "use strict";
 
 /**
- * subtitleWorker.js — FLUX Background Subtitle Downloader (v2)
+ * subtitleWorker.js — FLUX Background Subtitle Downloader (v3)
  *
- * - Processes subtitle-queue.json entries asynchronously
- * - Saves to data/subtitles/<hash16>/<language>/subtitle.srt
- * - Rate-limit aware: pauses on SubDL 429/403
- * - Uses in-memory queue (sync dequeue — no await needed)
- * - Minimal disk I/O: debounced writes in subtitleStore
+ * Rate limit handling (SubSource: 60/min · 1800/hr · 7200/day):
+ *   - _throttle() in subDLService paces requests to ≤55/min automatically
+ *   - If API still returns 429, wait until the current minute window resets (≤65s)
+ *     then put the entry back to pending WITHOUT counting it as a failure attempt
+ *   - NO 1-hour or 24-hour pauses — the per-minute throttle is sufficient
+ *   - daily quota_exceeded → only then pause until midnight UTC
+ *
+ * Duplicate prevention:
+ *   - store.hasDownloadedSubtitle() is sync in-memory check
+ *   - Entries already "done" are never dequeued
+ *   - On startup, existing files are scanned and marked available
  */
 
 const { searchSubtitles, downloadSubtitle } = require("../services/subDLService");
 const store = require("./subtitleStore");
 
 const INTERVAL_MS = 6000; // tick every 6s
-const REQUEST_DELAY_MS = 1500; // polite gap before each SubDL request
-const RATE_LIMIT_PAUSE_MS = 60 * 60 * 1000; // 1h pause on rate limit
-const QUOTA_PAUSE_MS = 24 * 60 * 60 * 1000; // 24h pause on quota
+const REQUEST_DELAY_MS = 1000; // 1s gap before each API burst
+
+// When we hit a 429, wait until the next minute window resets + small buffer
+// Max wait is ~65s — never 1h
+const RATE_LIMIT_RETRY_MS = 65_000;
 
 let _timer = null;
 let _running = false;
-let _paused = false;
-let _pauseUntil = 0;
+let _retryAfter = 0; // timestamp: don't process until this time (short retry only)
 let _started = false;
 
 // ─── Core processor ───────────────────────────────────────────────────────────
 
 async function processNext() {
     if (_running) return;
-    if (_paused) {
-        if (Date.now() < _pauseUntil) return;
-        _paused = false;
-        console.log("[SubtitleWorker] Rate limit pause expired. Resuming.");
+
+    // Short retry window after a 429 (≤65s) — not a pause, just a cooldown
+    if (_retryAfter && Date.now() < _retryAfter) return;
+    if (_retryAfter && Date.now() >= _retryAfter) {
+        _retryAfter = 0;
+        console.log("[SubtitleWorker] Rate limit cooldown done. Resuming.");
     }
 
-    // sync dequeue — no await, no disk read
-    const entry = store.dequeue();
+    const entry = store.dequeue(); // sync, in-memory
     if (!entry) return;
 
     _running = true;
@@ -44,7 +52,7 @@ async function processNext() {
     try {
         console.log(`[SubtitleWorker] → "${entry.title || entry.mediaId.slice(0, 12)}" (${entry.type})`);
 
-        // Determine which langs are still needed using in-memory Set (sync, no disk)
+        // Check which langs still needed — sync in-memory, never re-downloads existing
         const needEN = !store.hasDownloadedSubtitle(entry.mediaId, "en");
         const needBN = !store.hasDownloadedSubtitle(entry.mediaId, "bn");
 
@@ -57,11 +65,8 @@ async function processNext() {
         if (needEN) langsNeeded.push("en");
         if (needBN) langsNeeded.push("bn");
 
-        // Polite delay before API call
         await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
 
-        // Single search for both langs together
-        // Pass spokenLanguage so provider can filter Bangla intelligently
         const search = await searchSubtitles({
             title: entry.title,
             year: entry.year,
@@ -76,20 +81,23 @@ async function processNext() {
 
         if (!search.ok) {
             if (search.error === "rate_limit") {
-                const ms = (search.retryAfter || 3600) * 1000;
-                _paused = true;
-                _pauseUntil = Date.now() + ms;
-                console.warn(`[SubtitleWorker] Rate limited — pausing ${Math.round(ms / 60000)} min`);
-                store.markFailed(entry, search.error);
+                // 429 hit despite throttle — wait 65s for minute window to reset
+                // Use requeueEntry so attempt counter is NOT burned
+                _retryAfter = Date.now() + RATE_LIMIT_RETRY_MS;
+                store.requeueEntry(entry);
+                console.warn(`[SubtitleWorker] 429 received — cooling down ${Math.round(RATE_LIMIT_RETRY_MS / 1000)}s, entry re-queued`);
                 return;
             }
             if (search.error === "quota_exceeded") {
-                _paused = true;
-                _pauseUntil = Date.now() + QUOTA_PAUSE_MS;
-                console.warn("[SubtitleWorker] Quota exceeded — pausing 24h");
-                store.markFailed(entry, search.error);
+                // Daily quota — pause until midnight UTC, re-queue without burning attempt
+                const now = new Date();
+                const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+                _retryAfter = midnight.getTime();
+                store.requeueEntry(entry);
+                console.warn(`[SubtitleWorker] Daily quota exceeded — resuming at midnight UTC (${midnight.toISOString()})`);
                 return;
             }
+            // Other errors (network, no API key, etc.) — count as attempt
             console.warn(`[SubtitleWorker] Search failed "${entry.title}": ${search.error}`);
             store.markFailed(entry, search.error);
             return;
@@ -107,12 +115,15 @@ async function processNext() {
             const match = search.results.find((r) => r.lang === lang);
             if (!match) continue;
 
-            // Resolve deterministic path: e.g. data/subtitles/Interstellar_a1b2c3d4/english/
+            // Guard: double-check not already downloaded (race condition safety)
+            if (store.hasDownloadedSubtitle(entry.mediaId, lang)) {
+                console.log(`[SubtitleWorker] ${lang} already exists for "${entry.title}" — skipping`);
+                anyDownloaded = true;
+                continue;
+            }
+
             const langDir = store.getSubtitleLangDir(entry.mediaId, lang, entry);
-            // Pass the full match object so SubSource can resolve the download token
-            // (match.url = subId, match.linkName + match.ssLang needed for getSub step)
-            const subtitleRef = match;
-            const result = await downloadSubtitle(subtitleRef, langDir, "subtitle", lang);
+            const result = await downloadSubtitle(match, langDir, "subtitle", lang);
 
             if (!result.ok) {
                 console.warn(`[SubtitleWorker] Download failed (${lang}) "${entry.title}": ${result.error}`);
@@ -161,10 +172,11 @@ function stop() {
 }
 
 function getStatus() {
+    const cooling = _retryAfter > 0 && Date.now() < _retryAfter;
     return {
         running: _running,
-        paused: _paused && Date.now() < _pauseUntil,
-        pauseUntil: _paused ? new Date(_pauseUntil).toISOString() : null,
+        paused: cooling,
+        pauseUntil: cooling ? new Date(_retryAfter).toISOString() : null,
         started: _started,
     };
 }

@@ -446,18 +446,21 @@ function PlayerInner({ mediaId }) {
     // choice (you don't want it auto-playing under the dialog while they're
     // still deciding where to resume from).
     const handleReadyToSeek = useCallback(() => {
-        progressProps.onReadyToSeek?.();
         if (!progressProps.showResumeDialog) {
-            actions.setPlaying(true);
+            progressProps.onReadyToSeek?.(() => actions.setPlaying(true));
         }
+        // If the dialog IS showing, do nothing here — autoplay fires from the
+        // Resume/Start Over handlers below once the user actually chooses.
     }, [progressProps, actions]);
 
     const handleResumeWithAutoplay = useCallback(() => {
-        progressProps.handleResume?.();
-        actions.setPlaying(true);
+        progressProps.handleResume?.(() => actions.setPlaying(true));
     }, [progressProps, actions]);
 
     const handleStartOverWithAutoplay = useCallback(() => {
+        // Start Over seeks to 0, which is always instantly seekable (segment 0
+        // is transcoded first) — no need to wait, but route through the same
+        // callback pattern for consistency.
         progressProps.handleStartOver?.();
         actions.setPlaying(true);
     }, [progressProps, actions]);
@@ -616,6 +619,20 @@ function PlayerInner({ mediaId }) {
                                        font-semibold hover:bg-red-500 transition-colors shrink-0">
                             Resume
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Waiting for stream to reach resume point — distinct from the
+                generic buffering spinner below so the user understands why
+                playback hasn't started yet (transcoding hasn't reached their
+                saved position). Auto-clears + autoplay fires via the
+                onLanded callback once deferredSeek's poll succeeds. */}
+            {progressProps.isSeekingToResume && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+                    <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-2xl bg-black/70 backdrop-blur-md border border-white/10">
+                        <div className="w-10 h-10 border-3 border-white/20 border-t-white/90 rounded-full animate-spin" />
+                        <p className="text-white/80 text-sm font-medium">Preparing your stream…</p>
                     </div>
                 </div>
             )}
