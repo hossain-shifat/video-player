@@ -569,6 +569,18 @@ async function init() {
     console.log(`[SubtitleStore] Ready: meta=${Object.keys(_meta).length} queue=${_queue.length} pending=${pending} available=${_available.size}`);
 }
 
+/**
+ * requeueEntry — put an entry back to pending WITHOUT counting the attempt.
+ * Used by worker on 429 rate_limit so the entry retries after cooldown
+ * and the attempt counter is not burned.
+ */
+function requeueEntry(entry) {
+    entry.status = "pending";
+    entry.attempts = Math.max(0, (entry.attempts || 1) - 1); // undo the markDownloading increment
+    entry.lastError = null;
+    _queueWriter.schedule();
+}
+
 module.exports = {
     init,
     reconcile,
@@ -588,6 +600,7 @@ module.exports = {
     markFailed, // sync
     markFailedPermanent, // sync
     markSkipped, // sync
+    requeueEntry, // sync — re-queues without burning attempt
     getQueueStats,
     // paths
     getSubtitleDir,

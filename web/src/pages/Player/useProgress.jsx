@@ -14,6 +14,13 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     const [resumePoint, setResumePoint] = useState(null);
     const [showResumeDialog, setShowResumeDialog] = useState(false);
     const [resumeCountdown, setResumeCountdown] = useState(5);
+    // NEW: true while deferredSeek is polling for the target segment to become
+    // transcoded/seekable. PlayerPage uses this to show a "waiting for
+    // stream..." indicator and hold off autoplay until the seek actually lands
+    // — previously playback could start immediately at position 0 for a
+    // moment before snapping to the resume point if that segment wasn't
+    // transcoded yet.
+    const [isSeekingToResume, setIsSeekingToResume] = useState(false);
     const intervalRef = useRef(null);
     const countdownRef = useRef(null);
     const resolvedRef = useRef(false);
@@ -29,35 +36,56 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     // Also calls hls.startLoad(targetSec) to redirect hls.js buffering so the
     // seekable range grows to include the target quickly (without waiting for
     // natural playback to reach the target).
-    const deferredSeek = useCallback((targetSec) => {
-        if (!targetSec || targetSec <= 0) return;
-        clearInterval(seekPollRef.current);
-        let attempts = 0;
-        const MAX_ATTEMPTS = 75; // 75 × 200ms = 15s max wait
-
-        // Tell hls.js to start buffering from the target position immediately.
-        // This makes the seekable range grow to include targetSec quickly
-        // instead of waiting for segments [0 ... targetSec] to load one by one.
-        hlsRef?.current?.startLoad(targetSec);
-
-        seekPollRef.current = setInterval(() => {
-            attempts++;
-            const video = videoRef.current;
-            if (!video) { clearInterval(seekPollRef.current); return; }
-
-            // Check if seekable range includes target position
-            const seekable = video.seekable;
-            let canSeek = false;
-            for (let i = 0; i < seekable.length; i++) {
-                if (targetSec <= seekable.end(i) + 1) { canSeek = true; break; }
+    const deferredSeek = useCallback(
+        (targetSec, onSeekLanded) => {
+            if (!targetSec || targetSec <= 0) {
+                onSeekLanded?.();
+                return;
             }
+            clearInterval(seekPollRef.current);
+            setIsSeekingToResume(true);
+            let attempts = 0;
+            // FIX: backend's waitForSegment() (streamController.js) blocks segment
+            // requests for up to 30s during a transcode restart (far seek). The
+            // old 15s frontend timeout could give up and seek to the wrong spot
+            // while the server was still legitimately working on it. Match it.
+            const MAX_ATTEMPTS = 150; // 150 × 200ms = 30s max wait
 
-            if (canSeek || attempts >= MAX_ATTEMPTS) {
-                clearInterval(seekPollRef.current);
-                video.currentTime = targetSec;
-            }
-        }, 200);
-    }, [videoRef, hlsRef]);
+            // Tell hls.js to start buffering from the target position immediately.
+            // This makes the seekable range grow to include targetSec quickly
+            // instead of waiting for segments [0 ... targetSec] to load one by one.
+            hlsRef?.current?.startLoad(targetSec);
+
+            seekPollRef.current = setInterval(() => {
+                attempts++;
+                const video = videoRef.current;
+                if (!video) {
+                    clearInterval(seekPollRef.current);
+                    setIsSeekingToResume(false);
+                    onSeekLanded?.();
+                    return;
+                }
+
+                // Check if seekable range includes target position
+                const seekable = video.seekable;
+                let canSeek = false;
+                for (let i = 0; i < seekable.length; i++) {
+                    if (targetSec <= seekable.end(i) + 1) {
+                        canSeek = true;
+                        break;
+                    }
+                }
+
+                if (canSeek || attempts >= MAX_ATTEMPTS) {
+                    clearInterval(seekPollRef.current);
+                    video.currentTime = targetSec;
+                    setIsSeekingToResume(false);
+                    onSeekLanded?.();
+                }
+            }, 200);
+        },
+        [videoRef, hlsRef],
+    );
 
     // FIX (Report-28): videoRef.current is null at hook mount because <VideoCore>
     // renders only after streamUrl is set. [videoRef] is a stable ref object so
@@ -98,9 +126,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             // the completion check by passing the position as duration (never 90%+).
             duration: Math.floor(duration),
             // Save subtitle preference so next session can restore it
-            subtitlePref: activeSubtitle
-                ? { url: activeSubtitle.url, lang: activeSubtitle.lang, source: activeSubtitle.source || "external", label: activeSubtitle.label }
-                : null,
+            subtitlePref: activeSubtitle ? { url: activeSubtitle.url, lang: activeSubtitle.lang, source: activeSubtitle.source || "external", label: activeSubtitle.label } : null,
         }),
         [name, type, poster, stableStreamUrl, activeSubtitle],
     );
@@ -182,16 +208,21 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
 
     // ── Resume dialog actions ─────────────────────────────────────────────────
 
-    const handleResume = useCallback(() => {
-        if (resumePoint?.position) {
-            // FIX: Use deferred seek — HLS duration starts tiny, direct seek gets clamped.
-            deferredSeek(resumePoint.position);
-        }
-        setShowResumeDialog(false);
-        resolvedRef.current = true;
-        seekFiredRef.current = true;
-        clearInterval(countdownRef.current);
-    }, [deferredSeek, resumePoint]);
+    const handleResume = useCallback(
+        (onLanded) => {
+            if (resumePoint?.position) {
+                // FIX: Use deferred seek — HLS duration starts tiny, direct seek gets clamped.
+                deferredSeek(resumePoint.position, onLanded);
+            } else {
+                onLanded?.();
+            }
+            setShowResumeDialog(false);
+            resolvedRef.current = true;
+            seekFiredRef.current = true;
+            clearInterval(countdownRef.current);
+        },
+        [deferredSeek, resumePoint],
+    );
 
     const handleStartOver = useCallback(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
@@ -222,14 +253,20 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     }, [showResumeDialog]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── onReadyToSeek ─────────────────────────────────────────────────────────
-    const onReadyToSeek = useCallback(() => {
-        if (seekFiredRef.current) return;
-        if (showResumeDialog) return;
-        if (!resumePoint?.position) return;
-        seekFiredRef.current = true;
-        // FIX: Use deferred seek — HLS manifest is incomplete at this point.
-        deferredSeek(resumePoint.position);
-    }, [showResumeDialog, resumePoint, deferredSeek]);
+    const onReadyToSeek = useCallback(
+        (onLanded) => {
+            if (seekFiredRef.current) return;
+            if (showResumeDialog) return;
+            if (!resumePoint?.position) {
+                onLanded?.();
+                return;
+            }
+            seekFiredRef.current = true;
+            // FIX: Use deferred seek — HLS manifest is incomplete at this point.
+            deferredSeek(resumePoint.position, onLanded);
+        },
+        [showResumeDialog, resumePoint, deferredSeek],
+    );
 
     // ── Periodic progress save (every 10s) + immediate save on play/pause ─────
     useEffect(() => {
@@ -350,6 +387,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         resumePoint,
         showResumeDialog,
         resumeCountdown,
+        isSeekingToResume,
         handleResume,
         handleStartOver,
         onReadyToSeek,
