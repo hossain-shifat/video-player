@@ -3,69 +3,90 @@ import { createContext, useContext, useReducer, useCallback, useMemo } from "rea
 // ─── Initial State ────────────────────────────────────────────────────────────
 
 const initialState = {
-    playing:          false,
-    currentTime:      0,
-    duration:         0,
-    volume:           1,
-    muted:            false,
-    brightness:       1,       // 0.5 – 2 (CSS filter brightness)
-    playbackSpeed:    1,
-    isFullscreen:     false,
-    isPiP:            false,
-    loop:             "none",  // 'none' | 'one' | 'all'
-    aspectRatio:      "auto",  // 'auto' | 'fill' | '16:9' | '4:3' | '1:1' | 'stretch'
-    controlsVisible:  true,
-    isLocked:         false,
-    activeSubtitle:   null,    // track object { url, filename, ext, lang } or null
-    subtitleDelay:    0,       // ms (positive = delay, negative = advance)
-    subtitleFontSize: 20,      // px
-    subtitleColor:    "#ffffff",
+    playing: false,
+    currentTime: 0,
+    duration: 0,
+    volume: 1,
+    muted: false,
+    brightness: 1, // 0.5 – 2 (CSS filter brightness)
+    playbackSpeed: 1,
+    isFullscreen: false,
+    isPiP: false,
+    loop: "none", // 'none' | 'one' | 'all'
+    aspectRatio: "auto", // 'auto' | 'fill' | '16:9' | '4:3' | '1:1' | 'stretch'
+    controlsVisible: true,
+    isLocked: false,
+    activeSubtitle: null, // track object { url, filename, ext, lang } or null
+    subtitleDelay: 0, // ms (positive = delay, negative = advance)
+    subtitleFontSize: 20, // px
+    subtitleColor: "#ffffff",
     subtitleBgOpacity: 0.72,
-    qualityLevels:    [],      // HLS quality levels [{ index, height, width, bitrate, label }]
-    activeQuality:    -1,      // -1 = auto
-    audioTracks:      [],      // [{ index, id, name, lang, default }]
+    qualityLevels: [], // HLS quality levels [{ index, height, width, bitrate, label }]
+    activeQuality: -1, // -1 = auto
+    audioTracks: [], // [{ index, id, name, lang, default }]
     activeAudioTrack: 0,
-    buffered:         null,    // TimeRanges
-    isReady:          false,
-    isBuffering:      false,
-    stallCount:       0,       // incremented on each stall for recovery tracking
+    buffered: null, // TimeRanges
+    isReady: false,
+    isBuffering: false,
+    stallCount: 0, // incremented on each stall for recovery tracking
     speedBoostActive: false,
-    preSpeedBoost:    1,
-    error:            null,
+    preSpeedBoost: 1,
+    error: null,
+
+    // ── New mobile control-bar features ────────────────────────────────────
+    shuffle: false, // shuffle next-up queue (no-op without a queue, toggle only for now)
+    sleepTimerEndsAt: null, // epoch ms when playback should auto-pause, or null = off
+    abRepeat: { a: null, b: null, active: false }, // A-B repeat points in seconds
+    backgroundPlay: false, // keep audio playing if tab/app backgrounded
+    nightMode: false, // placeholder toggle, no visual effect yet (per product decision)
+    eqEnabled: false, // placeholder toggle, no audio DSP yet (per product decision)
+    // Which 5 icons show in the collapsed mobile row before the chevron;
+    // order also defines "Customise Items" drag-reorder result.
+    quickIconOrder: ["nightMode", "customise", "shuffle", "loop", "mute"],
+    volumeBoost: 1, // 1.0-2.0 — software gain multiplier on top of native volume, doc: "Volume Boost up to 200%"
 };
 
 // ─── Action Types ─────────────────────────────────────────────────────────────
 
 export const A = {
-    SET_PLAYING:            "SET_PLAYING",
-    SET_CURRENT_TIME:       "SET_CURRENT_TIME",
-    SET_DURATION:           "SET_DURATION",
-    SET_VOLUME:             "SET_VOLUME",
-    SET_MUTED:              "SET_MUTED",
-    SET_BRIGHTNESS:         "SET_BRIGHTNESS",
-    SET_PLAYBACK_SPEED:     "SET_PLAYBACK_SPEED",
-    SET_FULLSCREEN:         "SET_FULLSCREEN",
-    SET_PIP:                "SET_PIP",
-    SET_LOOP:               "SET_LOOP",
-    SET_ASPECT_RATIO:       "SET_ASPECT_RATIO",
-    SET_CONTROLS_VISIBLE:   "SET_CONTROLS_VISIBLE",
-    SET_LOCKED:             "SET_LOCKED",
-    SET_ACTIVE_SUBTITLE:    "SET_ACTIVE_SUBTITLE",
-    SET_SUBTITLE_DELAY:     "SET_SUBTITLE_DELAY",
+    SET_PLAYING: "SET_PLAYING",
+    SET_CURRENT_TIME: "SET_CURRENT_TIME",
+    SET_DURATION: "SET_DURATION",
+    SET_VOLUME: "SET_VOLUME",
+    SET_MUTED: "SET_MUTED",
+    SET_BRIGHTNESS: "SET_BRIGHTNESS",
+    SET_PLAYBACK_SPEED: "SET_PLAYBACK_SPEED",
+    SET_FULLSCREEN: "SET_FULLSCREEN",
+    SET_PIP: "SET_PIP",
+    SET_LOOP: "SET_LOOP",
+    SET_ASPECT_RATIO: "SET_ASPECT_RATIO",
+    SET_CONTROLS_VISIBLE: "SET_CONTROLS_VISIBLE",
+    SET_LOCKED: "SET_LOCKED",
+    SET_ACTIVE_SUBTITLE: "SET_ACTIVE_SUBTITLE",
+    SET_SUBTITLE_DELAY: "SET_SUBTITLE_DELAY",
     SET_SUBTITLE_FONT_SIZE: "SET_SUBTITLE_FONT_SIZE",
-    SET_SUBTITLE_COLOR:     "SET_SUBTITLE_COLOR",
-    SET_SUBTITLE_BG_OPACITY:"SET_SUBTITLE_BG_OPACITY",
-    SET_QUALITY_LEVELS:     "SET_QUALITY_LEVELS",
-    SET_ACTIVE_QUALITY:     "SET_ACTIVE_QUALITY",
-    SET_AUDIO_TRACKS:       "SET_AUDIO_TRACKS",
+    SET_SUBTITLE_COLOR: "SET_SUBTITLE_COLOR",
+    SET_SUBTITLE_BG_OPACITY: "SET_SUBTITLE_BG_OPACITY",
+    SET_QUALITY_LEVELS: "SET_QUALITY_LEVELS",
+    SET_ACTIVE_QUALITY: "SET_ACTIVE_QUALITY",
+    SET_AUDIO_TRACKS: "SET_AUDIO_TRACKS",
     SET_ACTIVE_AUDIO_TRACK: "SET_ACTIVE_AUDIO_TRACK",
-    SET_BUFFERED:           "SET_BUFFERED",
-    SET_READY:              "SET_READY",
-    SET_BUFFERING:          "SET_BUFFERING",
-    INCREMENT_STALL:        "INCREMENT_STALL",
-    SET_SPEED_BOOST:        "SET_SPEED_BOOST",
-    SET_ERROR:              "SET_ERROR",
-    RESET:                  "RESET",
+    SET_BUFFERED: "SET_BUFFERED",
+    SET_READY: "SET_READY",
+    SET_BUFFERING: "SET_BUFFERING",
+    INCREMENT_STALL: "INCREMENT_STALL",
+    SET_SPEED_BOOST: "SET_SPEED_BOOST",
+    COMMIT_SPEED_BOOST: "COMMIT_SPEED_BOOST",
+    SET_ERROR: "SET_ERROR",
+    RESET: "RESET",
+    TOGGLE_SHUFFLE: "TOGGLE_SHUFFLE",
+    SET_SLEEP_TIMER: "SET_SLEEP_TIMER",
+    SET_AB_REPEAT: "SET_AB_REPEAT",
+    TOGGLE_BACKGROUND_PLAY: "TOGGLE_BACKGROUND_PLAY",
+    TOGGLE_NIGHT_MODE: "TOGGLE_NIGHT_MODE",
+    TOGGLE_EQ: "TOGGLE_EQ",
+    SET_QUICK_ICON_ORDER: "SET_QUICK_ICON_ORDER",
+    SET_VOLUME_BOOST: "SET_VOLUME_BOOST",
 };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
@@ -92,16 +113,12 @@ function playerReducer(state, action) {
             return { ...state, isPiP: action.payload };
         case A.SET_LOOP: {
             const modes = ["none", "one", "all"];
-            const next = action.payload !== undefined
-                ? action.payload
-                : modes[(modes.indexOf(state.loop) + 1) % modes.length];
+            const next = action.payload !== undefined ? action.payload : modes[(modes.indexOf(state.loop) + 1) % modes.length];
             return { ...state, loop: next };
         }
         case A.SET_ASPECT_RATIO: {
             const ratios = ["auto", "fill", "16:9", "4:3", "1:1", "stretch"];
-            const next = action.payload !== undefined
-                ? action.payload
-                : ratios[(ratios.indexOf(state.aspectRatio) + 1) % ratios.length];
+            const next = action.payload !== undefined ? action.payload : ratios[(ratios.indexOf(state.aspectRatio) + 1) % ratios.length];
             return { ...state, aspectRatio: next };
         }
         case A.SET_CONTROLS_VISIBLE:
@@ -140,8 +157,29 @@ function playerReducer(state, action) {
             } else {
                 return { ...state, speedBoostActive: false, playbackSpeed: state.preSpeedBoost };
             }
+        case A.COMMIT_SPEED_BOOST:
+            // Turbo-lock: clear the transient boost flag but keep the
+            // currently-boosted playbackSpeed instead of reverting to
+            // preSpeedBoost — the user explicitly locked it in.
+            return { ...state, speedBoostActive: false };
         case A.SET_ERROR:
             return { ...state, error: action.payload };
+        case A.TOGGLE_SHUFFLE:
+            return { ...state, shuffle: !state.shuffle };
+        case A.SET_SLEEP_TIMER:
+            return { ...state, sleepTimerEndsAt: action.payload };
+        case A.SET_AB_REPEAT:
+            return { ...state, abRepeat: { ...state.abRepeat, ...action.payload } };
+        case A.TOGGLE_BACKGROUND_PLAY:
+            return { ...state, backgroundPlay: !state.backgroundPlay };
+        case A.TOGGLE_NIGHT_MODE:
+            return { ...state, nightMode: !state.nightMode };
+        case A.TOGGLE_EQ:
+            return { ...state, eqEnabled: !state.eqEnabled };
+        case A.SET_QUICK_ICON_ORDER:
+            return { ...state, quickIconOrder: action.payload };
+        case A.SET_VOLUME_BOOST:
+            return { ...state, volumeBoost: Math.max(1, Math.min(2, action.payload)) };
         case A.RESET:
             return { ...initialState };
         default:
@@ -159,61 +197,133 @@ export const PlayerContext = createContext(null);
 export function PlayerProvider({ children }) {
     const [state, dispatch] = useReducer(playerReducer, initialState);
 
-    const setPlaying           = useCallback((v) => dispatch({ type: A.SET_PLAYING,            payload: v }), []);
-    const setCurrentTime       = useCallback((v) => dispatch({ type: A.SET_CURRENT_TIME,       payload: v }), []);
-    const setDuration          = useCallback((v) => dispatch({ type: A.SET_DURATION,           payload: v }), []);
-    const setVolume            = useCallback((v) => dispatch({ type: A.SET_VOLUME,             payload: v }), []);
-    const setMuted             = useCallback((v) => dispatch({ type: A.SET_MUTED,              payload: v }), []);
-    const setBrightness        = useCallback((v) => dispatch({ type: A.SET_BRIGHTNESS,         payload: v }), []);
-    const setPlaybackSpeed     = useCallback((v) => dispatch({ type: A.SET_PLAYBACK_SPEED,     payload: v }), []);
-    const setFullscreen        = useCallback((v) => dispatch({ type: A.SET_FULLSCREEN,         payload: v }), []);
-    const setPiP               = useCallback((v) => dispatch({ type: A.SET_PIP,               payload: v }), []);
-    const cycleLoop            = useCallback(()  => dispatch({ type: A.SET_LOOP }),                           []);
-    const setLoop              = useCallback((v) => dispatch({ type: A.SET_LOOP,               payload: v }), []);
-    const cycleAspectRatio     = useCallback(()  => dispatch({ type: A.SET_ASPECT_RATIO }),                   []);
-    const setAspectRatio       = useCallback((v) => dispatch({ type: A.SET_ASPECT_RATIO,       payload: v }), []);
-    const setControlsVisible   = useCallback((v) => dispatch({ type: A.SET_CONTROLS_VISIBLE,   payload: v }), []);
-    const setLocked            = useCallback((v) => dispatch({ type: A.SET_LOCKED,             payload: v }), []);
-    const setActiveSubtitle    = useCallback((v) => dispatch({ type: A.SET_ACTIVE_SUBTITLE,    payload: v }), []);
-    const setSubtitleDelay     = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_DELAY,     payload: v }), []);
-    const setSubtitleFontSize  = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_FONT_SIZE, payload: v }), []);
-    const setSubtitleColor     = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_COLOR,     payload: v }), []);
-    const setSubtitleBgOpacity = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_BG_OPACITY,payload: v }), []);
-    const setQualityLevels     = useCallback((v) => dispatch({ type: A.SET_QUALITY_LEVELS,     payload: v }), []);
-    const setActiveQuality     = useCallback((v) => dispatch({ type: A.SET_ACTIVE_QUALITY,     payload: v }), []);
-    const setAudioTracks       = useCallback((v) => dispatch({ type: A.SET_AUDIO_TRACKS,       payload: v }), []);
-    const setActiveAudioTrack  = useCallback((v) => dispatch({ type: A.SET_ACTIVE_AUDIO_TRACK, payload: v }), []);
-    const setBuffered          = useCallback((v) => dispatch({ type: A.SET_BUFFERED,           payload: v }), []);
-    const setReady             = useCallback((v) => dispatch({ type: A.SET_READY,              payload: v }), []);
-    const setBuffering         = useCallback((v) => dispatch({ type: A.SET_BUFFERING,          payload: v }), []);
-    const incrementStall       = useCallback(()  => dispatch({ type: A.INCREMENT_STALL }),                    []);
-    const setSpeedBoost        = useCallback((v) => dispatch({ type: A.SET_SPEED_BOOST,        payload: v }), []);
-    const setError             = useCallback((v) => dispatch({ type: A.SET_ERROR,              payload: v }), []);
-    const reset                = useCallback(()  => dispatch({ type: A.RESET }),                              []);
+    const setPlaying = useCallback((v) => dispatch({ type: A.SET_PLAYING, payload: v }), []);
+    const setCurrentTime = useCallback((v) => dispatch({ type: A.SET_CURRENT_TIME, payload: v }), []);
+    const setDuration = useCallback((v) => dispatch({ type: A.SET_DURATION, payload: v }), []);
+    const setVolume = useCallback((v) => dispatch({ type: A.SET_VOLUME, payload: v }), []);
+    const setMuted = useCallback((v) => dispatch({ type: A.SET_MUTED, payload: v }), []);
+    const setBrightness = useCallback((v) => dispatch({ type: A.SET_BRIGHTNESS, payload: v }), []);
+    const setPlaybackSpeed = useCallback((v) => dispatch({ type: A.SET_PLAYBACK_SPEED, payload: v }), []);
+    const setFullscreen = useCallback((v) => dispatch({ type: A.SET_FULLSCREEN, payload: v }), []);
+    const setPiP = useCallback((v) => dispatch({ type: A.SET_PIP, payload: v }), []);
+    const cycleLoop = useCallback(() => dispatch({ type: A.SET_LOOP }), []);
+    const setLoop = useCallback((v) => dispatch({ type: A.SET_LOOP, payload: v }), []);
+    const cycleAspectRatio = useCallback(() => dispatch({ type: A.SET_ASPECT_RATIO }), []);
+    const setAspectRatio = useCallback((v) => dispatch({ type: A.SET_ASPECT_RATIO, payload: v }), []);
+    const setControlsVisible = useCallback((v) => dispatch({ type: A.SET_CONTROLS_VISIBLE, payload: v }), []);
+    const setLocked = useCallback((v) => dispatch({ type: A.SET_LOCKED, payload: v }), []);
+    const setActiveSubtitle = useCallback((v) => dispatch({ type: A.SET_ACTIVE_SUBTITLE, payload: v }), []);
+    const setSubtitleDelay = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_DELAY, payload: v }), []);
+    const setSubtitleFontSize = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_FONT_SIZE, payload: v }), []);
+    const setSubtitleColor = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_COLOR, payload: v }), []);
+    const setSubtitleBgOpacity = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_BG_OPACITY, payload: v }), []);
+    const setQualityLevels = useCallback((v) => dispatch({ type: A.SET_QUALITY_LEVELS, payload: v }), []);
+    const setActiveQuality = useCallback((v) => dispatch({ type: A.SET_ACTIVE_QUALITY, payload: v }), []);
+    const setAudioTracks = useCallback((v) => dispatch({ type: A.SET_AUDIO_TRACKS, payload: v }), []);
+    const setActiveAudioTrack = useCallback((v) => dispatch({ type: A.SET_ACTIVE_AUDIO_TRACK, payload: v }), []);
+    const setBuffered = useCallback((v) => dispatch({ type: A.SET_BUFFERED, payload: v }), []);
+    const setReady = useCallback((v) => dispatch({ type: A.SET_READY, payload: v }), []);
+    const setBuffering = useCallback((v) => dispatch({ type: A.SET_BUFFERING, payload: v }), []);
+    const incrementStall = useCallback(() => dispatch({ type: A.INCREMENT_STALL }), []);
+    const setSpeedBoost = useCallback((v) => dispatch({ type: A.SET_SPEED_BOOST, payload: v }), []);
+    const commitSpeedBoost = useCallback(() => dispatch({ type: A.COMMIT_SPEED_BOOST }), []);
+    const setError = useCallback((v) => dispatch({ type: A.SET_ERROR, payload: v }), []);
+    const reset = useCallback(() => dispatch({ type: A.RESET }), []);
+    const toggleShuffle = useCallback(() => dispatch({ type: A.TOGGLE_SHUFFLE }), []);
+    const setSleepTimer = useCallback((v) => dispatch({ type: A.SET_SLEEP_TIMER, payload: v }), []);
+    const setAbRepeat = useCallback((v) => dispatch({ type: A.SET_AB_REPEAT, payload: v }), []);
+    const toggleBackgroundPlay = useCallback(() => dispatch({ type: A.TOGGLE_BACKGROUND_PLAY }), []);
+    const toggleNightMode = useCallback(() => dispatch({ type: A.TOGGLE_NIGHT_MODE }), []);
+    const toggleEq = useCallback(() => dispatch({ type: A.TOGGLE_EQ }), []);
+    const setQuickIconOrder = useCallback((v) => dispatch({ type: A.SET_QUICK_ICON_ORDER, payload: v }), []);
+    const setVolumeBoost = useCallback((v) => dispatch({ type: A.SET_VOLUME_BOOST, payload: v }), []);
 
-    const actions = useMemo(() => ({
-        setPlaying, setCurrentTime, setDuration, setVolume, setMuted,
-        setBrightness, setPlaybackSpeed, setFullscreen, setPiP,
-        cycleLoop, setLoop, cycleAspectRatio, setAspectRatio,
-        setControlsVisible, setLocked,
-        setActiveSubtitle, setSubtitleDelay, setSubtitleFontSize,
-        setSubtitleColor, setSubtitleBgOpacity,
-        setQualityLevels, setActiveQuality,
-        setAudioTracks, setActiveAudioTrack,
-        setBuffered, setReady, setBuffering, incrementStall,
-        setSpeedBoost, setError, reset,
-    }), [
-        setPlaying, setCurrentTime, setDuration, setVolume, setMuted,
-        setBrightness, setPlaybackSpeed, setFullscreen, setPiP,
-        cycleLoop, setLoop, cycleAspectRatio, setAspectRatio,
-        setControlsVisible, setLocked,
-        setActiveSubtitle, setSubtitleDelay, setSubtitleFontSize,
-        setSubtitleColor, setSubtitleBgOpacity,
-        setQualityLevels, setActiveQuality,
-        setAudioTracks, setActiveAudioTrack,
-        setBuffered, setReady, setBuffering, incrementStall,
-        setSpeedBoost, setError, reset,
-    ]);
+    const actions = useMemo(
+        () => ({
+            setPlaying,
+            setCurrentTime,
+            setDuration,
+            setVolume,
+            setMuted,
+            setBrightness,
+            setPlaybackSpeed,
+            setFullscreen,
+            setPiP,
+            cycleLoop,
+            setLoop,
+            cycleAspectRatio,
+            setAspectRatio,
+            setControlsVisible,
+            setLocked,
+            setActiveSubtitle,
+            setSubtitleDelay,
+            setSubtitleFontSize,
+            setSubtitleColor,
+            setSubtitleBgOpacity,
+            setQualityLevels,
+            setActiveQuality,
+            setAudioTracks,
+            setActiveAudioTrack,
+            setBuffered,
+            setReady,
+            setBuffering,
+            incrementStall,
+            setSpeedBoost,
+            commitSpeedBoost,
+            setError,
+            reset,
+            toggleShuffle,
+            setSleepTimer,
+            setAbRepeat,
+            toggleBackgroundPlay,
+            toggleNightMode,
+            toggleEq,
+            setQuickIconOrder,
+            setVolumeBoost,
+        }),
+        [
+            setPlaying,
+            setCurrentTime,
+            setDuration,
+            setVolume,
+            setMuted,
+            setBrightness,
+            setPlaybackSpeed,
+            setFullscreen,
+            setPiP,
+            cycleLoop,
+            setLoop,
+            cycleAspectRatio,
+            setAspectRatio,
+            setControlsVisible,
+            setLocked,
+            setActiveSubtitle,
+            setSubtitleDelay,
+            setSubtitleFontSize,
+            setSubtitleColor,
+            setSubtitleBgOpacity,
+            setQualityLevels,
+            setActiveQuality,
+            setAudioTracks,
+            setActiveAudioTrack,
+            setBuffered,
+            setReady,
+            setBuffering,
+            incrementStall,
+            setSpeedBoost,
+            commitSpeedBoost,
+            setError,
+            reset,
+            toggleShuffle,
+            setSleepTimer,
+            setAbRepeat,
+            toggleBackgroundPlay,
+            toggleNightMode,
+            toggleEq,
+            setQuickIconOrder,
+            setVolumeBoost,
+        ],
+    );
 
     const value = useMemo(() => ({ state, actions }), [state, actions]);
 

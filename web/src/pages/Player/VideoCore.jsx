@@ -207,14 +207,23 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         }
         remeasure();
 
-        // FIX: on some Android devices (punch-hole cutout phones — OnePlus,
-        // Xiaomi/Redmi), the layout box reported right at the instant of a
-        // fullscreen/orientation transition doesn't yet reflect the final
-        // cutout-adjusted viewport — ResizeObserver's first post-transition
-        // callback can fire with stale numbers. Force a couple of delayed
-        // remeasures after these events so containerDims always ends up
-        // matching the true final rendered box, not a transient one.
+        // FIX (rotation overflow): getBoundingClientRect() on the wrapper can
+        // briefly report STALE (pre-rotation) numbers right as the device
+        // rotates — the video's px box gets computed from that stale,
+        // larger-than-actual container size and visibly overflows the new
+        // (now actually smaller on one axis) viewport until a later delayed
+        // remeasure corrects it. window.innerWidth/innerHeight update
+        // synchronously with the orientation event itself (no layout-query
+        // race), so snap to those FIRST as an immediate correct-or-better
+        // estimate, then let the getBoundingClientRect remeasures refine it
+        // (e.g. for safe-area/cutout adjustments rect captures that raw
+        // innerWidth/innerHeight don't).
+        const snapToViewport = () => {
+            setContainerDims({ w: window.innerWidth, h: window.innerHeight });
+        };
+
         const remeasureSettled = () => {
+            snapToViewport();
             remeasure();
             requestAnimationFrame(remeasure);
             setTimeout(remeasure, 100);
@@ -529,6 +538,57 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
             hls.audioTrack = track.id;
         }
     }, [state.activeAudioTrack]);
+
+    // ── Volume Boost (doc: "Volume Boost up to 200% via software
+    // amplification") ──────────────────────────────────────────────────────
+    //
+    // <video>.volume natively caps at 1.0 — there's no built-in way to push
+    // audio louder than the source. The only way to amplify beyond that is
+    // routing through Web Audio's GainNode. This is a ONE-WAY change: once
+    // createMediaElementSource() is called on a <video>, that element's
+    // audio can ONLY play through the Web Audio graph from then on (it
+    // can't be "undone" without recreating the element) — so we connect it
+    // once, lazily, on first actual boost use rather than unconditionally
+    // at mount. If boost is never used, native <video>.volume keeps working
+    // completely normally with zero Web Audio involvement.
+    //
+    // Defensive: AudioContext requires a prior user gesture on most
+    // browsers (autoplay-policy adjacent restriction) — if construction
+    // fails for any reason, we swallow it and volumeBoost simply has no
+    // audible effect rather than crashing playback.
+    const audioCtxRef = useRef(null);
+    const gainNodeRef = useRef(null);
+    const sourceNodeRef = useRef(null);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        if (state.volumeBoost <= 1) return; // never used boost — stay on native <video>.volume entirely
+        if (sourceNodeRef.current) return; // already wired
+
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            const ctx = new Ctx();
+            const source = ctx.createMediaElementSource(video);
+            const gain = ctx.createGain();
+            source.connect(gain);
+            gain.connect(ctx.destination);
+            audioCtxRef.current = ctx;
+            sourceNodeRef.current = source;
+            gainNodeRef.current = gain;
+        } catch {
+            // Web Audio unavailable or blocked — boost silently has no
+            // effect, native playback is completely unaffected.
+        }
+    }, [state.volumeBoost]);
+
+    useEffect(() => {
+        if (!gainNodeRef.current) return;
+        // Native <video>.volume already covers the 0-1 range (synced
+        // elsewhere) — the GainNode only needs to apply the EXTRA
+        // multiplier above 1.0. At volumeBoost=1 this is a no-op gain of 1.
+        gainNodeRef.current.gain.value = state.volumeBoost;
+    }, [state.volumeBoost]);
 
     // ── Sync playback speed ───────────────────────────────────────────────────
     useEffect(() => {

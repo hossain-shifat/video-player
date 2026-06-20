@@ -36,8 +36,20 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     const longPressTimer = useRef(null);
     const speedBoostActive = useRef(false);
     const lastTap = useRef({ time: 0, side: null });
+    const singleTapTimer = useRef(null);
     const dragStart = useRef(null);
     const pinchStart = useRef(null);
+
+    // ── New gesture-system refs (player-controls.md spec) ──────────────────────
+    const axisLock = useRef(null); // null | "horizontal" | "vertical" — set once slop is crossed, held for the rest of the gesture
+    const seekCancelled = useRef(false); // true once swipe-to-cancel has fired for this gesture
+    const lastMoveTime = useRef(0);
+    const lastMoveX = useRef(0);
+    const velocityPxPerMs = useRef(0);
+    const twoFingerSpeedStart = useRef(null); // { avgY, baseSpeed } for 2-finger vertical speed slide
+    const turboLocked = useRef(false); // true once long-press turbo has been "locked" by sliding to top margin
+    const preTurboSpeed = useRef(1);
+    const SLOP = 20; // px — doc Rule 1: 15-25px threshold before locking an axis
 
     // ── Pinch-zoom state (MX Player style: real scale + pan, not aspect toggle) ──
     // MIN_ZOOM is below 1 on purpose: some videos overflow the wrapper even
@@ -46,7 +58,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     // device). Pinching in directly from default must be able to shrink
     // BELOW that baseline, not just clamp back up to it.
     const MIN_ZOOM = 0.5;
-    const MAX_ZOOM = 3;
+    const MAX_ZOOM = 4; // doc spec: pinch-zoom up to 400%
     const zoomRef = useRef({ scale: 1, panX: 0, panY: 0 });
     const panDragStart = useRef(null); // single-finger pan while zoomed
 
@@ -304,9 +316,10 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     }, [state.playing, state.volume, state.muted, state.audioTracks, state.activeAudioTrack, state.playbackSpeed]);
 
     // ── Touch zone ───────────────────────────────────────────────────────────
+    // Doc spec: left 40% / center 20% dead zone / right 40%.
     const getZone = (x, w) => {
-        if (x < w * 0.3) return "left";
-        if (x > w * 0.7) return "right";
+        if (x < w * 0.4) return "left";
+        if (x > w * 0.6) return "right";
         return "center";
     };
 
@@ -314,6 +327,21 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     const handleTouchStart = useCallback(
         (e) => {
             if (state.isLocked) return;
+
+            // FIX (gesture conflict): listeners here are attached natively
+            // on containerRef, so they fire during DOM bubbling REGARDLESS
+            // of any React-level e.stopPropagation() called by a descendant
+            // like the Quick Action row — React's synthetic event system
+            // and native addEventListener listeners are separate dispatch
+            // paths; stopping one doesn't stop the other. The only reliable
+            // fix is checking the touch's origin here and bailing out
+            // completely if it started inside an excluded zone. Excluded
+            // elements are marked with data-gesture-exclude="true" (set on
+            // the Quick Action row's wrapper in PlayerControls).
+            if (e.target?.closest?.('[data-gesture-exclude="true"]')) {
+                return;
+            }
+
             const touch = e.touches[0];
             const now = Date.now();
             const el = containerRef.current;
@@ -323,7 +351,11 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             const y = touch.clientY - rect.top;
             const zone = getZone(x, rect.width);
 
-            // Pinch detection
+            // 2-finger gesture: capture baselines for BOTH possible
+            // interpretations (pinch-zoom vs 2-finger speed-slide). Which one
+            // actually engages is decided in touchmove based on whether the
+            // finger-to-finger distance changes (→ pinch) or stays roughly
+            // constant while both fingers move vertically together (→ speed).
             if (e.touches.length === 2) {
                 const dx = e.touches[0].clientX - e.touches[1].clientX;
                 const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -345,12 +377,19 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                               basePanY: zoomRef.current.panY,
                           }
                         : null;
+                twoFingerSpeedStart.current = {
+                    startDist,
+                    avgY: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+                    baseSpeed: state.playbackSpeed,
+                    resolved: null, // "pinch" | "speed" | null (undecided)
+                };
                 return;
             }
 
             // Double tap
             const dt = now - lastTap.current.time;
             if (dt < 280 && lastTap.current.side === zone && zone !== "center") {
+                clearTimeout(singleTapTimer.current);
                 const video = videoRef.current;
                 if (video) {
                     const delta = zone === "right" ? 10 : -10;
@@ -359,12 +398,22 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 lastTap.current = { time: 0, side: null };
                 return;
             }
-            if (dt < 280 && lastTap.current.side === zone && zone === "center" && zoomRef.current.scale !== 1) {
-                resetZoom();
+            if (dt < 280 && lastTap.current.side === zone && zone === "center") {
+                clearTimeout(singleTapTimer.current);
+                actions.setPlaying(!state.playing);
+                if (zoomRef.current.scale !== 1) resetZoom();
                 lastTap.current = { time: 0, side: null };
                 return;
             }
             lastTap.current = { time: now, side: zone };
+
+            // Reset gesture-tracking state for this fresh touch
+            axisLock.current = null;
+            seekCancelled.current = false;
+            lastMoveTime.current = 0;
+            lastMoveX.current = touch.clientX;
+            velocityPxPerMs.current = 0;
+            turboLocked.current = false;
 
             dragStart.current = {
                 x,
@@ -401,9 +450,17 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
         (e) => {
             clearTimeout(longPressTimer.current);
 
-            if (speedBoostActive.current) {
+            // Doc "Turbo Lock": if the user slid to the top margin while
+            // long-pressing, the boosted speed stays after release instead
+            // of reverting. Otherwise, releasing always snaps back to 1.0x
+            // (or whatever the pre-boost speed was) per doc spec.
+            if (speedBoostActive.current && !turboLocked.current) {
                 speedBoostActive.current = false;
                 actions.setSpeedBoost(false);
+            } else if (speedBoostActive.current && turboLocked.current) {
+                speedBoostActive.current = false;
+                turboLocked.current = false;
+                actions.commitSpeedBoost();
             }
             // FIX: only tear down pinch/pan gesture state once ALL fingers
             // have lifted. A real-world pinch often has one finger lift a
@@ -415,9 +472,15 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             if (e.touches.length === 0) {
                 pinchStart.current = null;
                 panDragStart.current = null;
+                twoFingerSpeedStart.current = null;
             }
 
-            // Single tap → toggle controls
+            // Single tap → toggle controls. Delayed by the same debounce
+            // window as double-tap detection (doc: "Conflict Resolution
+            // Logic") — if a second tap lands within that window, the
+            // double-tap branch above already returned early and cleared
+            // lastTap, so this deferred single-tap fires a check against a
+            // FRESH tap state to decide whether it's still a genuine single.
             if (dragStart.current && e.changedTouches.length === 1) {
                 const el = containerRef.current;
                 if (el) {
@@ -426,12 +489,23 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                     const endY = e.changedTouches[0].clientY - rect.top;
                     const dx = Math.abs(endX - dragStart.current.x);
                     const dy = Math.abs(endY - dragStart.current.y);
-                    if (dx < 12 && dy < 12) (onTap || showControls)();
+                    if (dx < 12 && dy < 12) {
+                        const tapTimeSnapshot = lastTap.current.time;
+                        clearTimeout(singleTapTimer.current);
+                        singleTapTimer.current = setTimeout(() => {
+                            // If lastTap.current.time changed since we
+                            // scheduled this, a double-tap consumed it —
+                            // don't also fire the single-tap toggle.
+                            if (lastTap.current.time === tapTimeSnapshot) {
+                                (onTap || showControls)();
+                            }
+                        }, 280);
+                    }
                 }
             }
             dragStart.current = null;
         },
-        [actions, containerRef, showControls, onTap],
+        [actions, state.playing, containerRef, showControls, onTap],
     );
 
     // ── handleTouchMove ──────────────────────────────────────────────────────
@@ -441,16 +515,52 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             clearTimeout(longPressTimer.current);
 
             // Pinch → real zoom (MX Player style), anchored at pinch midpoint
+            // — OR — 2-finger vertical speed-slide (doc spec). Disambiguated
+            // by movement pattern: if finger-to-finger distance changes
+            // meaningfully, it's a pinch. If distance stays roughly constant
+            // while both fingers move vertically together, it's speed-slide.
             if (e.touches.length === 2) {
-                // Must claim this gesture explicitly — listener is now
-                // non-passive specifically so this call works. Without it,
-                // some browsers fall back to native pinch-zoom handling
-                // mid-gesture, which is what froze zoom-out before.
                 e.preventDefault();
 
                 const dx = e.touches[0].clientX - e.touches[1].clientX;
                 const dy = e.touches[0].clientY - e.touches[1].clientY;
                 const dist = Math.sqrt(dx * dx + dy * dy);
+                const tfs = twoFingerSpeedStart.current;
+
+                if (tfs && !tfs.resolved) {
+                    const distDelta = Math.abs(dist - tfs.startDist);
+                    const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    const yDelta = Math.abs(avgY - tfs.avgY);
+                    if (distDelta > SLOP) {
+                        tfs.resolved = "pinch";
+                    } else if (yDelta > SLOP) {
+                        tfs.resolved = "speed";
+                    } else {
+                        return; // not enough movement yet to tell which
+                    }
+                }
+
+                if (tfs?.resolved === "speed") {
+                    // Doc: slide up accelerates (max 4.0x), slide down slows
+                    // (min 0.25x). Map total vertical travel across ~40% of
+                    // container height to the full speed range for a
+                    // predictable, not-too-twitchy feel.
+                    const el = containerRef.current;
+                    const rect = el?.getBoundingClientRect();
+                    if (rect) {
+                        const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                        const travel = (tfs.avgY - avgY) / (rect.height * 0.4); // up = positive
+                        const next = Math.max(0.25, Math.min(4, tfs.baseSpeed + travel * 2));
+                        // Snap to common speed steps for a less twitchy feel
+                        const snapped = SPEEDS.reduce((best, s) => (Math.abs(s - next) < Math.abs(best - next) ? s : best), SPEEDS[0]);
+                        if (snapped !== state.playbackSpeed) {
+                            actions.setPlaybackSpeed(snapped);
+                            setOverlayState((s) => ({ ...s, speed: snapped }));
+                            triggerSpeedBoost();
+                        }
+                    }
+                    return;
+                }
 
                 if (!pinchStart.current) {
                     // Wasn't armed at touchstart (fingers started too close
@@ -513,38 +623,99 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             const dy = y - dragStart.current.y;
             const { zone } = dragStart.current;
 
-            // Determine gesture direction on first significant move
-            if (zone === "left" && Math.abs(dy) > Math.abs(dx)) {
+            // ── Turbo-lock: if long-press turbo is active and the finger
+            // slides up into the top margin, lock the boosted speed so the
+            // user can release without it reverting (doc: "Turbo Lock").
+            if (speedBoostActive.current && !turboLocked.current) {
+                if (y < rect.height * 0.08) {
+                    turboLocked.current = true;
+                    setOverlayState((s) => ({ ...s, speed: state.playbackSpeed, turboLocked: true }));
+                }
+            }
+
+            // ── Axis lock (doc Rule 1): don't interpret direction at the
+            // exact down-point. Wait until movement crosses SLOP (15-25px),
+            // then commit to whichever axis broke the threshold first and
+            // hold that interpretation for the rest of the gesture — this is
+            // what prevents a vertical brightness swipe from jittering into
+            // a horizontal seek (or vice versa) from natural hand wobble.
+            if (!axisLock.current) {
+                if (Math.abs(dx) > SLOP && Math.abs(dx) > Math.abs(dy)) {
+                    axisLock.current = "horizontal";
+                } else if (Math.abs(dy) > SLOP && Math.abs(dy) > Math.abs(dx)) {
+                    axisLock.current = "vertical";
+                } else {
+                    return; // still inside the dead zone — not committed yet
+                }
+            }
+
+            if (axisLock.current === "vertical" && zone === "left") {
                 // Brightness — left vertical swipe
                 const delta = -dy / (rect.height * 0.65);
                 const newBrightness = Math.max(0.3, Math.min(2, dragStart.current.brightness + delta * 1.5));
                 actions.setBrightness(newBrightness);
                 setOverlayState((s) => ({ ...s, brightness: newBrightness }));
                 triggerBrightness();
-            } else if (zone === "right" && Math.abs(dy) > Math.abs(dx)) {
-                // Volume — right vertical swipe
+            } else if (axisLock.current === "vertical" && zone === "right") {
+                // Volume — right vertical swipe. Doc: supports boost to 200%
+                // via software amplification — the 0-1 portion is native
+                // <video>.volume, the 1-2 portion is the GainNode boost
+                // wired in VideoCore (see boostGain prop / applyVolumeBoost).
                 const delta = -dy / (rect.height * 0.65);
-                const newVol = Math.max(0, Math.min(1, dragStart.current.volume + delta));
-                actions.setVolume(newVol);
+                const newVol = Math.max(0, Math.min(2, dragStart.current.volume + delta * 2));
+                actions.setVolume(Math.min(1, newVol));
+                actions.setVolumeBoost(Math.max(1, newVol));
                 setOverlayState((s) => ({ ...s, volume: newVol, muted: false }));
                 triggerVolume();
-            } else if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 18) {
-                // Horizontal seek
+            } else if (axisLock.current === "horizontal") {
+                // ── Velocity-based seek (doc Rule 2): exponential curve
+                // combining distance + velocity. Slow deliberate drag → fine
+                // frame-level scrubbing. Fast fling → coarse multi-minute jumps.
+                const now = performance.now();
+                const dt = now - (lastMoveTime.current || now);
+                if (dt > 0) {
+                    const instVelocity = (touch.clientX - (lastMoveX.current || touch.clientX)) / dt; // px/ms
+                    // Smooth velocity so a single jittery frame doesn't spike the curve
+                    velocityPxPerMs.current = velocityPxPerMs.current * 0.7 + instVelocity * 0.3;
+                }
+                lastMoveTime.current = now;
+                lastMoveX.current = touch.clientX;
+
                 const video = videoRef.current;
                 if (video && video.duration) {
-                    const seekDelta = (dx / rect.width) * 120; // ±120s over full width
-                    const newTime = Math.max(0, Math.min(video.duration, dragStart.current.currentTime + seekDelta));
-                    video.currentTime = newTime;
+                    const distFactor = dx / rect.width; // -1..1 across full width
+                    const speedFactor = Math.min(3, Math.abs(velocityPxPerMs.current) * 8); // fast flings amplify the jump
+                    // Exponential-ish blend: base linear distance term (fine
+                    // control at low speed) plus a velocity-scaled term that
+                    // grows the jump on fast flings (coarse control).
+                    const seekDelta = distFactor * 90 + Math.sign(dx) * speedFactor * distFactor * 180;
+                    const targetTime = Math.max(0, Math.min(video.duration, dragStart.current.currentTime + seekDelta));
+
+                    // ── Swipe-to-cancel (doc Rule 3): drag down into the
+                    // bottom margin while seeking aborts back to the
+                    // pre-gesture timestamp.
+                    if (y > rect.height * 0.92 && !seekCancelled.current) {
+                        seekCancelled.current = true;
+                        video.currentTime = dragStart.current.currentTime;
+                        setOverlayState((s) => ({ ...s, seekCancelled: true, seekDir: "cancel" }));
+                        triggerSeek();
+                        return;
+                    }
+                    if (seekCancelled.current) return; // stay cancelled until finger lifts
+
+                    video.currentTime = targetTime;
                     setOverlayState((s) => ({
                         ...s,
                         seekDir: seekDelta >= 0 ? "forward" : "backward",
                         seekSec: Math.abs(Math.round(seekDelta)),
+                        seekTarget: targetTime,
+                        seekCancelled: false,
                     }));
                     triggerSeek();
                 }
             }
         },
-        [state.isLocked, containerRef, videoRef, actions, setOverlayState, triggerBrightness, triggerVolume, triggerSeek, applyZoom],
+        [state.isLocked, state.playbackSpeed, containerRef, videoRef, actions, setOverlayState, triggerBrightness, triggerVolume, triggerSeek, triggerSpeedBoost, applyZoom],
     );
 
     // ── Attach touch listeners ────────────────────────────────────────────────
@@ -564,6 +735,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             el.removeEventListener("touchstart", handleTouchStart);
             el.removeEventListener("touchend", handleTouchEnd);
             el.removeEventListener("touchmove", handleTouchMove);
+            clearTimeout(singleTapTimer.current);
         };
     }, [containerRef, handleTouchStart, handleTouchEnd, handleTouchMove]);
 

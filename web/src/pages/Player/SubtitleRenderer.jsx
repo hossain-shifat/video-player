@@ -13,14 +13,20 @@ function absoluteUrl(url) {
 }
 
 // ─── Parsers ─────────────────────────────────────────────────────────────────
-
-function srtTimeToSeconds(str) {
-    const clean = str.trim().replace(",", ".");
-    const parts = clean.split(":");
-    if (parts.length !== 3) return 0;
-    const [h, m, s] = parts;
-    return parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s);
-}
+//
+// NOTE on backend contract (server/controllers/streamController.js):
+//   - .srt  → server converts to WebVTT server-side (Content-Type: text/vtt,
+//             body starts with "WEBVTT"). This covers EVERY source: embedded
+//             (always extracted as webvtt via ffmpeg), external .srt files,
+//             and downloaded .srt files from SubSource.
+//   - .vtt  → served as-is (already WebVTT).
+//   - .ass / .ssa → served RAW, untouched (Content-Type: text/plain). This is
+//             the only format that reaches the client in its original form.
+//
+// So in practice the client almost always receives WebVTT regardless of the
+// original source extension — only .ass/.ssa needs client-side parsing of a
+// non-VTT format. Detection below trusts the actual response body over the
+// `ext` hint, since the server may convert .srt → vtt transparently.
 
 function vttTimeToSeconds(str) {
     const parts = str.trim().split(":");
@@ -43,28 +49,6 @@ function stripHtmlTags(str) {
 // Strip ASS/SSA override tags: {\an8}, {\b1}, etc.
 function stripAssTags(str) {
     return str.replace(/\{[^}]*\}/g, "").replace(/\\N/g, "\n");
-}
-
-function parseSRT(raw) {
-    const cues = [];
-    const blocks = raw.trim().split(/\n\s*\n/);
-    for (const block of blocks) {
-        const lines = block.trim().split("\n");
-        if (lines.length < 2) continue;
-        const timingIdx = lines.findIndex((l) => l.includes("-->"));
-        if (timingIdx < 0) continue;
-        const [startStr, endStr] = lines[timingIdx].split("-->").map((s) => s.trim());
-        const start = srtTimeToSeconds(startStr);
-        const end = srtTimeToSeconds(endStr);
-        const text = stripHtmlTags(
-            lines
-                .slice(timingIdx + 1)
-                .join("\n")
-                .trim(),
-        );
-        if (text) cues.push({ start, end, text });
-    }
-    return cues;
 }
 
 function parseVTT(raw) {
@@ -117,11 +101,9 @@ function parseASS(raw) {
 
         if (trimmed.toLowerCase().startsWith("dialogue:")) {
             const data = trimmed.replace(/^dialogue:\s*/i, "");
-            // Split by comma, but only up to formatOrder.length (text can contain commas)
             const parts = data.split(",");
             if (parts.length < formatOrder.length) continue;
 
-            // Rejoin text with commas beyond the format fields
             const fields = parts.slice(0, formatOrder.length - 1);
             const textPart = parts.slice(formatOrder.length - 1).join(",");
 
@@ -144,21 +126,56 @@ function parseASS(raw) {
     return cues.sort((a, b) => a.start - b.start);
 }
 
-function detectFormat(raw, ext) {
-    if (ext === ".vtt") return "vtt";
-    if (ext === ".ass" || ext === ".ssa") return "ass";
-    if (ext === ".srt") return "srt";
+/**
+ * Detects the actual format of the response body. The server normalizes
+ * .srt → WebVTT transparently, so the original file extension is NOT a
+ * reliable signal — always sniff the body first.
+ */
+function detectFormat(raw) {
     const trimmed = raw.trimStart();
     if (trimmed.startsWith("WEBVTT")) return "vtt";
-    if (trimmed.includes("[Script Info]") || trimmed.includes("[Events]")) return "ass";
-    return "srt";
+    if (trimmed.includes("[Script Info]") || trimmed.includes("[V4+ Styles]") || trimmed.includes("[Events]")) return "ass";
+    // Fallback: anything else is treated as VTT-shaped (the VTT parser
+    // tolerates a missing "WEBVTT" header line).
+    return "vtt";
 }
 
-function parseCues(raw, ext) {
-    const fmt = detectFormat(raw, ext);
-    if (fmt === "vtt") return parseVTT(raw);
-    if (fmt === "ass") return parseASS(raw);
-    return parseSRT(raw);
+function parseCues(raw) {
+    const fmt = detectFormat(raw);
+    return fmt === "ass" ? parseASS(raw) : parseVTT(raw);
+}
+
+// ─── Subtitle track list (embedded + external + downloaded) ─────────────────
+//
+// GET /api/media/:id/subtitles → { subtitles: [{ source, lang, label, ext,
+//   url, filename?, forced?, trackIndex?, codec? }] }
+//
+// `source` is one of: "embedded" | "external" | "downloaded"
+// Exposed via this hook so the player's settings/track-picker UI can list
+// and switch between all available subtitle tracks for a media item.
+
+function useSubtitleTracks(mediaId) {
+    const [tracks, setTracks] = useState([]);
+    const [loadingTracks, setLoadingTracks] = useState(false);
+
+    useEffect(() => {
+        if (!mediaId) {
+            setTracks([]);
+            return;
+        }
+        const ctrl = new AbortController();
+        setLoadingTracks(true);
+        fetch(absoluteUrl(`/api/media/${mediaId}/subtitles`), { signal: ctrl.signal })
+            .then((r) => r.json())
+            .then((data) => setTracks(data?.subtitles || []))
+            .catch((err) => {
+                if (err.name !== "AbortError") setTracks([]);
+            })
+            .finally(() => setLoadingTracks(false));
+        return () => ctrl.abort();
+    }, [mediaId]);
+
+    return { tracks, loadingTracks };
 }
 
 // ─── SubtitleRenderer ─────────────────────────────────────────────────────────
@@ -178,7 +195,6 @@ export default function SubtitleRenderer() {
             return;
         }
 
-        // Cancel previous fetch
         abortRef.current?.abort();
         const ctrl = new AbortController();
         abortRef.current = ctrl;
@@ -187,15 +203,7 @@ export default function SubtitleRenderer() {
         fetch(absoluteUrl(activeSubtitle.url), { signal: ctrl.signal })
             .then((r) => r.text())
             .then((raw) => {
-                // For embedded tracks the backend always returns WebVTT.
-                // Force 'vtt' extension so parseCues uses parseVTT regardless
-                // of missing .ext / .filename fields.
-                let ext = activeSubtitle.ext || activeSubtitle.filename?.match(/\.\w+$/)?.[0] || "";
-
-                if (!ext && activeSubtitle.source === "embedded") ext = ".vtt";
-                if (!ext && raw.trimStart().startsWith("WEBVTT")) ext = ".vtt";
-
-                setCues(parseCues(raw, ext.toLowerCase()));
+                setCues(parseCues(raw));
                 setLoading(false);
             })
             .catch((err) => {
@@ -224,8 +232,8 @@ export default function SubtitleRenderer() {
                 style={{
                     fontSize: `${subtitleFontSize || 20}px`,
                     color: subtitleColor || "#fff",
-                    background: `rgba(0,0,0,${subtitleBgOpacity ?? 0.72})`,
-                    textShadow: "0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.7)",
+                    // background: `rgba(0,0,0,${subtitleBgOpacity ?? 0.72})`,
+                    // textShadow: "0 1px 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.7)",
                 }}>
                 {activeCue.text.split("\n").map((line, i, arr) => (
                     <span key={i}>
@@ -237,3 +245,7 @@ export default function SubtitleRenderer() {
         </div>
     );
 }
+
+// Exported so the player's settings/track-picker UI can list all available
+// subtitle tracks (embedded/external/downloaded) for a given media item.
+export { useSubtitleTracks };

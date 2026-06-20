@@ -275,36 +275,54 @@ async function migrateHashDirs() {
     if (!_meta) await _loadMeta();
     let migrated = 0;
 
+    let dirs;
     try {
         await fsp.mkdir(SUB_DIR, { recursive: true });
-        const dirs = await fsp.readdir(SUB_DIR);
-        const hashDirs = dirs.filter((d) => OLD_HASH_RE.test(d));
-        if (hashDirs.length === 0) return;
+        dirs = await fsp.readdir(SUB_DIR);
+    } catch (err) {
+        console.warn("[SubtitleStore] migrateHashDirs: cannot read SUB_DIR:", err.message);
+        return;
+    }
 
-        // Build reverse map: hash → mediaId from current meta
-        // (old entries stored dirName as the hash)
-        const hashToMedia = new Map();
-        for (const [mediaId, entry] of Object.entries(_meta)) {
-            for (const dl of entry.downloaded || []) {
+    const hashDirs = dirs.filter((d) => OLD_HASH_RE.test(d));
+    if (hashDirs.length === 0) return;
+
+    // Without queue entries we have no title/type/season info to build the
+    // new readable path — skip migration this run, old dirs stay untouched
+    // (NOT deleted) and will be picked up once queue is populated.
+    if (_queueIndex.size === 0) {
+        console.log(`[SubtitleStore] migrateHashDirs: ${hashDirs.length} legacy dir(s) found but queue is empty — deferring migration`);
+        return;
+    }
+
+    // Build reverse map: hash → mediaId from current meta
+    const hashToMedia = new Map();
+    for (const [mediaId, entry] of Object.entries(_meta)) {
+        for (const dl of entry.downloaded || []) {
+            try {
                 const parts = dl.path.split(path.sep);
                 const idx = parts.indexOf("subtitles");
                 if (idx >= 0 && OLD_HASH_RE.test(parts[idx + 1])) {
                     hashToMedia.set(parts[idx + 1], { mediaId, entry });
                 }
+            } catch {
+                /* malformed path entry — skip */
             }
         }
+    }
 
-        for (const hashDir of hashDirs) {
+    for (const hashDir of hashDirs) {
+        try {
             const match = hashToMedia.get(hashDir);
             if (!match) {
-                // Orphan hash dir — remove
-                await fsp.rm(path.join(SUB_DIR, hashDir), { recursive: true, force: true });
+                // Orphan hash dir with no known owner — leave it alone rather
+                // than risk deleting subtitles we can't account for.
+                console.log(`[SubtitleStore] migrateHashDirs: unowned legacy dir "${hashDir}" — leaving as-is`);
                 continue;
             }
-            const { mediaId, entry } = match;
-            // We need the queue entry meta to build the new readable name
+            const { mediaId } = match;
             const queueEntry = _queueIndex.get(mediaId);
-            if (!queueEntry) continue;
+            if (!queueEntry) continue; // no metadata to build new name — skip this one, try next boot
 
             const resolved = resolveSubtitlePaths(mediaId, {
                 title: queueEntry.title,
@@ -317,28 +335,23 @@ async function migrateHashDirs() {
 
             const oldBase = path.join(SUB_DIR, hashDir);
             const newBase = resolved.baseDir;
-
             if (oldBase === newBase) continue;
 
-            try {
-                await fsp.mkdir(path.dirname(newBase), { recursive: true });
-                await fsp.rename(oldBase, newBase);
+            await fsp.mkdir(path.dirname(newBase), { recursive: true });
+            await fsp.rename(oldBase, newBase);
 
-                // Update paths in meta
-                for (const dl of _meta[mediaId]?.downloaded || []) {
-                    dl.path = dl.path.replace(oldBase, newBase);
-                }
-                migrated++;
-                console.log(`[SubtitleStore] Migrated: ${hashDir} → ${path.basename(newBase)}`);
-            } catch (err) {
-                console.warn(`[SubtitleStore] Migration failed for ${hashDir}:`, err.message);
+            for (const dl of _meta[mediaId]?.downloaded || []) {
+                dl.path = dl.path.replace(oldBase, newBase);
             }
+            migrated++;
+            console.log(`[SubtitleStore] Migrated: ${hashDir} → ${path.basename(newBase)}`);
+        } catch (err) {
+            // One bad entry must never abort migration for the rest
+            console.warn(`[SubtitleStore] Migration failed for "${hashDir}" (non-fatal):`, err.message);
         }
-
-        if (migrated > 0) await atomicWrite(META_FILE, _meta);
-    } catch (err) {
-        console.warn("[SubtitleStore] migrateHashDirs error:", err.message);
     }
+
+    if (migrated > 0) await atomicWrite(META_FILE, _meta);
 }
 
 // ─── Queue store ─────────────────────────────────────────────────────────────
@@ -351,12 +364,25 @@ async function _loadQueue() {
         _queue = [];
     }
     let changed = false;
+    let retried = 0;
     for (const e of _queue) {
         if (e.status === "downloading") {
             e.status = "pending";
             changed = true;
         }
+        // Items that exhausted their 3 attempts last run get a fresh start
+        // on every server boot — "failed" is never truly permanent, only
+        // permanent for the duration of a single run.
+        if (e.status === "failed") {
+            e.status = "pending";
+            e.attempts = 0;
+            e.lastError = null;
+            e.nextRetryAt = null;
+            changed = true;
+            retried++;
+        }
     }
+    if (retried > 0) console.log(`[SubtitleStore] Resetting ${retried} previously-failed item(s) for retry this run`);
     _queueIndex.clear();
     for (const e of _queue) _queueIndex.set(e.mediaId, e);
     if (changed) await atomicWrite(QUEUE_FILE, _queue);
@@ -454,12 +480,14 @@ async function enqueue(mediaId, meta = {}) {
 
 function dequeue() {
     if (!_queue) return null;
-    return _queue.find((e) => e.status === "pending") || null;
+    const now = Date.now();
+    return _queue.find((e) => e.status === "pending" && (!e.nextRetryAt || e.nextRetryAt <= now)) || null;
 }
 
 function markDownloading(entry) {
     entry.status = "downloading";
     entry.attempts++;
+    entry.nextRetryAt = null;
     _queueWriter.schedule();
 }
 
@@ -469,8 +497,24 @@ function markDone(entry) {
     _queueWriter.schedule();
 }
 
+// Max retry attempts within a single run before skipping to the next item.
+// After 3 failed attempts the item is marked "failed" and the worker moves
+// on — but "failed" entries are reset to "pending" again on next server
+// start (see _loadQueue) so they get a fresh 3 attempts every restart.
+const MAX_ATTEMPTS = 3;
+
 function markFailed(entry, error) {
-    entry.status = entry.attempts >= 3 ? "failed" : "pending";
+    if (entry.attempts >= MAX_ATTEMPTS) {
+        entry.status = "failed";
+        entry.nextRetryAt = null;
+        console.log(`[SubtitleStore] "${entry.title}" failed after ${entry.attempts} attempts — skipping (will retry on next server start)`);
+    } else {
+        entry.status = "pending";
+        // Short backoff so a broken item doesn't hog every tick before its
+        // 3 attempts are used up: attempt 1→ retry now, 2→ ~12s
+        const backoffMs = Math.min(entry.attempts * 12_000, 30_000);
+        entry.nextRetryAt = Date.now() + backoffMs;
+    }
     entry.lastError = error;
     _queueWriter.schedule();
 }
@@ -563,10 +607,26 @@ async function init() {
     await fsp.mkdir(SUB_DIR, { recursive: true });
     await _loadMeta();
     await _loadQueue();
-    await migrateHashDirs(); // one-time migration from old hash dirs
-    await scanExistingSubtitles(); // filesystem is source of truth
+
+    // Migration and disk-scan must NEVER abort startup — if either throws,
+    // log it and continue with whatever state we have. A failure here
+    // must not prevent the worker from finding pending queue items.
+    try {
+        await migrateHashDirs();
+    } catch (err) {
+        console.error("[SubtitleStore] migrateHashDirs failed (non-fatal):", err.message);
+    }
+
+    try {
+        await scanExistingSubtitles();
+    } catch (err) {
+        console.error("[SubtitleStore] scanExistingSubtitles failed (non-fatal):", err.message);
+    }
+
     const pending = _queue.filter((e) => e.status === "pending").length;
-    console.log(`[SubtitleStore] Ready: meta=${Object.keys(_meta).length} queue=${_queue.length} pending=${pending} available=${_available.size}`);
+    const failed = _queue.filter((e) => e.status === "failed").length;
+    const done = _queue.filter((e) => e.status === "done").length;
+    console.log(`[SubtitleStore] Ready: meta=${Object.keys(_meta).length} queue=${_queue.length} pending=${pending} done=${done} failed=${failed} available=${_available.size}`);
 }
 
 /**

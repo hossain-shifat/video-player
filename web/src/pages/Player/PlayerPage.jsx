@@ -400,6 +400,88 @@ function PlayerInner({ mediaId }) {
             });
     }, [isMobile, state.playing]);
 
+    // ── Manual screen rotation toggle (Screen Rotation icon) ──────────────────
+    // Default is locked landscape (set above + via auto-fullscreen). This lets
+    // the user manually flip to portrait without fighting that lock — tapping
+    // again returns to locked landscape. Exposed via containerRef like the
+    // other manual toggles (_toggleFullscreen, _togglePiP) so PlayerControls
+    // can call it without prop-drilling.
+    const isPortraitOverride = useRef(false);
+    const toggleManualRotation = useCallback(() => {
+        if (!screen.orientation?.lock) return; // unsupported — button still visually present, just inert
+        if (isPortraitOverride.current) {
+            screen.orientation.lock("landscape").catch(() => {});
+            isPortraitOverride.current = false;
+        } else {
+            screen.orientation.lock("portrait").catch(() => {});
+            isPortraitOverride.current = true;
+        }
+    }, []);
+
+    useEffect(() => {
+        const container = containerRef.current;
+        if (container) container._toggleRotation = toggleManualRotation;
+        return () => {
+            if (container) delete container._toggleRotation;
+        };
+    }, [toggleManualRotation]);
+
+    // ── A-B Repeat ──────────────────────────────────────────────────────────────
+    // Real loop: when active and both points are set, jump back to A every
+    // time playback crosses B. Implemented via timeupdate polling (cheap —
+    // timeupdate already fires ~4x/sec) rather than a separate interval.
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !state.abRepeat.active) return;
+        const { a, b } = state.abRepeat;
+        if (a == null || b == null || b <= a) return;
+        const onTimeUpdate = () => {
+            if (video.currentTime >= b) {
+                video.currentTime = a;
+            }
+        };
+        video.addEventListener("timeupdate", onTimeUpdate);
+        return () => video.removeEventListener("timeupdate", onTimeUpdate);
+    }, [state.abRepeat.active, state.abRepeat.a, state.abRepeat.b]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Background Play ─────────────────────────────────────────────────────────
+    // When enabled, don't let the browser/OS pause playback when the tab/app
+    // is backgrounded. Most mobile browsers auto-pause <video> on
+    // visibilitychange to save resources — when this is on, we explicitly
+    // re-call play() to override that. Audio continues even with screen off
+    // on most platforms once this fires. When disabled, let default behavior
+    // happen (don't fight the browser's own pause).
+    useEffect(() => {
+        if (!state.backgroundPlay) return;
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "hidden" && state.playing) {
+                videoRef.current?.play().catch(() => {});
+            }
+        };
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    }, [state.backgroundPlay, state.playing]);
+
+    // ── Sleep Timer ──────────────────────────────────────────────────────────────
+    // Icon-only for now (per product decision) — sleepTimerEndsAt is tracked
+    // in state but nothing currently sets it from the UI, so this effect is
+    // dormant until that's wired up. Left in place so turning the UI on later
+    // is a pure UI change with no logic to add.
+    useEffect(() => {
+        if (!state.sleepTimerEndsAt) return;
+        const msLeft = state.sleepTimerEndsAt - Date.now();
+        if (msLeft <= 0) {
+            actions.setPlaying(false);
+            actions.setSleepTimer(null);
+            return;
+        }
+        const t = setTimeout(() => {
+            actions.setPlaying(false);
+            actions.setSleepTimer(null);
+        }, msLeft);
+        return () => clearTimeout(t);
+    }, [state.sleepTimerEndsAt, actions]);
+
     // ── Progress tracking ─────────────────────────────────────────────────────
     const progressProps = useProgress({
         mediaId,

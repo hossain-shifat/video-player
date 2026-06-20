@@ -831,19 +831,19 @@ export default function MediaDetails() {
                                 <div className="flex flex-wrap items-center gap-2 mb-3">
                                     {ratings.imdb != null && (
                                         <div className="flex items-center gap-1.5 px-2.5 py-1 no-underline transition-colors">
-                                            <img src={assets.imdbIcon} className="w-4 md:w-6" alt="IMDb Icon" />
+                                            <img src={assets.imdbIcon} className="w-6" alt="IMDb Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#f5c518]">{ratings.imdb}</span>
                                         </div>
                                     )}
                                     {ratings.rottenTomatoes && (
                                         <div className="flex items-center gap-1.5 px-2.5 py-1">
-                                            <img src={assets.rottenTomatoes} className="w-4 md:w-4" alt="Rotten Tomatoes Icon" />
+                                            <img src={assets.rottenTomatoes} className="w-4.5" alt="Rotten Tomatoes Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#fa320a]">{ratings.rottenTomatoes}</span>
                                         </div>
                                     )}
                                     {ratings.tmdb != null && (
                                         <div className="flex items-center gap-1.5 rounded-full px-2.5 py-1">
-                                            <img src={assets.tmdbIcon} className="w-4 md:w-6" alt="TMDB Icon" />
+                                            <img src={assets.tmdbIcon} className="w-6" alt="TMDB Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#01b4e4]">{ratings.tmdb}</span>
                                         </div>
                                     )}

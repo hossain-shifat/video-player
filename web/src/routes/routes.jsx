@@ -32,6 +32,7 @@ import DashLibraries from "../dashboard/pages/DashLibraries";
 import DashMedia from "../dashboard/pages/DashMedia";
 import DashJobs from "../dashboard/pages/DashJobs";
 import DashUploads from "../dashboard/pages/DashUploads";
+import DashIPTV from "../dashboard/pages/DashIPTV";
 
 export const router = createBrowserRouter([
     {
@@ -56,6 +57,7 @@ export const router = createBrowserRouter([
             { path: "health", Component: DashHealth },
             { path: "logs", Component: DashLogs },
             { path: "libraries", Component: DashLibraries },
+            { path: "iptv", Component: DashIPTV },
             { path: "media", Component: DashMedia },
             { path: "jobs", Component: DashJobs },
             { path: "uploads", Component: DashUploads },

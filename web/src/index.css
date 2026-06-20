@@ -707,12 +707,12 @@ body {
     text-align: center;
     padding: 6px 14px;
     border-radius: 8px;
-    background: rgba(0, 0, 0, 0.72);
+    /* background: rgba(0, 0, 0, 0.72); */
     color: #fff;
     line-height: 1.5;
-    text-shadow:
+    /* text-shadow:
         0 1px 4px rgba(0, 0, 0, 0.95),
-        0 0 12px rgba(0, 0, 0, 0.7);
+        0 0 12px rgba(0, 0, 0, 0.7); */
     white-space: pre-wrap;
     overflow-wrap: break-word;
     font-family:

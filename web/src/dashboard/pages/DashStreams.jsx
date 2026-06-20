@@ -18,15 +18,19 @@ export default function DashStreams() {
     const [loading, setLoading] = useState(true);
     const [confirm, setConfirm] = useState(null);
     const [stopping, setStopping] = useState(false);
-    const [error, setError]   = useState(null);
+    const [error, setError] = useState(null);
 
     const load = useCallback(async () => {
-        setLoading(true); setError(null);
+        setLoading(true);
+        setError(null);
         try {
             const data = await dashApi.streams();
             setStreams(data.streams || []);
-        } catch (err) { setError(err.message); }
-        finally { setLoading(false); }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
     useEffect(() => {
@@ -42,8 +46,11 @@ export default function DashStreams() {
             await dashApi.stopStream(confirm);
             setTimeout(load, 500);
             setConfirm(null);
-        } catch (err) { setError(err.message); }
-        finally { setStopping(false); }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setStopping(false);
+        }
     }
 
     return (
@@ -60,10 +67,16 @@ export default function DashStreams() {
                 </button>
             </div>
 
-            {error && <div className="alert alert-error"><span>{error}</span></div>}
+            {error && (
+                <div className="alert alert-error">
+                    <span>{error}</span>
+                </div>
+            )}
 
             {loading && !streams.length ? (
-                <div className="flex justify-center py-20"><span className="loading loading-spinner loading-md text-primary" /></div>
+                <div className="flex justify-center py-20">
+                    <span className="loading loading-spinner loading-md text-primary" />
+                </div>
             ) : streams.length === 0 ? (
                 <div className="card bg-base-200 shadow-sm">
                     <div className="card-body items-center text-center py-16 gap-3">
@@ -78,7 +91,12 @@ export default function DashStreams() {
                         <table className="table table-sm">
                             <thead>
                                 <tr className="text-base-content/40 text-xs uppercase tracking-wider">
-                                    <th>Session</th><th>Media</th><th>Position</th><th>Started</th><th>Status</th><th></th>
+                                    <th>Session</th>
+                                    <th>Media</th>
+                                    <th>Position</th>
+                                    <th>Started</th>
+                                    <th>Status</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -89,29 +107,26 @@ export default function DashStreams() {
                                             <td>
                                                 <div className="flex items-center gap-2">
                                                     <span className="w-2 h-2 rounded-full bg-success animate-pulse inline-block" />
-                                                    <span className="font-mono text-xs text-base-content/50">{id.slice(0,14)}…</span>
+                                                    <span className="font-mono text-xs text-base-content/50">{id.slice(0, 14)}…</span>
                                                 </div>
                                             </td>
                                             <td className="max-w-xs">
                                                 <p className="text-sm text-base-content/70 truncate">{s.filePath || s.mediaPath || "Unknown"}</p>
                                             </td>
                                             <td className="text-base-content/50 text-xs">
-                                                {s.downloadPositionSec != null
-                                                    ? `${Math.floor(s.downloadPositionSec/60)}m ${Math.floor(s.downloadPositionSec%60)}s`
-                                                    : "—"}
+                                                {s.downloadPositionSec != null ? `${Math.floor(s.downloadPositionSec / 60)}m ${Math.floor(s.downloadPositionSec % 60)}s` : "—"}
                                             </td>
                                             <td className="text-base-content/35 text-xs">
                                                 <div className="flex items-center gap-1">
-                                                    <Clock size={10}/>{fmtRelTime(s.startedAt)}
+                                                    <Clock size={10} />
+                                                    {fmtRelTime(s.startedAt)}
                                                 </div>
                                             </td>
-                                            <td><span className="badge badge-xs badge-success">Live</span></td>
                                             <td>
-                                                <button
-                                                    onClick={() => setConfirm(id)}
-                                                    className="btn btn-ghost btn-xs text-error hover:bg-error/10"
-                                                    title="Stop stream"
-                                                >
+                                                <span className="badge badge-xs badge-success">Live</span>
+                                            </td>
+                                            <td>
+                                                <button onClick={() => setConfirm(id)} className="btn btn-ghost btn-xs text-error hover:bg-error/10" title="Stop stream">
                                                     <Square size={13} />
                                                 </button>
                                             </td>
