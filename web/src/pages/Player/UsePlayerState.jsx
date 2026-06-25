@@ -36,13 +36,15 @@ const initialState = {
     // ── New mobile control-bar features ────────────────────────────────────
     shuffle: false, // shuffle next-up queue (no-op without a queue, toggle only for now)
     sleepTimerEndsAt: null, // epoch ms when playback should auto-pause, or null = off
+    sleepTimerPlayToEnd: false, // "Play last media to the end" — if true, don't hard-cut at the timer; wait for the current video to naturally end first
     abRepeat: { a: null, b: null, active: false }, // A-B repeat points in seconds
     backgroundPlay: false, // keep audio playing if tab/app backgrounded
     nightMode: false, // placeholder toggle, no visual effect yet (per product decision)
-    eqEnabled: false, // placeholder toggle, no audio DSP yet (per product decision)
+    eqEnabled: false, // master on/off — when false, VideoCore applies 0 gain on all bands regardless of stored values
+    eqBands: { bass: 0, mid: 0, treble: 0 }, // dB, range -12..+12 each
     // Which 5 icons show in the collapsed mobile row before the chevron;
     // order also defines "Customise Items" drag-reorder result.
-    quickIconOrder: ["nightMode", "customise", "shuffle", "loop", "mute"],
+    quickIconOrder: ["eq", "speed", "pip", "audioFx", "rotation"],
     volumeBoost: 1, // 1.0-2.0 — software gain multiplier on top of native volume, doc: "Volume Boost up to 200%"
 };
 
@@ -81,10 +83,12 @@ export const A = {
     RESET: "RESET",
     TOGGLE_SHUFFLE: "TOGGLE_SHUFFLE",
     SET_SLEEP_TIMER: "SET_SLEEP_TIMER",
+    TOGGLE_SLEEP_PLAY_TO_END: "TOGGLE_SLEEP_PLAY_TO_END",
     SET_AB_REPEAT: "SET_AB_REPEAT",
     TOGGLE_BACKGROUND_PLAY: "TOGGLE_BACKGROUND_PLAY",
     TOGGLE_NIGHT_MODE: "TOGGLE_NIGHT_MODE",
     TOGGLE_EQ: "TOGGLE_EQ",
+    SET_EQ_BANDS: "SET_EQ_BANDS",
     SET_QUICK_ICON_ORDER: "SET_QUICK_ICON_ORDER",
     SET_VOLUME_BOOST: "SET_VOLUME_BOOST",
 };
@@ -168,6 +172,8 @@ function playerReducer(state, action) {
             return { ...state, shuffle: !state.shuffle };
         case A.SET_SLEEP_TIMER:
             return { ...state, sleepTimerEndsAt: action.payload };
+        case A.TOGGLE_SLEEP_PLAY_TO_END:
+            return { ...state, sleepTimerPlayToEnd: !state.sleepTimerPlayToEnd };
         case A.SET_AB_REPEAT:
             return { ...state, abRepeat: { ...state.abRepeat, ...action.payload } };
         case A.TOGGLE_BACKGROUND_PLAY:
@@ -176,6 +182,10 @@ function playerReducer(state, action) {
             return { ...state, nightMode: !state.nightMode };
         case A.TOGGLE_EQ:
             return { ...state, eqEnabled: !state.eqEnabled };
+        case A.SET_EQ_BANDS: {
+            const clamp = (v) => Math.max(-12, Math.min(12, v));
+            return { ...state, eqBands: { ...state.eqBands, ...Object.fromEntries(Object.entries(action.payload).map(([k, v]) => [k, clamp(v)])) } };
+        }
         case A.SET_QUICK_ICON_ORDER:
             return { ...state, quickIconOrder: action.payload };
         case A.SET_VOLUME_BOOST:
@@ -231,10 +241,12 @@ export function PlayerProvider({ children }) {
     const reset = useCallback(() => dispatch({ type: A.RESET }), []);
     const toggleShuffle = useCallback(() => dispatch({ type: A.TOGGLE_SHUFFLE }), []);
     const setSleepTimer = useCallback((v) => dispatch({ type: A.SET_SLEEP_TIMER, payload: v }), []);
+    const toggleSleepPlayToEnd = useCallback(() => dispatch({ type: A.TOGGLE_SLEEP_PLAY_TO_END }), []);
     const setAbRepeat = useCallback((v) => dispatch({ type: A.SET_AB_REPEAT, payload: v }), []);
     const toggleBackgroundPlay = useCallback(() => dispatch({ type: A.TOGGLE_BACKGROUND_PLAY }), []);
     const toggleNightMode = useCallback(() => dispatch({ type: A.TOGGLE_NIGHT_MODE }), []);
     const toggleEq = useCallback(() => dispatch({ type: A.TOGGLE_EQ }), []);
+    const setEqBands = useCallback((v) => dispatch({ type: A.SET_EQ_BANDS, payload: v }), []);
     const setQuickIconOrder = useCallback((v) => dispatch({ type: A.SET_QUICK_ICON_ORDER, payload: v }), []);
     const setVolumeBoost = useCallback((v) => dispatch({ type: A.SET_VOLUME_BOOST, payload: v }), []);
 
@@ -274,10 +286,12 @@ export function PlayerProvider({ children }) {
             reset,
             toggleShuffle,
             setSleepTimer,
+            toggleSleepPlayToEnd,
             setAbRepeat,
             toggleBackgroundPlay,
             toggleNightMode,
             toggleEq,
+            setEqBands,
             setQuickIconOrder,
             setVolumeBoost,
         }),
@@ -316,10 +330,12 @@ export function PlayerProvider({ children }) {
             reset,
             toggleShuffle,
             setSleepTimer,
+            toggleSleepPlayToEnd,
             setAbRepeat,
             toggleBackgroundPlay,
             toggleNightMode,
             toggleEq,
+            setEqBands,
             setQuickIconOrder,
             setVolumeBoost,
         ],

@@ -299,6 +299,7 @@ function ModalHeader({ title, subtitle, icon: Icon, iconCls = "text-primary", on
             {badge}
             <button
                 onClick={onClose}
+                aria-label="Close"
                 className="w-7 h-7 rounded-md flex items-center justify-center text-white/35 border-none
                     hover:text-white hover:bg-white/8 transition-all shrink-0 cursor-pointer">
                 <X size={14} strokeWidth={2} />
@@ -333,7 +334,7 @@ function FieldRow({ label, value }) {
 
 function StatCard({ icon: Icon, label, value, sub, iconCls = "text-primary", bgCls = "bg-primary/10" }) {
     return (
-        <div className="bg-base-200/40 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5 hover:border-white/10 transition-colors">
+        <div className="bg-base-200 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5 hover:border-white/10 transition-colors">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${bgCls} ${iconCls}`}>
                 <Icon size={18} strokeWidth={1.8} />
             </div>
@@ -382,7 +383,7 @@ function EmptyState({ search, statusFilter, onClear }) {
     const hasFilter = search || statusFilter;
     return (
         <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-base-200/60 flex items-center justify-center mb-4 border border-white/6">
+            <div className="w-14 h-14 rounded-2xl bg-base-200 flex items-center justify-center mb-4 border border-white/6">
                 <Users size={22} className="text-white/25" />
             </div>
             <p className="text-base font-bold text-white/50">{hasFilter ? "No users match your filters" : "No users found"}</p>
@@ -535,6 +536,7 @@ function InfoModal({ user, onClose }) {
                 </div>
                 <button
                     onClick={onClose}
+                    aria-label="Close"
                     className="w-7 h-7 rounded-md flex items-center justify-center text-white/30 border-none
                         hover:text-white hover:bg-white/8 transition-all cursor-pointer shrink-0 self-start mt-0.5">
                     <X size={14} strokeWidth={2} />
@@ -542,10 +544,9 @@ function InfoModal({ user, onClose }) {
             </div>
 
             {/* ── Stats bar ── */}
-            <div className="grid grid-cols-3 divide-x divide-white/6 bg-base-200/50 border-b border-white/6">
+            <div className="grid grid-cols-2 divide-x divide-white/6 bg-base-200 border-b border-white/6">
                 {[
                     { label: "Sessions", val: user._count?.sessions ?? active.length, cls: "text-primary" },
-                    { label: "Watched", val: user._count?.watchHistory ?? 0, cls: "text-info" },
                     { label: "Last seen", val: lastMs ? fmtRel(lastMs) : "—", cls: "text-white/70" },
                 ].map(({ label, val, cls }) => (
                     <div key={label} className="flex flex-col items-center py-2.5 px-2">
@@ -560,7 +561,7 @@ function InfoModal({ user, onClose }) {
                 {/* Account section */}
                 <div className="px-4 pt-4 pb-0">
                     <Section label="Account" icon={User} iconCls="text-primary/60">
-                        <div className="bg-base-200/60 rounded-md border border-white/6 px-1">
+                        <div className="bg-base-200 rounded-md border border-white/6 px-1">
                             <FieldRow label="User ID" value={<span className="font-mono text-[10px] text-white/50">{user.id.slice(0, 18)}…</span>} />
                             <FieldRow
                                 label="Verified"
@@ -575,7 +576,7 @@ function InfoModal({ user, onClose }) {
                 {/* Access section */}
                 <div className="px-4 pt-4 pb-0">
                     <Section label="Access" icon={Shield} iconCls="text-accent/60">
-                        <div className="bg-base-200/60 rounded-md border border-white/6 px-1">
+                        <div className="bg-base-200 rounded-md border border-white/6 px-1">
                             <FieldRow label="Type" value={<span className="capitalize">{user.accessType || "Permanent"}</span>} />
                             {user.accessType === "temporary" && <FieldRow label="Expires" value={<span className={expired ? "text-error font-bold" : ""}>{fmtDate(user.accessExpiresAt)}</span>} />}
                             <FieldRow
@@ -593,7 +594,7 @@ function InfoModal({ user, onClose }) {
                         {sessLoading ? (
                             <div className="space-y-1.5">
                                 {[1, 2].map((i) => (
-                                    <div key={i} className="flex gap-3 items-center px-3 py-2.5 rounded-md bg-base-200/60 border border-white/5">
+                                    <div key={i} className="flex gap-3 items-center px-3 py-2.5 rounded-md bg-base-200 border border-white/5">
                                         <div className="w-7 h-7 rounded-md bg-white/5 animate-pulse shrink-0" />
                                         <div className="flex-1 space-y-1.5">
                                             <div className="h-2.5 w-28 bg-white/5 rounded animate-pulse" />
@@ -603,7 +604,7 @@ function InfoModal({ user, onClose }) {
                                 ))}
                             </div>
                         ) : active.length === 0 ? (
-                            <div className="flex items-center gap-2.5 px-3 py-3 rounded-md border border-dashed border-white/8 bg-base-200/30">
+                            <div className="flex items-center gap-2.5 px-3 py-3 rounded-md border border-dashed border-white/8 bg-base-200">
                                 <WifiOff size={14} className="text-white/20 shrink-0" />
                                 <p className="text-xs text-white/35">No active sessions</p>
                             </div>
@@ -613,7 +614,7 @@ function InfoModal({ user, onClose }) {
                                     <div
                                         key={s.id}
                                         className="flex items-center gap-3 px-3 py-2.5 rounded-md
-                                        bg-base-200/60 border border-white/6 hover:border-white/10 transition-colors">
+                                        bg-base-200 border border-white/6 hover:border-white/10 transition-colors">
                                         <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">{deviceIcon(s.userAgent ?? "")}</div>
                                         <div className="flex-1 min-w-0">
                                             <p className="text-xs font-semibold text-white truncate">{[s.browser, s.os].filter(Boolean).join(" · ") || s.userAgent || "Unknown Device"}</p>
@@ -659,6 +660,7 @@ function RequestModal({ user, onClose, onSave }) {
     const [status, setStatus] = useState("pending");
     const [accessType, setAccessType] = useState("permanent");
     const [duration, setDuration] = useState(30);
+    const [durationTouched, setDurationTouched] = useState(false);
     const [saving, setSaving] = useState(false);
     const [dirty, setDirty] = useState(false);
 
@@ -667,6 +669,8 @@ function RequestModal({ user, onClose, onSave }) {
         setRole(user.role || "user");
         setStatus(user.status || "pending");
         setAccessType(user.accessType || "permanent");
+        setDuration(30);
+        setDurationTouched(false);
         setDirty(false);
     }, [user?.id]);
 
@@ -681,11 +685,22 @@ function RequestModal({ user, onClose, onSave }) {
     async function handleSave() {
         setSaving(true);
         try {
-            let accessExpiresAt = null;
+            const originalAccessType = user.accessType || "permanent";
+            const changedToTemporary = accessType === "temporary" && originalAccessType !== "temporary";
+
+            let accessExpiresAt = user.accessExpiresAt ?? null;
             if (accessType === "temporary") {
-                const d = new Date();
-                d.setDate(d.getDate() + duration);
-                accessExpiresAt = d.toISOString();
+                // Only recompute the expiry if access just became temporary, or the
+                // user explicitly picked a new duration — otherwise leave the
+                // existing expiry untouched so unrelated edits (role/status) don't
+                // silently extend/shorten it.
+                if (changedToTemporary || durationTouched) {
+                    const d = new Date();
+                    d.setDate(d.getDate() + duration);
+                    accessExpiresAt = d.toISOString();
+                }
+            } else {
+                accessExpiresAt = null;
             }
             await onSave(user, { role, status, accessType, accessExpiresAt });
             onClose();
@@ -720,7 +735,7 @@ function RequestModal({ user, onClose, onSave }) {
             {/* scrollable body */}
             <div className="hs overflow-y-auto" style={{ maxHeight: "calc(min(65vh, 440px))" }}>
                 {/* user identity */}
-                <div className="flex items-center gap-3 mx-4 mt-4 px-3 py-2.5 rounded-md bg-base-200/60 border border-white/[0.07]">
+                <div className="flex items-center gap-3 mx-4 mt-4 px-3 py-2.5 rounded-md bg-base-200 border border-white/[0.07]">
                     <Avatar user={user} size="sm" />
                     <div className="flex-1 min-w-0">
                         <p className="text-xs font-bold text-white truncate">{user.name || "Unnamed"}</p>
@@ -740,7 +755,7 @@ function RequestModal({ user, onClose, onSave }) {
                             <select
                                 value={status}
                                 onChange={(e) => mark(() => setStatus(e.target.value))}
-                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200/60 border border-white/9
+                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200 border border-white/9
                                     text-sm font-semibold text-white cursor-pointer
                                     focus:outline-none focus:border-primary/40 transition-colors
                                     hover:border-white/15">
@@ -777,7 +792,7 @@ function RequestModal({ user, onClose, onSave }) {
                             <select
                                 value={role}
                                 onChange={(e) => mark(() => setRole(e.target.value))}
-                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200/60 border border-white/9
+                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200 border border-white/9
                                     text-sm font-semibold text-white cursor-pointer
                                     focus:outline-none focus:border-primary/40 transition-colors
                                     hover:border-white/15">
@@ -798,7 +813,7 @@ function RequestModal({ user, onClose, onSave }) {
                             <Clock size={10} strokeWidth={2.5} className="text-info/55" /> Access Duration
                             <div className="flex-1 h-px bg-white/5" />
                         </label>
-                        <div className="flex p-0.5 bg-base-200/60 rounded-md border border-white/9 gap-0.5">
+                        <div className="flex p-0.5 bg-base-200 rounded-md border border-white/9 gap-0.5">
                             {["permanent", "temporary"].map((t) => (
                                 <button
                                     key={t}
@@ -816,9 +831,14 @@ function RequestModal({ user, onClose, onSave }) {
                                     <button
                                         key={days}
                                         type="button"
-                                        onClick={() => mark(() => setDuration(days))}
+                                        onClick={() =>
+                                            mark(() => {
+                                                setDuration(days);
+                                                setDurationTouched(true);
+                                            })
+                                        }
                                         className={`py-2 rounded text-xs font-bold transition-all border cursor-pointer
-                                            ${duration === days ? "bg-accent/15 text-accent border-accent/30" : "bg-base-200/40 text-white/40 border-white/8 hover:text-white"}`}>
+                                            ${duration === days ? "bg-accent/15 text-accent border-accent/30" : "bg-base-200 text-white/40 border-white/8 hover:text-white"}`}>
                                         {label}
                                     </button>
                                 ))}
@@ -835,7 +855,7 @@ function RequestModal({ user, onClose, onSave }) {
             </div>
 
             {/* footer */}
-            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200/30">
+            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200">
                 <button
                     type="button"
                     onClick={onClose}
@@ -881,9 +901,13 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
             /* ignore */
         }
         setAllowAdult(parsed?.allowAdult ?? false);
+        // Backend contract: parsed.libraries is an array of granted library IDs
+        // (an empty/missing array means no access). Default missing entries to
+        // false — explicit grants only.
+        const grantedIds = Array.isArray(parsed?.libraries) ? parsed.libraries : [];
         const map = {};
         libraries.forEach((l) => {
-            map[l.id] = parsed?.libraries?.[l.id] ?? true;
+            map[l.id] = grantedIds.includes(l.id);
         });
         setLibPerms(map);
         setDirty(false);
@@ -901,7 +925,12 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
     async function handleSave() {
         setSaving(true);
         try {
-            const permissions = { libraries: libPerms, allowAdult };
+            // Convert the internal {id: bool} toggle map into the array
+            // contract the backend expects — only the granted IDs.
+            const libraryIds = Object.entries(libPerms)
+                .filter(([, granted]) => granted)
+                .map(([id]) => id);
+            const permissions = { libraries: libraryIds, allowAdult };
             const permissionsJson = JSON.stringify(permissions);
             // keep role/status/accessType unchanged — only permissions updated here
             await onSave(user, { allowAdult, permissions, permissionsJson });
@@ -931,7 +960,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
             <div className="hs overflow-y-auto" style={{ maxHeight: "calc(min(65vh, 460px))" }}>
                 <div className="px-4 pt-4 pb-4 space-y-4">
                     {/* user identity */}
-                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-md bg-base-200/60 border border-white/[0.07]">
+                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-md bg-base-200 border border-white/[0.07]">
                         <Avatar user={user} size="sm" />
                         <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold text-white truncate">{user.name || "Unnamed"}</p>
@@ -949,7 +978,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                         </div>
                         <div
                             className={`flex items-center justify-between px-3 py-3 rounded-md border transition-colors
-                            ${allowAdult ? "bg-warning/5 border-warning/20" : "bg-base-200/60 border-white/8"}`}>
+                            ${allowAdult ? "bg-warning/5 border-warning/20" : "bg-base-200 border-white/8"}`}>
                             <div className="flex items-center gap-3">
                                 <div
                                     className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0
@@ -1001,7 +1030,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
                             </div>
 
                             {libraries.length > 5 && (
-                                <div className="flex items-center gap-2 bg-base-200/60 rounded-md px-2.5 py-2 border border-white/8">
+                                <div className="flex items-center gap-2 bg-base-200 rounded-md px-2.5 py-2 border border-white/8">
                                     <Search size={11} className="text-white/35 shrink-0" />
                                     <input
                                         value={libSearch}
@@ -1014,12 +1043,12 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
 
                             <div className="space-y-1">
                                 {filteredLibs.map((lib) => {
-                                    const on = libPerms[lib.id] ?? true;
+                                    const on = libPerms[lib.id] ?? false;
                                     return (
                                         <div
                                             key={lib.id}
                                             className={`flex items-center gap-3 px-3 py-2.5 rounded-md border transition-colors
-                                                ${on ? "bg-primary/4 border-primary/12" : "bg-base-200/40 border-white/[0.07]"}`}>
+                                                ${on ? "bg-primary/4 border-primary/12" : "bg-base-200 border-white/[0.07]"}`}>
                                             <div
                                                 className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0
                                                 ${on ? "bg-primary/15 text-primary" : "bg-white/5 text-white/25"}`}>
@@ -1040,7 +1069,7 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
             </div>
 
             {/* footer */}
-            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200/30">
+            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200">
                 <button
                     type="button"
                     onClick={onClose}
@@ -1075,7 +1104,7 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
         <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
             <table className="w-full table-auto border-collapse" style={{ minWidth: 720 }}>
                 <thead>
-                    <tr className="text-[11px] font-black uppercase tracking-wider text-white/40 bg-base-200/40 border-b border-white/6">
+                    <tr className="text-[11px] font-black uppercase tracking-wider text-white/40 bg-base-200 border-b border-white/6">
                         <th className="py-3 px-4 text-left">User</th>
                         <th className="py-3 px-3 text-left">Role</th>
                         <th className="py-3 px-3 text-left">Status</th>
@@ -1369,7 +1398,7 @@ export default function DashUsers() {
             ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {Array.from({ length: 4 }).map((_, i) => (
-                        <div key={i} className="bg-base-200/40 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5">
+                        <div key={i} className="bg-base-200 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5">
                             <Skeleton className="w-10 h-10 rounded-lg" />
                             <div className="space-y-2 flex-1">
                                 <Skeleton className="h-5 w-12" />
@@ -1412,7 +1441,7 @@ export default function DashUsers() {
             {/* ── Toolbar ─────────────────────────────────────────────────── */}
             <div className="space-y-2">
                 {/* Search */}
-                <div className="flex items-center gap-2 bg-base-100 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
+                <div className="flex items-center gap-2 bg-base-200 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
                     <Search size={15} className="text-white/35 shrink-0" />
                     <input
                         value={search}
@@ -1428,7 +1457,7 @@ export default function DashUsers() {
                 </div>
 
                 {/* Status tabs */}
-                <div className="flex bg-base-200/30 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
+                <div className="flex bg-base-200 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
                     {STATUS_TABS.map((t) => (
                         <button
                             key={t.v}
@@ -1443,7 +1472,7 @@ export default function DashUsers() {
             </div>
 
             {/* ── Table card ──────────────────────────────────────────────── */}
-            <div className="bg-base-100 rounded-xl overflow-hidden border border-white/6 shadow-sm">
+            <div className="bg-base-200 rounded-xl overflow-hidden border border-white/6 shadow-sm">
                 {loading ? (
                     <TableSkeleton />
                 ) : users.length === 0 ? (

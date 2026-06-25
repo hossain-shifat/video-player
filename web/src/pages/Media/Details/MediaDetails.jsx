@@ -678,7 +678,9 @@ export default function MediaDetails() {
      * encodeURIComponent so React Router gets a clean single-segment param.
      */
     const handlePlayMovie = () => {
-        navigate(`/player/${encodeURIComponent(decodedId)}`);
+        navigate(`/player/${encodeURIComponent(decodedId)}`, {
+            state: resumePos != null ? { knownResumePosition: resumePos } : undefined,
+        });
     };
 
     /**

@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { useParams, useNavigate } from "react-router";
+import { useParams, useNavigate, useLocation } from "react-router";
 import { PlayerProvider, usePlayerState } from "./UsePlayerState";
 import VideoCore from "./VideoCore";
 import PlayerControls from "./PlayerControls";
@@ -13,9 +13,25 @@ import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream
 import { useAuth } from "../../auth/AuthContext";
 import { useIsMobile } from "./useIsMobile";
 
+// ─── Mobile playback init state machine ──────────────────────────────────────
+// Module-scope constant (stable reference, never recreated) so effects that
+// depend on it don't churn every render.
+const INIT_PHASE = {
+    IDLE: "IDLE",
+    LOADING_MEDIA: "LOADING_MEDIA",
+    METADATA_READY: "METADATA_READY",
+    BUFFERING: "BUFFERING",
+    SEEKING: "SEEKING",
+    SEEK_COMPLETE: "SEEK_COMPLETE",
+    LANDSCAPE_READY: "LANDSCAPE_READY",
+    FULLSCREEN_READY: "FULLSCREEN_READY",
+    FIRST_FRAME_READY: "FIRST_FRAME_READY",
+    PLAYING: "PLAYING",
+};
+
 // ─── PlayerInner (inside PlayerProvider) ─────────────────────────────────────
 
-function PlayerInner({ mediaId }) {
+function PlayerInner({ mediaId, knownResumePosition }) {
     const navigate = useNavigate();
     const isMobile = useIsMobile();
     const containerRef = useRef(null);
@@ -32,6 +48,30 @@ function PlayerInner({ mediaId }) {
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
+
+    // ── Mobile init state machine (per explicit spec) ───────────────────────────
+    // IDLE → LOADING_MEDIA → METADATA_READY → BUFFERING → SEEKING (resume only)
+    // → SEEK_COMPLETE → LANDSCAPE_READY → FULLSCREEN_READY → FIRST_FRAME_READY
+    // → PLAYING. Each stage completes before the next begins. Desktop/tablet
+    // skip straight through LANDSCAPE_READY/FULLSCREEN_READY (no-ops there) —
+    // this entire pipeline only changes MOBILE behavior, matching "implement
+    // this only on mobile devices, desktop/tablet unchanged" explicitly.
+    const [initPhase, setInitPhase] = useState(INIT_PHASE.IDLE);
+    // Ref mirror so synchronous callbacks (event handlers) can read the
+    // current phase without a stale closure — state alone would lag by one
+    // render in a callback captured earlier in the same tick.
+    const initPhaseRef = useRef(INIT_PHASE.IDLE);
+    const advancePhase = useCallback((next) => {
+        initPhaseRef.current = next;
+        setInitPhase(next);
+    }, []);
+    // Reset the pipeline to IDLE for every new video (mediaId changes) —
+    // key={mediaId} on the outer wrapper already forces a full remount, so
+    // this mainly documents intent / guards against any future change that
+    // removes the key.
+    useEffect(() => {
+        advancePhase(INIT_PHASE.IDLE);
+    }, [mediaId, advancePhase]);
 
     // ── Media + stream state ──────────────────────────────────────────────────
     const [mediaInfo, setMediaInfo] = useState(null);
@@ -123,8 +163,13 @@ function PlayerInner({ mediaId }) {
     const PHASE = { HIDDEN: "HIDDEN", ANIMATING_IN: "ANIMATING_IN", VISIBLE: "VISIBLE", ANIMATING_OUT: "ANIMATING_OUT" };
     const [controlsPhase, setControlsPhase] = useState(PHASE.VISIBLE);
     const animTimer = useRef(null);
-    const HIDE_DELAY = 3000; // doc section 3: 3 seconds
-    const FADE_MS = 200; // doc section 10: 150-250ms
+    const HIDE_DELAY = 3000; // spec section 2.B / 3-Second Auto-Hide Countdown Timer: exactly 3000ms
+    // Spec explicitly gives DIFFERENT durations per direction — not one
+    // shared value: "ease-out alpha-fade... over 150 milliseconds" for
+    // entrance (State B), vs "smooth 300ms linear alpha fade-out" for the
+    // auto-hide/tap-to-hide exit (Requirement II.3 / III.2).
+    const FADE_IN_MS = 150;
+    const FADE_OUT_MS = 300;
 
     const clearAllControlsTimers = useCallback(() => {
         clearTimeout(hideTimer.current);
@@ -138,7 +183,7 @@ function PlayerInner({ mediaId }) {
         setControlsPhase((prev) => (prev === PHASE.VISIBLE ? PHASE.VISIBLE : PHASE.ANIMATING_IN));
         actions.setControlsVisible(true);
         if (controlsPhase !== PHASE.VISIBLE) {
-            animTimer.current = setTimeout(() => setControlsPhase(PHASE.VISIBLE), FADE_MS);
+            animTimer.current = setTimeout(() => setControlsPhase(PHASE.VISIBLE), FADE_IN_MS);
         }
         if (state.playing) {
             hideTimer.current = setTimeout(() => {
@@ -146,7 +191,7 @@ function PlayerInner({ mediaId }) {
                 animTimer.current = setTimeout(() => {
                     setControlsPhase(PHASE.HIDDEN);
                     actions.setControlsVisible(false);
-                }, FADE_MS);
+                }, FADE_OUT_MS);
             }, HIDE_DELAY);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,20 +201,26 @@ function PlayerInner({ mediaId }) {
     const showControls = markActivity;
 
     // toggleControls — used only by the actual single-tap-on-video path.
-    // Visible → hide immediately (still respects "don't hide while paused").
-    // Hidden/animating → markActivity (show + restart timer).
+    // Visible → hide immediately, regardless of paused/playing. Previously
+    // gated on state.playing, which meant tapping to hide silently did
+    // nothing while paused — a deliberate tap should always be able to
+    // dismiss controls; only the AUTOMATIC 3s auto-hide stays disabled
+    // while paused (that's handled separately, in markActivity and the
+    // playing-state effect below — unaffected by this change).
+    // Hidden/animating → markActivity (show + restart timer, timer itself
+    // a no-op while paused).
     const toggleControls = useCallback(() => {
-        if ((controlsPhase === PHASE.VISIBLE || controlsPhase === PHASE.ANIMATING_IN) && state.playing) {
+        if (controlsPhase === PHASE.VISIBLE || controlsPhase === PHASE.ANIMATING_IN) {
             clearAllControlsTimers();
             setControlsPhase(PHASE.ANIMATING_OUT);
             animTimer.current = setTimeout(() => {
                 setControlsPhase(PHASE.HIDDEN);
                 actions.setControlsVisible(false);
-            }, FADE_MS);
+            }, FADE_OUT_MS);
         } else {
             markActivity();
         }
-    }, [controlsPhase, state.playing, clearAllControlsTimers, markActivity]);
+    }, [controlsPhase, clearAllControlsTimers, markActivity, actions]);
 
     // Pausing must always reveal controls and hold them (no auto-hide while
     // paused — doc section 5 "never become stuck", matches prior behavior).
@@ -195,8 +246,25 @@ function PlayerInner({ mediaId }) {
     useEffect(() => {
         const container = containerRef.current;
         if (!container) return;
+        let settleTimer = null;
         const onFullscreenChange = () => {
-            actions.setFullscreen(!!document.fullscreenElement);
+            // FIX: some Android browsers fire a real (not just duplicate)
+            // fullscreenchange blip during a pure orientation transition —
+            // document.fullscreenElement briefly reads null then restores
+            // itself a moment later, even though the user never actually
+            // exited fullscreen. This happens e.g. when the Quick Action
+            // Row's "Screen Rotation" icon calls
+            // screen.orientation.lock("portrait"/"landscape") while already
+            // in fullscreen. Reacting to the event immediately made the
+            // unrelated bottom-right Fullscreen icon flip its
+            // Maximize/Minimize display for that blip — rotation and
+            // fullscreen are meant to stay fully independent. Re-check
+            // after a short settle delay; only commit the state change if
+            // the value still holds, filtering out self-correcting blips.
+            clearTimeout(settleTimer);
+            settleTimer = setTimeout(() => {
+                actions.setFullscreen(!!document.fullscreenElement);
+            }, 120);
         };
         document.addEventListener("fullscreenchange", onFullscreenChange);
         container._toggleFullscreen = () => {
@@ -207,6 +275,7 @@ function PlayerInner({ mediaId }) {
             }
         };
         return () => {
+            clearTimeout(settleTimer);
             document.removeEventListener("fullscreenchange", onFullscreenChange);
             if (container) delete container._toggleFullscreen;
         };
@@ -274,6 +343,7 @@ function PlayerInner({ mediaId }) {
         setStreamUrl(null);
         setSessionId(null);
         setPreparingStream(false);
+        advancePhase(INIT_PHASE.LOADING_MEDIA);
 
         (async () => {
             try {
@@ -351,13 +421,92 @@ function PlayerInner({ mediaId }) {
         };
     }, [mediaId]);
 
-    // ── Lock orientation ──────────────────────────────────────────────────────
+    // ── Immediate landscape lock on mount (mobile only) ──────────────────────
+    // screen.orientation.lock() requires fullscreen on Android Chrome — but
+    // containerRef.current is null while the loading screen is showing.
+    // Solution: fullscreen document.documentElement (always available) → then
+    // lock landscape. Fires synchronously inside the navigation-gesture stack
+    // so the browser allows it without an extra tap.
     useEffect(() => {
-        try {
-            screen.orientation?.lock?.("landscape").catch(() => {});
-        } catch {
-            // Unsupported on this browser — fail silently per doc section 2.
+        if (!isMobile) return;
+        const lock = async () => {
+            try {
+                if (!document.fullscreenElement) {
+                    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+                }
+                await screen.orientation?.lock?.("landscape");
+            } catch (_) {
+                // iOS Safari / desktop / gesture-policy — fail silently.
+            }
+        };
+        lock();
+        // Unlock + exitFullscreen handled by existing unmount cleanup (~line 330).
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Orientation + Fullscreen orchestration (mobile init pipeline) ─────────
+    // Runs exactly once SEEK_COMPLETE is reached (resume seek finished, or
+    // immediately for a fresh video with no seek stage at all — see the
+    // SEEK_COMPLETE-entry effects further down). Desktop/tablet bypass this
+    // entirely and jump straight to FIRST_FRAME_READY, leaving existing
+    // desktop behavior completely untouched.
+    //
+    // Sequence: request fullscreen → lock landscape once fullscreen engages
+    // → advance to FULLSCREEN_READY regardless of success/failure. A
+    // rejected fullscreen/orientation call (gesture-policy, unsupported
+    // API, etc.) does NOT block the pipeline forever — it just means this
+    // stage is skipped, matching the doc's explicit "unless the browser
+    // prevents earlier orientation changes" allowance. Blocking playback
+    // indefinitely because a non-critical cosmetic stage failed would be
+    // strictly worse than the bug we're fixing.
+    const fullscreenStageStarted = useRef(false);
+    useEffect(() => {
+        if (initPhase !== INIT_PHASE.SEEK_COMPLETE) return;
+
+        if (!isMobile) {
+            // Desktop/tablet: skip landscape+fullscreen stages entirely.
+            advancePhase(INIT_PHASE.FIRST_FRAME_READY);
+            return;
         }
+        if (fullscreenStageStarted.current) return;
+        fullscreenStageStarted.current = true;
+
+        advancePhase(INIT_PHASE.LANDSCAPE_READY);
+
+        const container = containerRef.current;
+        const proceedToFullscreenReady = () => advancePhase(INIT_PHASE.FULLSCREEN_READY);
+
+        if (!container || document.fullscreenElement) {
+            proceedToFullscreenReady();
+            return;
+        }
+
+        container
+            .requestFullscreen?.({ navigationUI: "hide" })
+            .then(() => {
+                screen.orientation?.lock?.("landscape").catch((err) => {
+                    console.warn("[Player] orientation.lock failed after fullscreen:", err?.name, err?.message || err);
+                });
+            })
+            .catch((err) => {
+                // Gesture-policy rejection on cross-page navigation is the
+                // expected/common case here — logged for visibility, not
+                // treated as fatal. Pipeline proceeds regardless.
+                console.warn("[Player] requestFullscreen failed on auto-trigger:", err?.name, err?.message || err);
+            })
+            .finally(proceedToFullscreenReady);
+    }, [initPhase, isMobile, advancePhase]);
+
+    // Reset the fullscreen-stage guard per video.
+    useEffect(() => {
+        fullscreenStageStarted.current = false;
+    }, [mediaId]);
+
+    // ── Orientation unlock on unmount ──────────────────────────────────────────
+    // Doc requirement: "Portrait mode should only be restored when the user
+    // exits the player / playback ends and the player is closed." A plain
+    // unmount cleanup (no deps churn mid-session) is exactly that — fires
+    // once when leaving the player, not on every phase transition.
+    useEffect(() => {
         return () => {
             try {
                 screen.orientation?.unlock?.();
@@ -367,38 +516,42 @@ function PlayerInner({ mediaId }) {
         };
     }, []);
 
-    // ── Auto-fullscreen + landscape on mobile when playback starts ────────────
-    // FIX: screen.orientation.lock() generally only succeeds while the
-    // document is actually in fullscreen on mobile browsers — calling it
-    // outside fullscreen (as the effect above does on mount) silently fails
-    // on most devices. So on mobile we also need to actively request
-    // fullscreen once playback begins, then lock landscape once fullscreen
-    // has actually engaged (fullscreenchange fires, THEN lock — locking
-    // before the transition completes is unreliable).
-    //
-    // autoFullscreenDone ref ensures this only fires ONCE per mount — if the
-    // user manually exits fullscreen mid-playback, we must not force them
-    // back in on every subsequent play/pause toggle.
-    const autoFullscreenDone = useRef(false);
+    // ── FULLSCREEN_READY → FIRST_FRAME_READY → PLAYING ────────────────────────
+    // Keep phase advance for pipeline consistency; play is now triggered
+    // separately below, directly on state.isReady, bypassing stalled phases.
+    const reachedPlayingRef = useRef(false);
     useEffect(() => {
-        if (!isMobile || autoFullscreenDone.current || !state.playing) return;
-        const container = containerRef.current;
-        if (!container || document.fullscreenElement) {
-            autoFullscreenDone.current = true;
-            return;
-        }
-        autoFullscreenDone.current = true;
-        container
-            .requestFullscreen?.({ navigationUI: "hide" })
-            .then(() => {
-                screen.orientation?.lock?.("landscape").catch(() => {});
-            })
-            .catch(() => {
-                // Fullscreen request can be rejected if not triggered by a
-                // direct user gesture on some browsers — harmless no-op,
-                // user can still tap the manual fullscreen button.
-            });
-    }, [isMobile, state.playing]);
+        if (initPhase !== INIT_PHASE.FULLSCREEN_READY || !state.isReady) return;
+        if (reachedPlayingRef.current) return;
+        reachedPlayingRef.current = true;
+        advancePhase(INIT_PHASE.FIRST_FRAME_READY);
+        advancePhase(INIT_PHASE.PLAYING);
+    }, [initPhase, state.isReady, advancePhase]);
+    useEffect(() => {
+        reachedPlayingRef.current = false;
+    }, [mediaId]);
+
+    // ── Autoplay — direct trigger on isReady, no initPhase dependency ────────
+    // Root cause of previous failures: play was gated on initPhase reaching
+    // FULLSCREEN_READY, which required SEEK_COMPLETE — but SEEK_COMPLETE was
+    // never advanced when useProgress guards (seekFiredRef / showResumeDialog)
+    // short-circuited. Fix: trigger directly on state.isReady + streamUrl.
+    // Muted first (browsers always allow muted autoplay), unmuted 400ms later
+    // once play() is committed — flipping muted too early rejects play() on
+    // some Android builds.
+    const autoplayFiredRef = useRef(false);
+    useEffect(() => {
+        if (!state.isReady || !streamUrl) return;
+        if (autoplayFiredRef.current) return;
+        autoplayFiredRef.current = true;
+        actions.setMuted(true);
+        actions.setPlaying(true);
+        const t = setTimeout(() => actions.setMuted(false), 400);
+        return () => clearTimeout(t);
+    }, [state.isReady, streamUrl, actions]);
+    useEffect(() => {
+        autoplayFiredRef.current = false;
+    }, [mediaId]);
 
     // ── Manual screen rotation toggle (Screen Rotation icon) ──────────────────
     // Default is locked landscape (set above + via auto-fullscreen). This lets
@@ -406,17 +559,25 @@ function PlayerInner({ mediaId }) {
     // again returns to locked landscape. Exposed via containerRef like the
     // other manual toggles (_toggleFullscreen, _togglePiP) so PlayerControls
     // can call it without prop-drilling.
-    const isPortraitOverride = useRef(false);
+    // FIX: this was a plain useRef, which is invisible to React — the Quick
+    // Action Row's icon had no way to reflect whether rotation override was
+    // actually active (always rendered "off"/inactive regardless of real
+    // state). Converted to real state so the icon's active/inactive look
+    // can genuinely track it.
+    const [isPortraitOverride, setIsPortraitOverride] = useState(false);
+    useEffect(() => {
+        setIsPortraitOverride(false);
+    }, [mediaId]);
     const toggleManualRotation = useCallback(() => {
         if (!screen.orientation?.lock) return; // unsupported — button still visually present, just inert
-        if (isPortraitOverride.current) {
+        if (isPortraitOverride) {
             screen.orientation.lock("landscape").catch(() => {});
-            isPortraitOverride.current = false;
+            setIsPortraitOverride(false);
         } else {
             screen.orientation.lock("portrait").catch(() => {});
-            isPortraitOverride.current = true;
+            setIsPortraitOverride(true);
         }
-    }, []);
+    }, [isPortraitOverride]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -463,24 +624,27 @@ function PlayerInner({ mediaId }) {
     }, [state.backgroundPlay, state.playing]);
 
     // ── Sleep Timer ──────────────────────────────────────────────────────────────
-    // Icon-only for now (per product decision) — sleepTimerEndsAt is tracked
-    // in state but nothing currently sets it from the UI, so this effect is
-    // dormant until that's wired up. Left in place so turning the UI on later
-    // is a pure UI change with no logic to add.
+    // sleepTimerPlayToEnd ("Play last media to the end" checkbox): when true,
+    // the timer elapsing does NOT hard-pause mid-scene — it just clears its
+    // own pending state and lets playback continue naturally. VideoCore's
+    // existing handleEnded already calls setPlaying(false) once the video
+    // actually finishes, which is the real pause point in that mode.
     useEffect(() => {
         if (!state.sleepTimerEndsAt) return;
         const msLeft = state.sleepTimerEndsAt - Date.now();
-        if (msLeft <= 0) {
-            actions.setPlaying(false);
+        const fire = () => {
+            if (!state.sleepTimerPlayToEnd) {
+                actions.setPlaying(false);
+            }
             actions.setSleepTimer(null);
+        };
+        if (msLeft <= 0) {
+            fire();
             return;
         }
-        const t = setTimeout(() => {
-            actions.setPlaying(false);
-            actions.setSleepTimer(null);
-        }, msLeft);
+        const t = setTimeout(fire, msLeft);
         return () => clearTimeout(t);
-    }, [state.sleepTimerEndsAt, actions]);
+    }, [state.sleepTimerEndsAt, state.sleepTimerPlayToEnd, actions]);
 
     // ── Progress tracking ─────────────────────────────────────────────────────
     const progressProps = useProgress({
@@ -496,6 +660,7 @@ function PlayerInner({ mediaId }) {
         getToken, // FIX (Report-28): auth token for unmount keepalive fetch
         activeSubtitle: state.activeSubtitle, // NEW: save subtitle pref to history
         hlsRef, // NEW: hls instance for accurate resume seek via startLoad
+        knownResumePosition, // NEW: instant resume-dialog hint from MediaDetails, avoids waiting on this hook's own history fetch before showing the dialog
         onHistoryLoaded: (entry) => {
             // Restore subtitle preference from history
             if (!entry?.subtitlePref) {
@@ -527,13 +692,40 @@ function PlayerInner({ mediaId }) {
     // Resume/Start Over button handlers below, after the user's explicit
     // choice (you don't want it auto-playing under the dialog while they're
     // still deciding where to resume from).
+    // ── Autoplay (simplified per explicit request) ─────────────────────────────
+    // Every video, every time it opens: auto-rotate to landscape + auto-play,
+    // no special navigation flag needed. For a fresh video (no history),
+    // play starts immediately once ready. For a previously-watched video,
+    // auto-resume fires the SAME way the manual "Resume" button does —
+    // wait for HLS to reach the saved position, then play — but triggered
+    // automatically instead of waiting for a tap. The resume dialog still
+    // shows on top of this the whole time, purely as an optional override
+    // if the user actually wants to start over instead.
+    // Drives METADATA_READY → BUFFERING → SEEKING/SEEK_COMPLETE. VideoCore
+    // calling this signals the HLS manifest, metadata, and initial buffer
+    // are all ready — exactly METADATA_READY + BUFFERING combined per the
+    // doc's pipeline (VideoCore's own internal logic already gates this
+    // callback on those conditions). play() is intentionally NOT called
+    // here — it only happens once the phase machine actually reaches
+    // PLAYING (see the dedicated effect below), so the sequence can't be
+    // accidentally short-circuited by calling this function early.
     const handleReadyToSeek = useCallback(() => {
-        if (!progressProps.showResumeDialog) {
-            progressProps.onReadyToSeek?.(() => actions.setPlaying(true));
+        advancePhase(INIT_PHASE.METADATA_READY);
+        advancePhase(INIT_PHASE.BUFFERING);
+        if (progressProps.showResumeDialog) {
+            advancePhase(INIT_PHASE.SEEKING);
+            // autoResume does NOT close the dialog — it keeps showing,
+            // purely as an optional escape hatch the user can still tap to
+            // Start Over instead. The onLanded callback fires once
+            // deferredSeek's HLS-readiness poll actually succeeds.
+            progressProps.autoResume?.(() => advancePhase(INIT_PHASE.SEEK_COMPLETE));
+        } else {
+            // Fresh video — no resume point, nothing to seek. There's
+            // still a SEEKING/SEEK_COMPLETE stage per the doc's diagram,
+            // but with zero work to do, so it resolves immediately.
+            progressProps.onReadyToSeek?.(() => advancePhase(INIT_PHASE.SEEK_COMPLETE));
         }
-        // If the dialog IS showing, do nothing here — autoplay fires from the
-        // Resume/Start Over handlers below once the user actually chooses.
-    }, [progressProps, actions]);
+    }, [progressProps, advancePhase]);
 
     const handleResumeWithAutoplay = useCallback(() => {
         progressProps.handleResume?.(() => actions.setPlaying(true));
@@ -547,22 +739,33 @@ function PlayerInner({ mediaId }) {
         actions.setPlaying(true);
     }, [progressProps, actions]);
 
-    // Browser autoplay restriction fallback: if the play() promise rejects
-    // (no prior user gesture on this page load — common when navigating
-    // straight into the player), retry once on the very next tap/click
-    // anywhere on the page, so the video never just sits paused with no
-    // explanation (doc: "never leave the player paused without explanation").
+    // Browser autoplay restriction fallback: VideoCore's own play/pause sync
+    // effect already calls video.play() when state.playing becomes true —
+    // this effect does NOT duplicate that call. It only listens for the
+    // FIRST interaction anywhere on the page after an autoplay attempt may
+    // have been silently rejected by the browser (no user-gesture in the
+    // call stack — SPA client-side navigation doesn't reliably count as one
+    // for autoplay-permission purposes, even though the original button
+    // press was a real click). Retries play() once that interaction lands,
+    // so the video never just sits paused with zero explanation.
     useEffect(() => {
+        if (!state.playing) return;
         const video = videoRef.current;
-        if (!video || !state.playing) return;
-        video.play().catch(() => {
-            const retryOnce = () => {
-                video.play().catch(() => {});
-                document.removeEventListener("pointerdown", retryOnce);
-            };
-            document.addEventListener("pointerdown", retryOnce, { once: true });
-        });
-    }, [state.playing, streamUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (!video) return;
+        const retryIfPaused = () => {
+            if (video.paused) video.play().catch(() => {});
+        };
+        // Broad net: any of these counts as "the user did something" —
+        // covers taps on the gesture layer, the controls, or anywhere else.
+        document.addEventListener("pointerdown", retryIfPaused, { once: true });
+        document.addEventListener("touchstart", retryIfPaused, { once: true });
+        document.addEventListener("keydown", retryIfPaused, { once: true });
+        return () => {
+            document.removeEventListener("pointerdown", retryIfPaused);
+            document.removeEventListener("touchstart", retryIfPaused);
+            document.removeEventListener("keydown", retryIfPaused);
+        };
+    }, [state.playing, streamUrl]);
 
     const handleBack = () => navigate(-1);
 
@@ -673,11 +876,20 @@ function PlayerInner({ mediaId }) {
                 onBack={handleBack}
                 onShowControls={showControls}
                 controlsPhase={controlsPhase}
+                isPortraitOverride={isPortraitOverride}
             />
 
-            {/* Resume dialog */}
+            {/* Resume dialog — auto-fades after 6s of no interaction (pure UI
+                hide, no playback side effect — see useProgress's
+                dialogFadeTimer). Manual Resume/Start Over cancels the timer
+                and acts immediately, same as before. */}
             {progressProps.showResumeDialog && (
-                <div className="absolute inset-0 z-60 flex items-end justify-center pb-28 px-4 pointer-events-none">
+                <div
+                    className="absolute inset-0 z-60 flex items-end justify-center pb-28 px-4 pointer-events-none"
+                    style={{
+                        opacity: progressProps.resumeDialogFading ? 0 : 1,
+                        transition: "opacity 280ms ease",
+                    }}>
                     <div
                         className="pointer-events-auto flex items-center gap-3 px-5 py-4
                                     rounded-2xl bg-black/80 backdrop-blur-md border border-white/15
@@ -693,7 +905,6 @@ function PlayerInner({ mediaId }) {
                             className="px-3 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs
                                        hover:bg-white/20 transition-colors shrink-0">
                             Start Over
-                            <span className="ml-1 text-white/40">({progressProps.resumeCountdown})</span>
                         </button>
                         <button
                             onClick={handleResumeWithAutoplay}
@@ -747,10 +958,12 @@ function PlayerInner({ mediaId }) {
 
 export default function PlayerPage() {
     const { id } = useParams();
+    const location = useLocation();
     const mediaId = decodeURIComponent(id);
+    const knownResumePosition = location.state?.knownResumePosition ?? null;
     return (
         <PlayerProvider>
-            <PlayerInner mediaId={mediaId} />
+            <PlayerInner key={mediaId} mediaId={mediaId} knownResumePosition={knownResumePosition} />
         </PlayerProvider>
     );
 }

@@ -79,9 +79,11 @@ function DetailModal({ lib, totalSize, onClose, onEdit }) {
 
     return (
         <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-            <div className="relative w-full max-w-lg bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div
+                className="relative w-[min(32rem,90vw)] h-[min(32rem,90vh)] bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
+                onClick={(e) => e.stopPropagation()}>
                 {/* header */}
-                <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-base-content/8">
+                <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-base-content/8 shrink-0">
                     <div className="flex items-center gap-3 min-w-0">
                         <div
                             className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0
@@ -104,63 +106,66 @@ function DetailModal({ lib, totalSize, onClose, onEdit }) {
                             </div>
                         </div>
                     </div>
-                    <button onClick={onClose} className="btn btn-ghost btn-xs btn-square rounded-lg ml-2 shrink-0">
+                    <button onClick={onClose} className="btn btn-ghost btn-xs btn-square rounded-lg ml-2 shrink-0 border-none">
                         <X size={15} />
                     </button>
                 </div>
 
-                {/* path */}
-                <div className="px-6 py-3 bg-base-300/30 border-b border-base-content/6 flex items-center gap-2">
-                    <FolderOpen size={12} className="text-base-content/40 shrink-0" />
-                    <p className="text-[12px] font-mono text-base-content/60 flex-1 truncate" title={lib.path}>
-                        {lib.path}
-                    </p>
-                    <button onClick={() => copy(lib.path)} className="btn btn-ghost btn-xs btn-square rounded shrink-0" title="Copy path">
-                        {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-                    </button>
-                </div>
+                {/* scrollable body */}
+                <div className="flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {/* path */}
+                    <div className="px-6 py-3 bg-base-300/30 border-b border-base-content/6 flex items-center gap-2">
+                        <FolderOpen size={12} className="text-base-content/40 shrink-0" />
+                        <p className="text-[12px] font-mono text-base-content/60 flex-1 truncate" title={lib.path}>
+                            {lib.path}
+                        </p>
+                        <button onClick={() => copy(lib.path)} className="btn btn-ghost btn-xs btn-square rounded shrink-0 border-none" title="Copy path">
+                            {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+                        </button>
+                    </div>
 
-                {/* stats grid */}
-                <div className="px-6 py-5">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40 mb-3">Library Statistics</p>
-                    <div className="grid grid-cols-2 gap-3">
-                        {[
-                            { icon: <FileVideo size={14} />, label: "Total Media Files", value: (lib.fileCount ?? 0).toLocaleString() },
-                            { icon: <Database size={14} />, label: "Storage Used", value: lib.size || fmtBytes(lib.sizeBytes) },
-                            { icon: <TrendingUp size={14} />, label: "Share of Total Storage", value: `${pct}%` },
-                            { icon: <Activity size={14} />, label: "Added", value: fmtDate(lib.addedAt) },
-                        ].map(({ icon, label, value }) => (
-                            <div key={label} className="bg-base-300/50 rounded-xl px-4 py-3 border border-base-content/5">
-                                <div className="flex items-center gap-1.5 mb-1.5">
-                                    <span className="text-base-content/40">{icon}</span>
-                                    <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/45">{label}</p>
+                    {/* stats grid */}
+                    <div className="px-6 py-5">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40 mb-3">Library Statistics</p>
+                        <div className="grid grid-cols-2 gap-3">
+                            {[
+                                { icon: <FileVideo size={14} />, label: "Total Media Files", value: (lib.fileCount ?? 0).toLocaleString() },
+                                { icon: <Database size={14} />, label: "Storage Used", value: lib.size || fmtBytes(lib.sizeBytes) },
+                                { icon: <TrendingUp size={14} />, label: "Share of Total Storage", value: `${pct}%` },
+                                { icon: <Activity size={14} />, label: "Added", value: fmtDate(lib.addedAt) },
+                            ].map(({ icon, label, value }) => (
+                                <div key={label} className="bg-base-300/50 rounded-xl px-4 py-3 border border-base-content/5">
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                        <span className="text-base-content/40">{icon}</span>
+                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/45">{label}</p>
+                                    </div>
+                                    <p className="text-sm font-bold text-base-content tabular-nums">{value}</p>
                                 </div>
-                                <p className="text-sm font-bold text-base-content tabular-nums">{value}</p>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
-                </div>
 
-                {/* storage bar */}
-                <div className="px-6 pb-5 space-y-2">
-                    <div className="flex items-center justify-between">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40">Disk Usage Share</p>
-                        <span className="text-xs font-bold text-base-content tabular-nums">{pct}%</span>
+                    {/* storage bar */}
+                    <div className="px-6 pb-5 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40">Disk Usage Share</p>
+                            <span className="text-xs font-bold text-base-content tabular-nums">{pct}%</span>
+                        </div>
+                        <progress className={`progress w-full h-2 rounded-full ${online ? barClass : "progress-error"}`} value={pct} max="100" />
+                        <p className="text-[11px] text-base-content/40">
+                            {lib.size || fmtBytes(lib.sizeBytes)} of {fmtBytes(totalSize)} total
+                        </p>
                     </div>
-                    <progress className={`progress w-full h-2 rounded-full ${online ? barClass : "progress-error"}`} value={pct} max="100" />
-                    <p className="text-[11px] text-base-content/40">
-                        {lib.size || fmtBytes(lib.sizeBytes)} of {fmtBytes(totalSize)} total
-                    </p>
                 </div>
 
                 {/* footer actions */}
-                <div className="px-6 pb-5 flex items-center gap-2 border-t border-base-content/8 pt-4">
+                <div className="px-6 pb-5 flex items-center gap-2 border-t border-base-content/8 pt-4 shrink-0">
                     <button
                         onClick={() => {
                             onClose();
                             onEdit(lib);
                         }}
-                        className="btn btn-sm btn-ghost gap-1.5">
+                        className="btn btn-sm btn-ghost gap-1.5 border-none">
                         <SquarePen size={13} /> Edit Library
                     </button>
                 </div>
@@ -203,20 +208,22 @@ function EditModal({ lib, onClose, onSaved }) {
 
     return (
         <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-            <div className="relative w-full max-w-md bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div
+                className="relative w-[min(32rem,90vw)] h-[min(32rem,90vh)] bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
+                onClick={(e) => e.stopPropagation()}>
                 {/* header */}
-                <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-base-content/8">
+                <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-base-content/8 shrink-0">
                     <div>
                         <h2 className="font-bold text-base text-base-content">Edit Library</h2>
                         <p className="text-[12px] text-base-content/45 mt-0.5">Update label or folder path</p>
                     </div>
-                    <button onClick={onClose} className="btn btn-ghost btn-xs btn-square rounded-lg">
+                    <button onClick={onClose} className="btn btn-ghost btn-xs btn-square rounded-lg border-none">
                         <X size={15} />
                     </button>
                 </div>
 
                 {/* form */}
-                <div className="px-6 py-5 space-y-4">
+                <div className="px-6 py-5 space-y-4 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {err && (
                         <div className="alert alert-error text-sm py-2 px-3 rounded-xl">
                             <AlertTriangle size={14} />
@@ -259,11 +266,11 @@ function EditModal({ lib, onClose, onSaved }) {
                 </div>
 
                 {/* footer */}
-                <div className="px-6 pb-5 flex items-center justify-end gap-2 border-t border-base-content/8 pt-4">
-                    <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl">
+                <div className="px-6 pb-5 flex items-center justify-end gap-2 border-t border-base-content/8 pt-4 shrink-0">
+                    <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl border-none">
                         Cancel
                     </button>
-                    <button onClick={handleSave} disabled={saving} className="btn btn-sm btn-primary rounded-xl gap-1.5 disabled:opacity-60">
+                    <button onClick={handleSave} disabled={saving} className="btn btn-sm btn-primary rounded-xl gap-1.5 disabled:opacity-60 border-none">
                         {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
                         {saving ? "Saving…" : "Save Changes"}
                     </button>
@@ -294,12 +301,14 @@ function RemoveModal({ lib, onClose, onRemoved }) {
 
     return (
         <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-            <div className="relative w-full max-w-sm bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                <div className="px-6 pt-5 pb-4 border-b border-base-content/8">
+            <div
+                className="relative w-[min(32rem,90vw)] h-[min(32rem,90vh)] bg-base-200 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
+                onClick={(e) => e.stopPropagation()}>
+                <div className="px-6 pt-5 pb-4 border-b border-base-content/8 shrink-0">
                     <h2 className="font-bold text-base text-base-content">Remove Library</h2>
                     <p className="text-[12px] text-base-content/45 mt-0.5">This cannot be undone.</p>
                 </div>
-                <div className="px-6 py-5 space-y-3">
+                <div className="px-6 py-5 space-y-3 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {err && (
                         <div className="alert alert-error text-sm py-2 px-3 rounded-xl">
                             <AlertTriangle size={14} />
@@ -314,11 +323,11 @@ function RemoveModal({ lib, onClose, onRemoved }) {
                         Removing this library will stop FLUX from scanning this folder. Your media files on disk will <span className="font-semibold text-base-content/80">not</span> be deleted.
                     </p>
                 </div>
-                <div className="px-6 pb-5 flex items-center justify-end gap-2 border-t border-base-content/8 pt-4">
-                    <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl">
+                <div className="px-6 pb-5 flex items-center justify-end gap-2 border-t border-base-content/8 pt-4 shrink-0">
+                    <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl border-none">
                         Cancel
                     </button>
-                    <button onClick={handleRemove} disabled={removing} className="btn btn-sm btn-error rounded-xl gap-1.5 disabled:opacity-60">
+                    <button onClick={handleRemove} disabled={removing} className="btn btn-sm btn-error rounded-xl gap-1.5 disabled:opacity-60 border-none">
                         {removing ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
                         {removing ? "Removing…" : "Remove Library"}
                     </button>
@@ -363,7 +372,7 @@ function ActionBtn({ icon: Icon, title, onClick, danger = false, spinning = fals
             }}
             disabled={spinning}
             className={[
-                "btn btn-ghost btn-sm btn-square rounded-lg",
+                "btn btn-ghost btn-sm btn-square rounded-lg border-none",
                 // "opacity-0 group-hover:opacity-100 focus:opacity-100",
                 "disabled:opacity-40",
                 danger ? "hover:bg-error/15 hover:text-error text-base-content/50" : "hover:bg-base-content/10 text-base-content/50 hover:text-base-content",
@@ -389,13 +398,13 @@ function SkeletonRow() {
 // ─── Metric chip ──────────────────────────────────────────────────────────────
 function MetricChip({ icon: Icon, label, value, accent }) {
     return (
-        <div className="flex items-center gap-2.5 bg-base-200 border border-base-content/8 rounded-xl px-4 py-2.5 shadow-sm">
+        <div className="flex items-center gap-2 sm:gap-2.5 bg-base-200 border border-base-content/8 rounded-xl px-3 sm:px-4 py-2.5 shadow-sm w-full min-w-0">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `color-mix(in oklch, ${accent} 15%, transparent)` }}>
                 <Icon size={13} style={{ color: accent }} />
             </div>
-            <div>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/45 leading-none">{label}</p>
-                <p className="text-sm font-bold text-base-content mt-0.5 tabular-nums leading-none">{value}</p>
+            <div className="min-w-0">
+                <p className="text-[9px] sm:text-[10px] font-semibold uppercase tracking-widest text-base-content/45 leading-none truncate">{label}</p>
+                <p className="text-sm font-bold text-base-content mt-0.5 tabular-nums leading-none truncate">{value}</p>
             </div>
         </div>
     );
@@ -482,11 +491,11 @@ export default function DashLibraries() {
                         <p className="text-sm text-base-content/50 mt-0.5">Media folder management and storage monitoring</p>
                     </div>
                     <div className="flex gap-2">
-                        <Link to="/settings" className="btn btn-sm btn-primary gap-1.5">
+                        <Link to="/settings" className="btn btn-sm btn-primary gap-1.5 border-none">
                             <FolderOpen size={12} />
                             Add Library
                         </Link>
-                        <button onClick={load} disabled={loading} className="btn btn-sm btn-ghost gap-1.5 disabled:opacity-50">
+                        <button onClick={load} disabled={loading} className="btn btn-sm btn-ghost gap-1.5 disabled:opacity-50 border-none">
                             <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
                             Refresh
                         </button>
@@ -503,7 +512,7 @@ export default function DashLibraries() {
 
                 {/* metrics */}
                 {(!loading || libs.length > 0) && (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2">
                         <MetricChip icon={Layers} label="Libraries" value={loading ? "—" : libs.length} accent="oklch(var(--p))" />
                         <MetricChip icon={FileVideo} label="Total Files" value={loading ? "—" : totalFiles.toLocaleString()} accent="oklch(var(--in))" />
                         <MetricChip icon={Database} label="Total Storage" value={loading ? "—" : fmtBytes(totalSize)} accent="oklch(var(--su))" />
@@ -518,18 +527,18 @@ export default function DashLibraries() {
 
                 {/* main table */}
                 <div className="card bg-base-200 border border-base-content/8 shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
-                        <table className="table w-full text-sm">
+                    <div className="overflow-x-auto scrollbar-none">
+                        <table className="table w-full text-sm min-w-225">
                             <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-sm border-b border-base-content/8">
                                 <tr className="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
-                                    <th className="pl-5 pr-3 py-3.5 w-10">#</th>
+                                    <th className="pl-5 pr-3 py-3.5 w-10">#Sl</th>
                                     <th className="px-3 py-3.5">Library</th>
-                                    <th className="px-3 py-3.5 hidden md:table-cell">Path</th>
+                                    <th className="px-3 py-3.5">Path</th>
                                     <th className="px-3 py-3.5">Type</th>
                                     <th className="px-3 py-3.5">Status</th>
-                                    <th className="px-3 py-3.5 text-right hidden sm:table-cell">Files</th>
-                                    <th className="px-3 py-3.5 text-right hidden sm:table-cell">Storage</th>
-                                    <th className="px-3 py-3.5 hidden lg:table-cell min-w-130px">Usage %</th>
+                                    <th className="px-3 py-3.5 text-right">Files</th>
+                                    <th className="px-3 py-3.5 text-right">Storage</th>
+                                    <th className="px-3 py-3.5 min-w-130px">Usage %</th>
                                     {/* action column header */}
                                     <th className="pl-3 pr-4 py-3.5 text-center w-32">Actions</th>
                                 </tr>
@@ -582,7 +591,7 @@ export default function DashLibraries() {
                                                 </td>
 
                                                 {/* path */}
-                                                <td className="px-3 py-3.5 hidden md:table-cell max-w-180px">
+                                                <td className="px-3 py-3.5 max-w-180px">
                                                     <p className="text-[12px] font-mono text-base-content/45 truncate" title={lib.path}>
                                                         {lib.path}
                                                     </p>
@@ -602,17 +611,17 @@ export default function DashLibraries() {
                                                 </td>
 
                                                 {/* files */}
-                                                <td className="px-3 py-3.5 text-right hidden sm:table-cell">
+                                                <td className="px-3 py-3.5 text-right">
                                                     <span className="text-sm font-medium text-base-content tabular-nums">{(lib.fileCount ?? 0).toLocaleString()}</span>
                                                 </td>
 
                                                 {/* storage */}
-                                                <td className="px-3 py-3.5 text-right hidden sm:table-cell">
+                                                <td className="px-3 py-3.5 text-right">
                                                     <span className="text-sm font-medium text-base-content tabular-nums">{lib.size || fmtBytes(lib.sizeBytes)}</span>
                                                 </td>
 
                                                 {/* usage % */}
-                                                <td className="px-3 py-3.5 hidden lg:table-cell">
+                                                <td className="px-3 py-3.5">
                                                     <div className="flex items-center gap-2.5">
                                                         <progress className={`progress h-1.5 w-20 rounded-full ${online ? barClass : "progress-error"}`} value={pct} max="100" />
                                                         <span className="text-[11px] font-semibold text-base-content/50 tabular-nums w-8 text-right">{pct}%</span>

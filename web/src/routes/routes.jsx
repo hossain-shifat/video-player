@@ -33,11 +33,22 @@ import DashMedia from "../dashboard/pages/DashMedia";
 import DashJobs from "../dashboard/pages/DashJobs";
 import DashUploads from "../dashboard/pages/DashUploads";
 import DashIPTV from "../dashboard/pages/DashIPTV";
+import ErrorPreview from "../Errors/ErrorPreview";
+import ErrorShowcase from "../Errors/ErrorShowcase";
+import Live from "../Pages/Media/Live/Live";
+import LivePlayerPage from "../Pages/Player/LivePlayerPage";
 
 export const router = createBrowserRouter([
     {
         path: "/player/:id",
         Component: PlayerPage,
+    },
+
+    // ─── Live player — simple dedicated page, no main layout ─────────────────
+    {
+        path: "/live/watch/:id",
+        Component: LivePlayerPage,
+        errorElement: <Error500 />,
     },
 
     // ─── OAuth callback (only dedicated auth route needed) ────────────────────
@@ -73,6 +84,7 @@ export const router = createBrowserRouter([
             { path: "category/all", Component: AllCategory },
             { path: "category/:name", Component: CategoryPage },
             { path: "media/:id", Component: MediaDetails },
+            { path: "live", Component: Live },
             { path: "movies", Component: Movies },
             { path: "series", Component: Series },
             { path: "settings", Component: Settings },
@@ -84,6 +96,19 @@ export const router = createBrowserRouter([
             { path: "licenses", Component: LicensesPage },
         ],
     },
+
+    ...(import.meta.env.DEV
+        ? [
+              {
+                  path: "/dev/errors",
+                  Component: ErrorShowcase,
+              },
+              {
+                  path: "/dev/errors/:code",
+                  Component: ErrorPreview,
+              },
+          ]
+        : []),
 
     // ─── Error System ──────────────────────────────────────────────────────────
     {

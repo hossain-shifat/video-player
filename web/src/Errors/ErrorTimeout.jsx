@@ -1,12 +1,13 @@
 // web/src/Errors/ErrorTimeout.jsx
-import ErrorCard from "./ErrorCard";
+import ErrorScene from "./ErrorScene";
 import { TimeoutClockIllustration } from "./ErrorIllustration";
 import { RefreshCw } from "lucide-react";
 
 export default function ErrorTimeout() {
     return (
-        <ErrorCard
+        <ErrorScene
             code="TIMEOUT"
+            eyebrow="FLUX · Buffering Stalled"
             title="Request Timed Out"
             description="The server took too long to respond. The media or resource might be unavailable or busy."
             illustration={TimeoutClockIllustration}

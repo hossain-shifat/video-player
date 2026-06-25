@@ -223,7 +223,7 @@ function ModalFooter({ children }) {
 function SectionLabel({ label }) {
     return (
         <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-white/85">{label}</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-white/85">{label}</span>
             <div className="flex-1 h-px bg-base-content/8" />
         </div>
     );
@@ -394,7 +394,7 @@ function DetailsModal({ media, onClose }) {
                                 <Badge label={media._typeLabel} variant={media._type} />
                                 {media._year && <span className="text-[10px] text-base-content/80 font-medium">{media._year}</span>}
                             </div>
-                            <h2 className="font-bold text-sm sm:text-base text-base-content leading-tight max-w-[14rem] sm:max-w-65 truncate">{media._title}</h2>
+                            <h2 className="font-bold text-sm sm:text-base text-base-content leading-tight max-w-56 sm:max-w-65 truncate">{media._title}</h2>
                         </div>
                     </div>
                     <button
@@ -407,7 +407,7 @@ function DetailsModal({ media, onClose }) {
 
             {!media._poster && <ModalHeader title={media._title} subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />}
 
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 scrollbar-none">
                 {/* Quick stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
@@ -496,6 +496,7 @@ function DetailsModal({ media, onClose }) {
                 <Link
                     to={linkDest}
                     target="_blank"
+                    rel="noopener noreferrer"
                     className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer flex items-center gap-1.5">
                     <Play size={13} className="ml-0.5" strokeWidth={2.2} />
                     Play Now
@@ -512,7 +513,7 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
         <Modal onClose={onClose}>
             <ModalHeader title="Delete Media" subtitle="This action cannot be undone" onClose={onClose} />
 
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 scrollbar-none">
                 {error && (
                     <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
                         <AlertTriangle size={13} className="shrink-0" />
@@ -1101,7 +1102,7 @@ export default function DashMedia() {
                                     const typeConfig = TYPE_CONFIG[item._type] || TYPE_CONFIG.movie;
 
                                     return (
-                                        <tr key={item._id} className="group border-b border-white/4 last:border-0 hover:bg-white/[0.03] transition-colors duration-150">
+                                        <tr key={item._id} className="group border-b border-white/4 last:border-0 hover:bg-white/3 transition-colors duration-150">
                                             {/* # */}
                                             <td className="pl-4 pr-2 py-3.5 text-white/55 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
 
@@ -1116,13 +1117,13 @@ export default function DashMedia() {
                                                         )}
                                                     </div>
                                                     <div className="min-w-0">
-                                                        <p className="font-semibold text-white/90 text-sm truncate max-w-[9rem] sm:max-w-[14rem] md:max-w-[20rem] lg:max-w-[26rem]" title={item._title}>
+                                                        <p className="font-semibold text-white/90 text-sm truncate max-w-36 sm:max-w-56 md:max-w-[20rem] lg:max-w-104" title={item._title}>
                                                             {item._title}
                                                         </p>
                                                         <div className="flex items-center gap-1.5 mt-0.5">
                                                             {item._year && <span className="text-[10px] text-white/70 tabular-nums font-medium">{item._year}</span>}
                                                             {item._year && <span className="text-white/20">·</span>}
-                                                            <span className="text-[10px] font-mono text-white/50 truncate max-w-[8rem] sm:max-w-[14rem]">{item._filename}</span>
+                                                            <span className="text-[10px] font-mono text-white/50 truncate max-w-32 sm:max-w-56">{item._filename}</span>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1162,7 +1163,7 @@ export default function DashMedia() {
                                             <td className="px-3 py-3.5">
                                                 <div className="flex items-center gap-1.5 text-white/70">
                                                     <FolderOpen size={10} className="shrink-0" />
-                                                    <span className="text-xs truncate max-w-[5rem]">{item._library}</span>
+                                                    <span className="text-xs truncate max-w-20">{item._library}</span>
                                                 </div>
                                             </td>
 

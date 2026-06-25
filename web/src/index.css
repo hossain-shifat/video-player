@@ -710,9 +710,9 @@ body {
     /* background: rgba(0, 0, 0, 0.72); */
     color: #fff;
     line-height: 1.5;
-    /* text-shadow:
+    text-shadow:
         0 1px 4px rgba(0, 0, 0, 0.95),
-        0 0 12px rgba(0, 0, 0, 0.7); */
+        0 0 12px rgba(0, 0, 0, 0.7);
     white-space: pre-wrap;
     overflow-wrap: break-word;
     font-family:
@@ -731,7 +731,7 @@ body {
     justify-content: center;
     border: none;
     background: transparent;
-    color: rgba(255, 255, 255, 0.75);
+    color: #fff;
     border-radius: 10px;
     cursor: pointer;
     transition:
@@ -752,8 +752,8 @@ body {
 }
 
 .flux-icon-btn.active {
-    color: #e53e3e;
-    background: rgba(229, 62, 62, 0.15);
+    color: var(--color-primary);
+    background: color-mix(in oklch, var(--color-primary) 15%, transparent);
 }
 
 /* ── Popup menu ────────────────────────────────────────────────────────────── */
@@ -793,6 +793,45 @@ body {
         opacity: 1;
         transform: scale(1) translateY(0);
     }
+}
+
+@keyframes flux-sidebar-in-right {
+    from {
+        opacity: 0;
+        transform: translateX(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes flux-sidebar-in-bottom {
+    from {
+        opacity: 0;
+        transform: translateY(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.flux-sidebar-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.flux-sidebar-item.active:hover {
+    background: rgba(229, 62, 62, 0.22);
+}
+
+.flux-sidebar-scroll {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* old Edge/IE */
+}
+
+.flux-sidebar-scroll::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/WebView — scrolling still works, bar just never paints */
 }
 
 .flux-popup-header {

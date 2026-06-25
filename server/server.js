@@ -20,6 +20,7 @@ const historyRouter = require("./routes/history");
 const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
 const adminDashboardRouter = require("./routes/adminDashboard");
+const liveRouter = require("./routes/live");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
 const authRouter = require("./auth/routes/authRoutes");
@@ -88,6 +89,7 @@ app.use("/api/history", historyRouter);
 app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
+app.use("/api/live", liveRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -179,6 +181,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    Health:  /health`);
     console.log(`    Library: /api/library`);
     console.log(`    Media:   /api/media`);
+    console.log(`    Live TV: /api/live/channels`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
