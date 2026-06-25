@@ -65,7 +65,7 @@ async function _throttle() {
 
 // ─── HTTP GET helper ──────────────────────────────────────────────────────────
 
-function _get(urlStr, timeoutMs = 15000) {
+function _getRaw(urlStr, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
         const url = new URL(urlStr);
         const options = {
@@ -103,11 +103,36 @@ function _get(urlStr, timeoutMs = 15000) {
             });
             stream.on("error", reject);
         });
-
         req.on("timeout", () => req.destroy(new Error("SubSource request timed out")));
         req.on("error", reject);
         req.end();
     });
+}
+
+/**
+ * _get — wraps _getRaw with automatic retry on transient network errors
+ * (timeout, ECONNRESET, ECONNREFUSED, socket hang up). Does NOT retry on
+ * rate_limit/auth_error — those are thrown immediately by the caller after
+ * inspecting status codes. 2 retries with short backoff = up to 3 attempts total.
+ */
+const TRANSIENT_RE = /timed out|ECONNRESET|ECONNREFUSED|socket hang up|EAI_AGAIN|ETIMEDOUT/i;
+
+async function _get(urlStr, timeoutMs = 15000) {
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            return await _getRaw(urlStr, timeoutMs);
+        } catch (err) {
+            lastErr = err;
+            if (!TRANSIENT_RE.test(err.message)) throw err; // non-transient — fail fast
+            if (attempt < 2) {
+                const backoff = 500 * (attempt + 1);
+                console.warn(`[SubSource] Transient error (${err.message}) — retry ${attempt + 1}/2 in ${backoff}ms`);
+                await new Promise((r) => setTimeout(r, backoff));
+            }
+        }
+    }
+    throw lastErr;
 }
 
 /** Download ZIP as Buffer (follows one redirect) */
@@ -141,37 +166,94 @@ function _getBuffer(urlStr, timeoutMs = 30000) {
 }
 
 // ─── ZIP extraction (pure Node) ──────────────────────────────────────────────
+//
+// Reads the ZIP *central directory* (at the end of the file) instead of
+// scanning local file headers sequentially. This is required because some
+// ZIPs (including SubSource's) set the "data descriptor" bit in the general
+// purpose flag, leaving compressedSize/uncompressedSize as 0 in the local
+// header — the real sizes only exist in the central directory. Scanning
+// local headers in that case reads 0 bytes and silently "finds" no file.
+
+const EOCD_SIG = 0x06054b50;
+const CDFH_SIG = 0x02014b50;
+
+function _findEOCD(buf) {
+    const minOffset = Math.max(0, buf.length - 65557);
+    for (let i = buf.length - 22; i >= minOffset; i--) {
+        if (buf.readUInt32LE(i) === EOCD_SIG) return i;
+    }
+    return -1;
+}
 
 function _extractSubFromZip(buf) {
     const SUB_EXTS = [".srt", ".vtt", ".ass", ".ssa"];
-    let offset = 0;
-    while (offset < buf.length - 4) {
-        if (buf[offset] !== 0x50 || buf[offset + 1] !== 0x4b || buf[offset + 2] !== 0x03 || buf[offset + 3] !== 0x04) {
-            offset++;
-            continue;
-        }
-        if (offset + 30 > buf.length) break;
 
-        const compression = buf.readUInt16LE(offset + 8);
-        const compSz = buf.readUInt32LE(offset + 18);
-        const uncompSz = buf.readUInt32LE(offset + 22);
-        const fnLen = buf.readUInt16LE(offset + 26);
-        const exLen = buf.readUInt16LE(offset + 28);
-        const dataOff = offset + 30 + fnLen + exLen;
-        const filename = buf.slice(offset + 30, offset + 30 + fnLen).toString("utf-8");
+    const eocdOffset = _findEOCD(buf);
+    if (eocdOffset === -1) {
+        console.warn("[SubSource] ZIP extract: EOCD signature not found — not a valid ZIP?");
+        return null;
+    }
+
+    const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+    const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+
+    const candidates = [];
+    let pos = cdOffset;
+
+    for (let i = 0; i < totalEntries; i++) {
+        if (pos + 46 > buf.length || buf.readUInt32LE(pos) !== CDFH_SIG) break;
+
+        const compression = buf.readUInt16LE(pos + 10);
+        const compSize = buf.readUInt32LE(pos + 20);
+        const uncompSize = buf.readUInt32LE(pos + 24);
+        const fnLen = buf.readUInt16LE(pos + 28);
+        const exLen = buf.readUInt16LE(pos + 30);
+        const cmLen = buf.readUInt16LE(pos + 32);
+        const localHdrOff = buf.readUInt32LE(pos + 42);
+        const filename = buf.slice(pos + 46, pos + 46 + fnLen).toString("utf-8");
         const ext = path.extname(filename).toLowerCase();
 
-        if (SUB_EXTS.includes(ext) && !filename.includes("__MACOSX")) {
-            try {
-                const data = compression === 0 ? buf.slice(dataOff, dataOff + uncompSz) : compression === 8 ? zlib.inflateRawSync(buf.slice(dataOff, dataOff + compSz)) : null;
-                if (data) return { filename: path.basename(filename), ext, data };
-            } catch {
-                /* corrupted, skip */
-            }
+        if (SUB_EXTS.includes(ext) && !filename.includes("__MACOSX") && !filename.startsWith(".")) {
+            candidates.push({ filename, ext, compression, compSize, uncompSize, localHdrOff });
         }
-        offset = dataOff + compSz;
+
+        pos += 46 + fnLen + exLen + cmLen;
     }
-    return null;
+
+    if (!candidates.length) {
+        console.warn(`[SubSource] ZIP extract: no .srt/.vtt/.ass entries among ${totalEntries} file(s) in archive`);
+        return null;
+    }
+
+    // Prefer .srt, then .vtt, then .ass/.ssa; ties broken by largest file
+    const extRank = { ".srt": 0, ".vtt": 1, ".ass": 2, ".ssa": 2 };
+    candidates.sort((a, b) => extRank[a.ext] - extRank[b.ext] || b.uncompSize - a.uncompSize);
+
+    const chosen = candidates[0];
+
+    const lh = chosen.localHdrOff;
+    if (buf.readUInt32LE(lh) !== 0x04034b50) {
+        console.warn("[SubSource] ZIP extract: local header signature mismatch for", chosen.filename);
+        return null;
+    }
+    const lhFnLen = buf.readUInt16LE(lh + 26);
+    const lhExLen = buf.readUInt16LE(lh + 28);
+    const dataOffset = lh + 30 + lhFnLen + lhExLen;
+
+    try {
+        const raw = buf.slice(dataOffset, dataOffset + chosen.compSize);
+        const data = chosen.compression === 0 ? raw.slice(0, chosen.uncompSize) : chosen.compression === 8 ? zlib.inflateRawSync(raw) : null;
+
+        if (!data) {
+            console.warn(`[SubSource] ZIP extract: unsupported compression method ${chosen.compression} for ${chosen.filename}`);
+            return null;
+        }
+
+        return { filename: path.basename(chosen.filename), ext: chosen.ext, data };
+    } catch (err) {
+        console.warn(`[SubSource] ZIP extract: failed to decompress ${chosen.filename}: ${err.message}`);
+        return null;
+    }
 }
 
 // ─── SubSource v1 API calls ───────────────────────────────────────────────────
@@ -187,10 +269,23 @@ function _extractSubFromZip(buf) {
  *   5. Text search: first 3 words of title (catches partial matches)
  */
 async function _findMovieId(title, year, imdbId, type, season) {
+    // Wraps a strategy call: rate_limit/auth_error propagate immediately,
+    // any other error (network blip, bad response shape) is swallowed —
+    // we just move on to the next strategy instead of failing the whole search.
+    async function tryStrategy(label, fn) {
+        try {
+            return await fn();
+        } catch (err) {
+            if (err.code === "rate_limit" || err.code === "auth_error") throw err;
+            console.warn(`[SubSource] Strategy "${label}" failed for "${title}": ${err.message} — trying next`);
+            return null;
+        }
+    }
+
     // ── Strategy 1: IMDb ID ───────────────────────────────────────────────────
     if (imdbId) {
         const imdb = String(imdbId).startsWith("tt") ? imdbId : `tt${imdbId}`;
-        const res1 = await _searchAPI(`searchType=imdb&imdb=${encodeURIComponent(imdb)}`, season);
+        const res1 = await tryStrategy("imdb", () => _searchAPI(`searchType=imdb&imdb=${encodeURIComponent(imdb)}`, season));
         if (res1) {
             console.log(`[SubSource] Found "${title}" via imdbId=${imdb} → movieId=${res1}`);
             return res1;
@@ -199,7 +294,7 @@ async function _findMovieId(title, year, imdbId, type, season) {
 
     // ── Strategy 2: Title + year + type ──────────────────────────────────────
     const ssType = type === "tv" ? "series" : "movie";
-    const res2 = await _searchText(title, year, ssType, season);
+    const res2 = await tryStrategy("text+year+type", () => _searchText(title, year, ssType, season));
     if (res2) {
         console.log(`[SubSource] Found "${title}" via text+year+type → movieId=${res2}`);
         return res2;
@@ -207,7 +302,7 @@ async function _findMovieId(title, year, imdbId, type, season) {
 
     // ── Strategy 3: Title + year (no type) ───────────────────────────────────
     if (year) {
-        const res3 = await _searchText(title, year, null, season);
+        const res3 = await tryStrategy("text+year", () => _searchText(title, year, null, season));
         if (res3) {
             console.log(`[SubSource] Found "${title}" via text+year → movieId=${res3}`);
             return res3;
@@ -215,7 +310,7 @@ async function _findMovieId(title, year, imdbId, type, season) {
     }
 
     // ── Strategy 4: Title only ────────────────────────────────────────────────
-    const res4 = await _searchText(title, null, null, season);
+    const res4 = await tryStrategy("title-only", () => _searchText(title, null, null, season));
     if (res4) {
         console.log(`[SubSource] Found "${title}" via title-only → movieId=${res4}`);
         return res4;
@@ -225,7 +320,7 @@ async function _findMovieId(title, year, imdbId, type, season) {
     const words = title.trim().split(/\s+/);
     if (words.length > 3) {
         const shortTitle = words.slice(0, 3).join(" ");
-        const res5 = await _searchText(shortTitle, year, null, season);
+        const res5 = await tryStrategy("short-title", () => _searchText(shortTitle, year, null, season));
         if (res5) {
             console.log(`[SubSource] Found "${title}" via short title "${shortTitle}" → movieId=${res5}`);
             return res5;
@@ -347,15 +442,19 @@ async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, t
             return { ok: true, results: [] };
         }
 
-        // Step 2: find best subtitleId per lang (parallel)
+        // Step 2: find best subtitleId per lang (parallel, resilient —
+        // one language failing must not discard results from the other)
         const results = [];
-        await Promise.all(
+        let sawRateLimit = false;
+        let sawAuthError = false;
+
+        const settled = await Promise.allSettled(
             langsNeeded.map(async (lang) => {
                 const ssLang = LANG_TO_SS[lang];
-                if (!ssLang) return;
+                if (!ssLang) return null;
                 const subtitleId = await _findSubtitleId(movieId, ssLang);
-                if (!subtitleId) return;
-                results.push({
+                if (!subtitleId) return null;
+                return {
                     subtitleId,
                     lang,
                     ssLang,
@@ -364,9 +463,28 @@ async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, t
                     url: `/subtitles/${subtitleId}/download`,
                     fullUrl: `${API_BASE}/subtitles/${subtitleId}/download`,
                     hi: false,
-                });
+                };
             }),
         );
+
+        for (const s of settled) {
+            if (s.status === "fulfilled" && s.value) {
+                results.push(s.value);
+            } else if (s.status === "rejected") {
+                if (s.reason?.code === "rate_limit") sawRateLimit = true;
+                if (s.reason?.code === "auth_error") sawAuthError = true;
+                console.warn(`[SubSource] Lang lookup failed for "${title}": ${s.reason?.message}`);
+            }
+        }
+
+        // Only propagate rate_limit/auth_error if we got ZERO usable results —
+        // if at least one language succeeded, return what we have.
+        if (results.length === 0 && sawRateLimit) {
+            throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+        }
+        if (results.length === 0 && sawAuthError) {
+            throw Object.assign(new Error("auth_error"), { code: "auth_error" });
+        }
 
         console.log(`[SubSource] "${title}" (movieId=${movieId}) → ${results.length} subtitle(s)`);
         return { ok: true, results };
@@ -406,6 +524,14 @@ async function downloadSubtitle(subtitleRef, destDir, baseName = "subtitle", lan
 
         await _throttle();
         const zipBuf = await _getBuffer(dlUrl);
+
+        const magic = zipBuf.slice(0, 4).toString("hex");
+        if (magic !== "504b0304" && magic !== "504b0506" && magic !== "504b0708") {
+            const preview = zipBuf.slice(0, 120).toString("utf-8").replace(/\s+/g, " ");
+            console.warn(`[SubSource] Response is not a ZIP (magic=${magic}, ${zipBuf.length} bytes): ${preview}`);
+            return { ok: false, error: "Response was not a valid ZIP file" };
+        }
+
         const extracted = _extractSubFromZip(zipBuf);
 
         if (!extracted) return { ok: false, error: "No subtitle file found in ZIP" };

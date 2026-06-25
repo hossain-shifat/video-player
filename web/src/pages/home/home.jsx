@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { useApi } from "../../Context/apiContext";
 import CategoryBar from "../../Components/CategoryBar";
 import { HomeMediaSections } from "./HomeMediaSections";
+import LiveMediaRow from "../../Components/LiveMediaRow";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -29,6 +30,8 @@ const Home = () => {
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
 
             {/* Continue Watching row — only renders if history exists */}
+
+            <LiveMediaRow />
 
             <HomeMediaSections movieItems={movieItems} seriesItems={seriesItems} animeItems={animeItems} onPlay={handlePlay} onWatchTrailer={handleTrailer} loading={isLoading} />
         </div>

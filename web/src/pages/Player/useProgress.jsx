@@ -10,10 +10,9 @@ function historyHeaders(clientId) {
 // URL from the mediaId so history links survive server restarts.
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-export function useProgress({ mediaId, clientId, name, type, poster, videoRef, playing, mediaDuration, getToken, streamUrl, activeSubtitle, onHistoryLoaded, hlsRef }) {
-    const [resumePoint, setResumePoint] = useState(null);
-    const [showResumeDialog, setShowResumeDialog] = useState(false);
-    const [resumeCountdown, setResumeCountdown] = useState(5);
+export function useProgress({ mediaId, clientId, name, type, poster, videoRef, playing, mediaDuration, getToken, streamUrl, activeSubtitle, onHistoryLoaded, hlsRef, knownResumePosition }) {
+    const [resumePoint, setResumePoint] = useState(() => (knownResumePosition != null && knownResumePosition > 10 ? { position: knownResumePosition } : null));
+    const [showResumeDialog, setShowResumeDialog] = useState(() => knownResumePosition != null && knownResumePosition > 10);
     // NEW: true while deferredSeek is polling for the target segment to become
     // transcoded/seekable. PlayerPage uses this to show a "waiting for
     // stream..." indicator and hold off autoplay until the seek actually lands
@@ -22,7 +21,6 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     // transcoded yet.
     const [isSeekingToResume, setIsSeekingToResume] = useState(false);
     const intervalRef = useRef(null);
-    const countdownRef = useRef(null);
     const resolvedRef = useRef(false);
     const seekFiredRef = useRef(false);
     const seekPollRef = useRef(null); // NEW: poll timer for deferred seek
@@ -45,11 +43,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             clearInterval(seekPollRef.current);
             setIsSeekingToResume(true);
             let attempts = 0;
-            // FIX: backend's waitForSegment() (streamController.js) blocks segment
-            // requests for up to 30s during a transcode restart (far seek). The
-            // old 15s frontend timeout could give up and seek to the wrong spot
-            // while the server was still legitimately working on it. Match it.
-            const MAX_ATTEMPTS = 150; // 150 × 200ms = 30s max wait
+            const MAX_ATTEMPTS = 75; // 75 × 200ms = 15s max wait
 
             // Tell hls.js to start buffering from the target position immediately.
             // This makes the seekable range grow to include targetSec quickly
@@ -176,8 +170,15 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         let cancelled = false;
         seekFiredRef.current = false;
         resolvedRef.current = false;
-        setResumePoint(null);
-        setShowResumeDialog(false);
+        // Don't wipe an instant hint passed in from MediaDetails — it's the
+        // correct starting truth (real button label was already showing
+        // "Resume" based on this same data) until the fetch below either
+        // confirms or corrects it (e.g. if history says completed:true,
+        // which the hint alone has no way of knowing).
+        if (knownResumePosition == null) {
+            setResumePoint(null);
+            setShowResumeDialog(false);
+        }
 
         const load = async () => {
             try {
@@ -190,6 +191,13 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
                     setResumePoint(data);
                     setShowResumeDialog(true);
                     resolvedRef.current = false;
+                } else if (knownResumePosition != null) {
+                    // Real data contradicts the instant hint (e.g. completed
+                    // since MediaDetails last fetched, or position actually
+                    // ≤10s) — correct it instead of leaving a stale
+                    // hint-driven dialog open.
+                    setResumePoint(null);
+                    setShowResumeDialog(false);
                 }
                 // Restore subtitle pref regardless of whether we're resuming
                 if (onHistoryLoaded) onHistoryLoaded(data || null);
@@ -219,7 +227,27 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             setShowResumeDialog(false);
             resolvedRef.current = true;
             seekFiredRef.current = true;
-            clearInterval(countdownRef.current);
+            clearTimeout(dialogFadeTimer.current);
+        },
+        [deferredSeek, resumePoint],
+    );
+
+    // ── Auto-resume (dialog stays visible) ─────────────────────────────────────
+    // Same seek-then-play mechanism as handleResume, but does NOT touch
+    // showResumeDialog — used to automatically start resuming the moment the
+    // dialog appears, while the dialog itself stays up purely as an
+    // optional "actually, start over" override (per explicit request: "the
+    // dialogue keep it as it is"). seekFiredRef still gets set so the
+    // normal onReadyToSeek path doesn't ALSO try to seek separately.
+    const autoResume = useCallback(
+        (onLanded) => {
+            if (seekFiredRef.current) return;
+            seekFiredRef.current = true;
+            if (resumePoint?.position) {
+                deferredSeek(resumePoint.position, onLanded);
+            } else {
+                onLanded?.();
+            }
         },
         [deferredSeek, resumePoint],
     );
@@ -229,28 +257,34 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         setShowResumeDialog(false);
         resolvedRef.current = true;
         seekFiredRef.current = true;
-        clearInterval(countdownRef.current);
+        clearTimeout(dialogFadeTimer.current);
     }, [videoRef]);
 
-    // ── Resume countdown (auto Start Over after 5s) ───────────────────────────
+    // ── Resume dialog auto-fade (6s, doc: "Resume Dialog Behavior") ───────────
+    // FIX: previously this was a 5s COUNTDOWN that auto-triggered Start Over
+    // at zero — a real playback side-effect the user never asked for. The
+    // doc clarifies this should be a pure UI auto-hide: the dialog fades
+    // away after 6s of no interaction, nothing more. It does NOT seek, does
+    // NOT start over, does NOT resume — whatever the user does (or doesn't)
+    // with the dialog is independent of any actual playback action; this
+    // timer only controls whether the dialog ELEMENT is still on screen.
+    const dialogFadeTimer = useRef(null);
+    const [resumeDialogFading, setResumeDialogFading] = useState(false);
     useEffect(() => {
-        if (!showResumeDialog) return undefined;
-        setResumeCountdown(5);
-        countdownRef.current = setInterval(() => {
-            setResumeCountdown((c) => {
-                if (c <= 1) {
-                    clearInterval(countdownRef.current);
-                    setShowResumeDialog(false);
-                    resolvedRef.current = true;
-                    seekFiredRef.current = true;
-                    if (videoRef.current) videoRef.current.currentTime = 0;
-                    return 0;
-                }
-                return c - 1;
-            });
-        }, 1000);
-        return () => clearInterval(countdownRef.current);
-    }, [showResumeDialog]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (!showResumeDialog) {
+            setResumeDialogFading(false);
+            return undefined;
+        }
+        setResumeDialogFading(false);
+        dialogFadeTimer.current = setTimeout(() => {
+            setResumeDialogFading(true);
+            // Let the fade transition (250-300ms, handled in the component
+            // via resumeDialogFading) play out before actually removing it
+            // from layout.
+            setTimeout(() => setShowResumeDialog(false), 300);
+        }, 6000);
+        return () => clearTimeout(dialogFadeTimer.current);
+    }, [showResumeDialog]);
 
     // ── onReadyToSeek ─────────────────────────────────────────────────────────
     const onReadyToSeek = useCallback(
@@ -343,7 +377,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     useEffect(() => {
         return () => {
             clearInterval(intervalRef.current);
-            clearInterval(countdownRef.current);
+            clearTimeout(dialogFadeTimer.current);
             clearInterval(seekPollRef.current); // NEW: cancel any pending deferred seek poll
 
             if (!mediaId) return;
@@ -386,9 +420,10 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
     return {
         resumePoint,
         showResumeDialog,
-        resumeCountdown,
+        resumeDialogFading,
         isSeekingToResume,
         handleResume,
+        autoResume,
         handleStartOver,
         onReadyToSeek,
     };

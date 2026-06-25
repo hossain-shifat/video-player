@@ -50,10 +50,6 @@ function getAspectStyle(aspectRatio) {
     switch (aspectRatio) {
         case "fill":
             return { objectFit: "cover", width: "100%", height: "100%" };
-        case "16:9":
-            return { objectFit: "contain", width: "100%", aspectRatio: "16/9" };
-        case "4:3":
-            return { objectFit: "contain", width: "100%", aspectRatio: "4/3" };
         case "1:1":
             return { objectFit: "contain", width: "100%", aspectRatio: "1/1" };
         case "stretch":
@@ -61,6 +57,32 @@ function getAspectStyle(aspectRatio) {
         default:
             return { objectFit: "contain", width: "100%", height: "100%" };
     }
+}
+
+// ─── 16:9 / 4:3 exact pixel box ───────────────────────────────────────────────
+//
+// FIX (top-gap bug): these modes used to set width:"100%" + CSS aspect-ratio
+// and let the browser derive height from width. Whenever that derived height
+// didn't match the container's real height, the leftover gap landed unevenly
+// (usually pinned to the top) instead of splitting evenly above/below — the
+// grid+placeItems:center wrapper centers whatever box the video resolves to,
+// but it can't fix a box that was sized wrong in the first place.
+//
+// Fix: compute the exact pixel width/height ourselves from the container's
+// real dimensions (same approach as computeLetterboxBox for "auto"), so the
+// box is correct before it ever reaches the DOM — centering then "just works"
+// because there's no ambiguous leftover space to begin with.
+function computeFixedRatioBox(containerW, containerH, ratioW, ratioH) {
+    if (!containerW || !containerH) return { width: "100%", height: "100%" };
+    const targetRatio = ratioW / ratioH;
+    const calculatedWidth = containerH * targetRatio;
+    if (calculatedWidth <= containerW) {
+        return { width: Math.round(calculatedWidth), height: Math.round(containerH) };
+    }
+    // Doesn't fit by height — scale down to fit by width instead, same
+    // fallback branch the 16:9 spec calls for, applied to both ratios so
+    // neither can ever overflow the container on unusual screen shapes.
+    return { width: Math.round(containerW), height: Math.round(containerW / targetRatio) };
 }
 
 // ─── Intrinsic-dimension letterbox calc ───────────────────────────────────────
@@ -207,14 +229,23 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         }
         remeasure();
 
-        // FIX: on some Android devices (punch-hole cutout phones — OnePlus,
-        // Xiaomi/Redmi), the layout box reported right at the instant of a
-        // fullscreen/orientation transition doesn't yet reflect the final
-        // cutout-adjusted viewport — ResizeObserver's first post-transition
-        // callback can fire with stale numbers. Force a couple of delayed
-        // remeasures after these events so containerDims always ends up
-        // matching the true final rendered box, not a transient one.
+        // FIX (rotation overflow): getBoundingClientRect() on the wrapper can
+        // briefly report STALE (pre-rotation) numbers right as the device
+        // rotates — the video's px box gets computed from that stale,
+        // larger-than-actual container size and visibly overflows the new
+        // (now actually smaller on one axis) viewport until a later delayed
+        // remeasure corrects it. window.innerWidth/innerHeight update
+        // synchronously with the orientation event itself (no layout-query
+        // race), so snap to those FIRST as an immediate correct-or-better
+        // estimate, then let the getBoundingClientRect remeasures refine it
+        // (e.g. for safe-area/cutout adjustments rect captures that raw
+        // innerWidth/innerHeight don't).
+        const snapToViewport = () => {
+            setContainerDims({ w: window.innerWidth, h: window.innerHeight });
+        };
+
         const remeasureSettled = () => {
+            snapToViewport();
             remeasure();
             requestAnimationFrame(remeasure);
             setTimeout(remeasure, 100);
@@ -530,6 +561,100 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         }
     }, [state.activeAudioTrack]);
 
+    // ── Shared Web Audio graph: Volume Boost + 3-Band Equalizer ───────────────
+    //
+    // <video>.volume natively caps at 1.0 — pushing louder, or applying any
+    // frequency-selective EQ, requires routing through Web Audio. This is a
+    // ONE-WAY change: createMediaElementSource() can only be called ONCE
+    // per <video> element, ever — so Volume Boost and EQ MUST share the
+    // exact same source/context; they cannot each create their own. Graph:
+    //   source → bassFilter → midFilter → trebleFilter → gain → destination
+    // Lazily created on first actual use of EITHER feature. If neither is
+    // ever touched, native <video>.volume keeps working with zero Web Audio
+    // involvement at all.
+    //
+    // Defensive: AudioContext requires a prior user gesture on most
+    // browsers — if construction fails, both features silently have no
+    // audible effect rather than crashing playback.
+    const audioCtxRef = useRef(null);
+    const gainNodeRef = useRef(null);
+    const sourceNodeRef = useRef(null);
+    const eqBandsRef = useRef({ bass: null, mid: null, treble: null });
+
+    const ensureAudioGraph = useCallback(() => {
+        const video = videoRef.current;
+        if (!video || sourceNodeRef.current) return sourceNodeRef.current ? true : false;
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            const ctx = new Ctx();
+            const source = ctx.createMediaElementSource(video);
+
+            const bass = ctx.createBiquadFilter();
+            bass.type = "lowshelf";
+            bass.frequency.value = 200;
+            bass.gain.value = 0;
+
+            const mid = ctx.createBiquadFilter();
+            mid.type = "peaking";
+            mid.frequency.value = 1000;
+            mid.Q.value = 0.7;
+            mid.gain.value = 0;
+
+            const treble = ctx.createBiquadFilter();
+            treble.type = "highshelf";
+            treble.frequency.value = 3000;
+            treble.gain.value = 0;
+
+            const gain = ctx.createGain();
+
+            source.connect(bass);
+            bass.connect(mid);
+            mid.connect(treble);
+            treble.connect(gain);
+            gain.connect(ctx.destination);
+
+            audioCtxRef.current = ctx;
+            sourceNodeRef.current = source;
+            gainNodeRef.current = gain;
+            eqBandsRef.current = { bass, mid, treble };
+            return true;
+        } catch {
+            // Web Audio unavailable or blocked — both features silently
+            // have no effect, native playback is completely unaffected.
+            return false;
+        }
+    }, [videoRef]);
+
+    useEffect(() => {
+        if (state.volumeBoost > 1) ensureAudioGraph();
+    }, [state.volumeBoost, ensureAudioGraph]);
+
+    useEffect(() => {
+        if (!gainNodeRef.current) return;
+        // Native <video>.volume already covers the 0-1 range (synced
+        // elsewhere) — the GainNode only needs to apply the EXTRA
+        // multiplier above 1.0. At volumeBoost=1 this is a no-op gain of 1.
+        gainNodeRef.current.gain.value = state.volumeBoost;
+    }, [state.volumeBoost]);
+
+    // ── 3-Band EQ ──────────────────────────────────────────────────────────────
+    // state.eqBands = { bass, mid, treble }, each in dB, range roughly
+    // -12..+12. Connects the shared audio graph on first non-zero use,
+    // same lazy pattern as volume boost.
+    useEffect(() => {
+        const { bass, mid, treble } = state.eqBands || {};
+        if (state.eqEnabled && (bass || mid || treble)) ensureAudioGraph();
+    }, [state.eqBands, state.eqEnabled, ensureAudioGraph]);
+
+    useEffect(() => {
+        const bands = eqBandsRef.current;
+        if (!bands.bass) return;
+        const { bass = 0, mid = 0, treble = 0 } = state.eqEnabled ? state.eqBands || {} : {};
+        bands.bass.gain.value = bass;
+        bands.mid.gain.value = mid;
+        bands.treble.gain.value = treble;
+    }, [state.eqBands, state.eqEnabled]);
+
     // ── Sync playback speed ───────────────────────────────────────────────────
     useEffect(() => {
         if (videoRef.current) {
@@ -643,13 +768,17 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
     // For "auto" (default) mode: compute exact letterbox pixel box from real
     // intrinsic dims + real container dims — no object-fit ambiguity, no
-    // top-anchoring on ultra-wide/cinematic content. Explicit override modes
-    // (fill/16:9/4:3/1:1/stretch) are a deliberate user choice and keep using
-    // CSS object-fit, since "fill"/"stretch" intentionally ignore native ratio.
+    // top-anchoring on ultra-wide/cinematic content. 16:9/4:3 get the same
+    // pixel-exact treatment (computeFixedRatioBox) so they can't leave an
+    // uneven gap either. fill/stretch/1:1 are left on CSS object-fit since
+    // they intentionally ignore native ratio / are symmetric by construction.
     const isAutoMode = state.aspectRatio === "auto" || !state.aspectRatio;
+    const isFixedRatioMode = state.aspectRatio === "16:9" || state.aspectRatio === "4:3";
     const computedBox = isAutoMode ? computeLetterboxBox(containerDims.w, containerDims.h, videoDims.w, videoDims.h) : null;
+    const fixedRatioBox = isFixedRatioMode ? computeFixedRatioBox(containerDims.w, containerDims.h, state.aspectRatio === "16:9" ? 16 : 4, state.aspectRatio === "16:9" ? 9 : 3) : null;
 
     const hasIntrinsicDims = videoDims.w > 0 && videoDims.h > 0 && containerDims.w > 0 && containerDims.h > 0;
+    const hasContainerDims = containerDims.w > 0 && containerDims.h > 0;
 
     const videoStyle = isAutoMode
         ? hasIntrinsicDims
@@ -667,7 +796,16 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                   height: "100%",
                   objectFit: "contain",
               }
-        : getAspectStyle(state.aspectRatio);
+        : isFixedRatioMode
+          ? hasContainerDims
+              ? {
+                    width: fixedRatioBox.width,
+                    height: fixedRatioBox.height,
+                    objectFit: "fill", // box is already exact target-ratio size
+                    transition: "width 0.2s ease-out, height 0.2s ease-out", // smooth resize when cycling modes
+                }
+              : { width: "100%", height: "100%", objectFit: "contain" } // pre-layout fallback before container is measured
+          : getAspectStyle(state.aspectRatio);
 
     return (
         // FIX: outer wrapper is flex-centered absolute inset-0 so the video box

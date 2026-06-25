@@ -246,7 +246,9 @@ export default function MyMedia() {
             <div className="flex flex-wrap items-center gap-2.5">
                 <div className="relative flex-1 min-w-44 max-w-sm">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/35 pointer-events-none" />
-                    <label htmlFor="media-search" className="sr-only">Search titles</label>
+                    <label htmlFor="media-search" className="sr-only">
+                        Search titles
+                    </label>
                     <input
                         id="media-search"
                         name="q"

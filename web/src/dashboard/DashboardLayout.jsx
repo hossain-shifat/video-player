@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
-import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo } from "lucide-react";
+import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo, Tv } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import Logo from "../Components/Logo";
 
@@ -18,6 +18,7 @@ const NAV = [
             { to: "/dashboard/users", icon: Users, label: "Users" },
             { to: "/dashboard/media", icon: FileVideo, label: "Media" },
             { to: "/dashboard/libraries", icon: HardDrive, label: "Libraries" },
+            { to: "/dashboard/iptv", icon: Tv, label: "IPTV" },
             { to: "/dashboard/streams", icon: Radio, label: "Live Streams" },
             { to: "/dashboard/jobs", icon: Activity, label: "Jobs" },
             { to: "/dashboard/uploads", icon: Upload, label: "Uploads" },
@@ -43,11 +44,15 @@ function NavItem({ item, collapsed, onClick }) {
                 [
                     "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium",
                     "transition-all duration-150 group select-none border",
-                    isActive ? "bg-primary/15 text-primary border-primary/20" : "text-base-content/50 hover:text-base-content hover:bg-base-content/5 border-transparent",
+                    isActive ? "bg-primary/15 text-primary border-primary/20" : "text-base-content hover:text-base-content hover:bg-base-content/5 border-transparent",
                 ].join(" ")
             }>
-            <item.icon size={17} className="shrink-0 transition-transform duration-150 group-hover:scale-110" />
-            {!collapsed && <span className="truncate">{item.label}</span>}
+            {({ isActive }) => (
+                <>
+                    <item.icon size={17} stroke={isActive ? "var(--color-primary)" : "var(--color-base-content)"} className="shrink-0 transition-transform duration-150 group-hover:scale-110" />
+                    {!collapsed && <span className="truncate">{item.label}</span>}
+                </>
+            )}
         </NavLink>
     );
 }
@@ -63,7 +68,7 @@ function Sidebar({ collapsed, onNav, user, logout }) {
                 ) : (
                     <div className="flex items-center gap-2 w-full min-w-0">
                         <Logo />
-                        <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-base-content/25 bg-base-content/5 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">Admin</span>
+                        <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/40 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">Admin</span>
                     </div>
                 )}
             </div>
@@ -157,7 +162,7 @@ export default function DashboardLayout() {
                 <button
                     onClick={() => setCollapsed(!collapsed)}
                     aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                    className="absolute top-4 -right-3 z-10 w-6 h-6 rounded-full bg-base-300 border border-base-content/10 flex items-center justify-center text-base-content/60 hover:text-base-content transition-colors shadow-sm">
+                    className="absolute top-4 -right-3 z-10 w-6 h-6 rounded-full bg-base-300 border border-base-content/10 flex items-center justify-center text-base-content/60 hover:text-base-content transition-colors shadow-sm cursor-pointer">
                     {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
                 </button>
             </aside>

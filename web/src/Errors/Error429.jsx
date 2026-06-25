@@ -1,17 +1,18 @@
 // web/src/Errors/Error429.jsx
-import ErrorCard from "./ErrorCard";
+import ErrorScene from "./ErrorScene";
 import { RateLimitIllustration } from "./ErrorIllustration";
 import { Timer } from "lucide-react";
 
 export default function Error429() {
     return (
-        <ErrorCard
+        <ErrorScene
             code="429"
+            eyebrow="FLUX · Live TV Congested"
             title="Slow Down"
             description="Too many requests have been sent in a short period. Please wait a moment before trying again."
             illustration={RateLimitIllustration}
             primaryAction={() => window.location.reload()}
-            primaryLabel="Retry Later"
+            primaryLabel="Retry Now"
             primaryIcon={Timer}
         />
     );

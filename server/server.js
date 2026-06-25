@@ -20,6 +20,7 @@ const historyRouter = require("./routes/history");
 const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
 const adminDashboardRouter = require("./routes/adminDashboard");
+const liveRouter = require("./routes/live");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
 const authRouter = require("./auth/routes/authRoutes");
@@ -88,6 +89,7 @@ app.use("/api/history", historyRouter);
 app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
+app.use("/api/live", liveRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -179,6 +181,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    Health:  /health`);
     console.log(`    Library: /api/library`);
     console.log(`    Media:   /api/media`);
+    console.log(`    Live TV: /api/live/channels`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
@@ -200,39 +203,76 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
         const { readFolders } = require("./controllers/libraryController");
         const folders = await readFolders();
 
+        console.log(`[Subtitle] Folders configured: ${folders.length}`);
+
         if (folders.length > 0) {
             const { allMedia } = await getAllCached(folders);
+            console.log(`[Subtitle] Total media files found: ${allMedia.length}`);
+
             const allMediaIds = new Set(allMedia.map((f) => f.id));
 
             // Remove orphan subtitle data for media no longer in library
             await subtitleStore.reconcile(allMediaIds);
 
-            // Auto-enqueue all media for subtitle download (skips already done/queued)
-            // Uses TMDB metadata (title, year, tmdbId) for best SubDL match.
+            // Auto-enqueue all media for subtitle download (skips already done/queued).
+            // Uses TMDB metadata (title, year, tmdbId) for best SubSource match.
+            //
+            // IMPORTANT: metadataStore strips the 'parsed' field before caching
+            // (see metadataStore.setCache), so meta.parsed is ALWAYS undefined
+            // on a cache hit. season/episode/part must be re-derived locally
+            // via parseFilename() — never read them off the TMDB metadata object.
             const { getMetadata } = require("./utils/metadataStore");
+            const { parseFilename } = require("./utils/nameParser");
+
+            // Fetch metadata for all files in parallel (bounded) instead of
+            // one-by-one — sequential awaiting over a large library could take
+            // minutes before enqueueBatch ever ran, making it look "stuck".
+            const CONCURRENCY = 8;
             const batchItems = [];
-            for (const file of allMedia) {
-                const meta = await getMetadata(file).catch(() => null);
-                batchItems.push({
-                    mediaId: file.id,
-                    title: meta?.title || file.name,
-                    year: meta?.year || null,
-                    imdbId: meta?.imdbId || null,
-                    tmdbId: meta?.tmdbId ? String(meta.tmdbId) : null,
-                    season: meta?.parsed?.season ?? null,
-                    episode: meta?.parsed?.episode ?? null,
-                    part: meta?.parsed?.part ?? null,
-                    type: meta?.type === "series" || meta?.type === "anime" ? "tv" : "movie",
-                    spokenLanguage: meta?.language || null, // ISO 639-1 from TMDB e.g. "hi", "en", "bn"
-                });
+            let processed = 0;
+
+            for (let i = 0; i < allMedia.length; i += CONCURRENCY) {
+                const chunk = allMedia.slice(i, i + CONCURRENCY);
+                const results = await Promise.all(
+                    chunk.map(async (file) => {
+                        const meta = await getMetadata(file).catch((err) => {
+                            console.warn(`[Subtitle] getMetadata failed for "${file.name}": ${err.message}`);
+                            return null;
+                        });
+                        const parsedLocal = parseFilename(file.name); // always has season/episode/part
+                        return { file, meta, parsedLocal };
+                    }),
+                );
+
+                for (const { file, meta, parsedLocal } of results) {
+                    batchItems.push({
+                        mediaId: file.id,
+                        title: meta?.title || parsedLocal.title || file.name,
+                        year: meta?.year || parsedLocal.year || null,
+                        imdbId: meta?.imdbId || null,
+                        tmdbId: meta?.tmdbId ? String(meta.tmdbId) : null,
+                        season: parsedLocal.season ?? null,
+                        episode: parsedLocal.episode ?? null,
+                        part: parsedLocal.part ?? null,
+                        type: meta?.type === "series" || meta?.type === "anime" || parsedLocal.type === "series" || parsedLocal.type === "anime" ? "tv" : "movie",
+                        spokenLanguage: meta?.language || null,
+                    });
+                    processed++;
+                }
             }
+
+            console.log(`[Subtitle] Metadata resolved for ${processed}/${allMedia.length} files`);
+
             const added = await subtitleStore.enqueueBatch(batchItems);
-            if (added > 0) console.log(`[Subtitle] Auto-enqueued ${added} items for download`);
+            console.log(`[Subtitle] Auto-enqueued ${added} item(s) for download (${batchItems.length - added} already done/queued)`);
+        } else {
+            console.log("[Subtitle] No library folders configured — nothing to enqueue");
         }
 
         subtitleWorker.start();
     } catch (err) {
         console.error("[Server] Subtitle system init error:", err.message);
+        console.error(err.stack);
     }
 });
 
