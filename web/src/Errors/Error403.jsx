@@ -12,7 +12,7 @@ export default function Error403() {
             description="Your account does not currently have access to this resource. Contact an administrator for assistance."
             illustration={ForbiddenShieldIllustration}
             primaryAction={() => (window.location.href = "/")}
-            primaryLabel="Request Access"
+            primaryLabel="Go Home"
             primaryIcon={ShieldCheck}
         />
     );

@@ -66,7 +66,7 @@ export default function ErrorScene({ code, title, description, illustration: Ill
             <Sprockets />
 
             <style>{`
-                .errscene { position: fixed; inset: 0; z-index: 60; height: 100dvh; overflow: hidden; background: var(--color-base-100); isolation: isolate; display: flex; flex-direction: column; }
+                .errscene { position: fixed; inset: 0; z-index: 60; height: 100dvh; overflow: hidden auto; background: var(--color-base-100); isolation: isolate; display: flex; flex-direction: column; }
                 .errscene__bg { position: fixed; inset: 0; z-index: 0;
                     background:
                         radial-gradient(60rem 40rem at 50% -10%, color-mix(in oklch, var(--color-primary) 20%, transparent), transparent 60%),
@@ -93,7 +93,7 @@ export default function ErrorScene({ code, title, description, illustration: Ill
 
                 .errscene__stage { position: relative; z-index: 5; max-width: 640px; width: 100%; margin: 0 auto; padding: clamp(0.5rem,2vh,1.5rem) 1.25rem;
                     display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(0.3rem,1vh,0.75rem);
-                    flex: 1 1 auto; min-height: 0; overflow: hidden; justify-content: center; }
+                    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; justify-content: center; }
                 .errscene__illustration { width: 100%; max-width: min(14rem, 32vh); aspect-ratio: 1.25; display: flex; align-items: center; justify-content: center; flex-shrink: 1; }
                 .errscene__eyebrow { font-size: 0.66rem; letter-spacing: 0.24em; text-transform: uppercase; color: var(--color-primary); font-weight: 700; }
                 .errscene__code { font-family: "CircularStd", "IBM Plex Sans", sans-serif; font-weight: 800; font-size: clamp(1.8rem, 6vh, 3.8rem); line-height: 1; letter-spacing: 0.02em;

@@ -4,7 +4,7 @@ import { Lock, Ban, SearchX, Tv, ServerCrash, RadioTower, Loader2 } from "lucide
 // ── 401 · Series — locked season vault ─────────────────────────────────────
 export function AuthVaultIllustration() {
     return (
-        <div className="scn scn-vault">
+        <div className="scn scn-vault" aria-hidden="true">
             <div className="scn-vault__spines">
                 {Array.from({ length: 6 }).map((_, i) => (
                     <span key={i} className="scn-vault__spine" style={{ "--i": i }} />
@@ -26,6 +26,9 @@ export function AuthVaultIllustration() {
                     animation: lockSwing 3.2s ease-in-out infinite; transform-origin: 50% 0%; }
                 @keyframes spineGlow { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.18); } }
                 @keyframes lockSwing { 0%,100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-vault__spine, .scn-vault__lock { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -34,7 +37,7 @@ export function AuthVaultIllustration() {
 // ── 403 · Anime — denied ink seal ───────────────────────────────────────────
 export function ForbiddenShieldIllustration() {
     return (
-        <div className="scn scn-seal">
+        <div className="scn scn-seal" aria-hidden="true">
             <div className="scn-seal__ring" />
             <div className="scn-seal__ring scn-seal__ring--inner" />
             {Array.from({ length: 8 }).map((_, i) => (
@@ -53,6 +56,9 @@ export function ForbiddenShieldIllustration() {
                 @keyframes sealSpin { to { transform: rotate(360deg); } }
                 @keyframes banPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
                 @keyframes petalDrift { 0%,100% { opacity: 0.6; transform: rotate(calc(var(--i) * 45deg)) translateY(-7rem) translateX(0); } 50% { opacity: 0.15; transform: rotate(calc(var(--i) * 45deg)) translateY(-8rem) translateX(4px); } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-seal__ring, .scn-seal__ring--inner, .scn-seal__ban, .scn-seal__petal { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -61,7 +67,7 @@ export function ForbiddenShieldIllustration() {
 // ── 404 · Movies — unspooled reel, missing frame ────────────────────────────
 export function NotFoundIllustration() {
     return (
-        <div className="scn scn-reel">
+        <div className="scn scn-reel" aria-hidden="true">
             <svg viewBox="0 0 100 100" className="scn-reel__ring" aria-hidden="true">
                 <circle cx="50" cy="50" r="34" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="6 5" />
                 <circle cx="50" cy="50" r="10" fill="none" stroke="currentColor" strokeWidth="3" />
@@ -87,6 +93,9 @@ export function NotFoundIllustration() {
                 @keyframes reelTurn { to { transform: rotate(360deg); } }
                 @keyframes stripDrift { 0%,100% { transform: rotate(-10deg) translateX(0); } 50% { transform: rotate(-6deg) translateX(4px); } }
                 @keyframes frameBlink { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-reel__ring, .scn-reel__strip, .scn-reel__frame { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -95,7 +104,7 @@ export function NotFoundIllustration() {
 // ── 429 · Live TV — overloaded channel grid ─────────────────────────────────
 export function RateLimitIllustration() {
     return (
-        <div className="scn scn-grid">
+        <div className="scn scn-grid" aria-hidden="true">
             <Tv className="scn-grid__icon" size={24} strokeWidth={1.6} />
             <div className="scn-grid__tiles">
                 {Array.from({ length: 9 }).map((_, i) => (
@@ -111,6 +120,9 @@ export function RateLimitIllustration() {
                     animation: tileOverload 1.6s ease-in-out infinite; animation-delay: calc(var(--i) * 0.12s); }
                 @keyframes gridIconPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.15); } }
                 @keyframes tileOverload { 0%,100% { opacity: 0.5; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.04); } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-grid__icon, .scn-grid__tile { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -119,7 +131,7 @@ export function RateLimitIllustration() {
 // ── 500 · Static crash — glitch tear ────────────────────────────────────────
 export function ServerCrashIllustration() {
     return (
-        <div className="scn scn-static">
+        <div className="scn scn-static" aria-hidden="true">
             <div className="scn-static__bars">
                 {Array.from({ length: 7 }).map((_, i) => (
                     <span key={i} className="scn-static__bar" style={{ "--i": i }} />
@@ -135,6 +147,9 @@ export function ServerCrashIllustration() {
                     animation: crashShake 2.6s ease-in-out infinite; }
                 @keyframes barTear { 0%,100% { transform: translateX(0); opacity: 0.4; } 30% { transform: translateX(-12%); opacity: 0.8; } 60% { transform: translateX(8%); opacity: 0.3; } }
                 @keyframes crashShake { 0%,100% { transform: translate(0,0); } 20% { transform: translate(-2px,1px); } 40% { transform: translate(2px,-1px); } 60% { transform: translate(-1px,2px); } 80% { transform: translate(1px,-2px); } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-static__bar, .scn-static__icon { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -143,7 +158,7 @@ export function ServerCrashIllustration() {
 // ── Network · Live TV — dead antenna signal ─────────────────────────────────
 export function NetworkOfflineIllustration() {
     return (
-        <div className="scn scn-signal">
+        <div className="scn scn-signal" aria-hidden="true">
             <RadioTower className="scn-signal__tower" size={40} strokeWidth={1.6} />
             {[0, 1, 2].map((i) => (
                 <span key={i} className="scn-signal__ring" style={{ "--i": i }} />
@@ -155,6 +170,9 @@ export function NetworkOfflineIllustration() {
                     animation: ringExpand 2.4s ease-out infinite; animation-delay: calc(var(--i) * 0.6s); }
                 @keyframes ringExpand { 0% { transform: scale(0.6); opacity: 0.6; } 100% { transform: scale(3.2); opacity: 0; } }
                 @keyframes towerFlicker { 0%,40%,100% { opacity: 1; } 45%,55% { opacity: 0.2; } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-signal__tower, .scn-signal__ring { animation: none !important; }
+                }
             `}</style>
         </div>
     );
@@ -163,7 +181,7 @@ export function NetworkOfflineIllustration() {
 // ── Timeout · Anime — stuck buffering spinner ───────────────────────────────
 export function TimeoutClockIllustration() {
     return (
-        <div className="scn scn-buffer">
+        <div className="scn scn-buffer" aria-hidden="true">
             <Loader2 className="scn-buffer__spin" size={46} strokeWidth={1.6} />
             {Array.from({ length: 6 }).map((_, i) => (
                 <span key={i} className="scn-buffer__petal" style={{ "--i": i }} />
@@ -176,6 +194,9 @@ export function TimeoutClockIllustration() {
                     animation: petalFloat 3.6s ease-in-out infinite; animation-delay: calc(var(--i) * 0.25s); }
                 @keyframes bufferSpin { to { transform: rotate(360deg); } }
                 @keyframes petalFloat { 0%,100% { opacity: 0.55; } 50% { opacity: 0.1; transform: rotate(calc(var(--i) * 60deg)) translateY(-6.2rem); } }
+                @media (prefers-reduced-motion: reduce) {
+                    .scn-buffer__spin, .scn-buffer__petal { animation: none !important; }
+                }
             `}</style>
         </div>
     );

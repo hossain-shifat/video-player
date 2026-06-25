@@ -12,7 +12,7 @@ export default function Error429() {
             description="Too many requests have been sent in a short period. Please wait a moment before trying again."
             illustration={RateLimitIllustration}
             primaryAction={() => window.location.reload()}
-            primaryLabel="Retry Later"
+            primaryLabel="Retry Now"
             primaryIcon={Timer}
         />
     );
