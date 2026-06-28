@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ArrowLeft } from "lucide-react";
 
 function useOrientation() {
@@ -21,9 +22,20 @@ function useOrientation() {
  * slides from bottom, 40% height. PC keeps the old PopupMenu (caller's
  * job to render this only when isMobile).
  *
- * Stays open until manually closed (X / ArrowLeft button) — never auto-closes
- * or fades on its own, regardless of the player controls' own 3s inactivity
- * timer. The only way out is the explicit close button.
+ * Stays open until manually closed (ArrowLeft button / tap outside) — never
+ * auto-closes or fades on its own. This component has zero timers tied to
+ * controlsPhase; the ONLY way it closes is the parent setting open=false.
+ *
+ * Rendered via createPortal(..., document.body) — REQUIRED. PlayerControls
+ * is normally rendered inside a wrapper (in PlayerPage.jsx) that fades to
+ * opacity:0 after 3s of inactivity. Without the portal, this component is a
+ * normal DOM descendant of that wrapper, and CSS opacity on a parent visually
+ * dims the WHOLE subtree at paint time — position:fixed only escapes layout,
+ * not that opacity cascade. So even though this component's own `visible`
+ * state never changed, it looked like it was "auto-fading after 3s": it was
+ * actually just inheriting the controls layer's own fade. The portal moves
+ * it to document.body, fully outside that wrapper, so it's now visually and
+ * functionally independent of the controls' inactivity timer.
  *
  * data-gesture-exclude="true" on the outer overlay is REQUIRED: the player's
  * gesture layer (PlayerGestures.jsx) attaches native touchstart/touchend
@@ -87,10 +99,11 @@ export default function VideoSidebar({ open, onClose, title, children }) {
               boxShadow: "0 -20px 60px rgba(0,0,0,0.5)",
           };
 
-    return (
+    return createPortal(
         <div
             className="flux-sidebar-overlay"
             data-gesture-exclude="true"
+            onClick={onClose}
             style={{
                 position: "fixed",
                 inset: 0,
@@ -98,6 +111,7 @@ export default function VideoSidebar({ open, onClose, title, children }) {
                 background: "rgba(0,0,0,0.25)",
                 opacity: visible ? 1 : 0,
                 transition: "opacity 240ms cubic-bezier(0.16, 1, 0.3, 1)",
+                pointerEvents: "auto",
             }}>
             <div
                 className="flux-sidebar-panel"
@@ -108,6 +122,7 @@ export default function VideoSidebar({ open, onClose, title, children }) {
                     background: "rgba(10, 10, 14, 0.94)",
                     transform: visible ? "translate(0, 0)" : offscreenTransform,
                     transition: "transform 260ms cubic-bezier(0.16, 1, 0.3, 1)",
+                    pointerEvents: "auto",
                     ...panelStyle,
                 }}>
                 {/* Header row — reserves its own height so list content below
@@ -155,7 +170,8 @@ export default function VideoSidebar({ open, onClose, title, children }) {
                     {children}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }
 
@@ -180,7 +196,7 @@ export function SidebarItem({ active, onClick, children, icon: Icon }) {
                 WebkitTapHighlightColor: "transparent",
             }}>
             {Icon && <Icon size={15} style={{ opacity: 0.65, flexShrink: 0 }} />}
-            <span style={{ flex: 1 }}>{children}</span>
+            <span style={{ flex: 1, display: "flex", alignItems: "center", minWidth: 0 }}>{children}</span>
         </button>
     );
 }

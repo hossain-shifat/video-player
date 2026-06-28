@@ -16,6 +16,8 @@ const {
     getCategoriesList,
     getChannelsFlat,
     checkStreamStatus,
+    startBulkCheck,
+    getBulkCheckStatus,
     refreshIptvOrgDb,
 } = require("../controllers/liveController");
 
@@ -71,6 +73,10 @@ router.get("/channels/flat", ...adminOnly, getChannelsFlat); // GET /api/live/ch
 
 // Single stream health check — admin dashboard "Working Status" column
 router.get("/check", ...adminOnly, checkStreamStatus); // GET /api/live/check?url=...
+
+// Bulk stream health check — fires background probe of all channels in live.json
+router.post("/check/bulk", ...adminOnly, startBulkCheck); // POST /api/live/check/bulk
+router.get("/check/bulk/status", ...adminOnly, getBulkCheckStatus); // GET /api/live/check/bulk/status
 
 // Force-refresh the iptv-org channels/logos/categories database
 router.post("/iptvorg/refresh", ...adminOnly, refreshIptvOrgDb); // POST /api/live/iptvorg/refresh

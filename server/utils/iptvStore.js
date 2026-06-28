@@ -174,6 +174,7 @@ module.exports = {
     updateSource,
     deleteSource,
     getLive,
+    writeLive,
     getPublicLive,
     getPublicLiveRich,
     mergeChannelsForSource,

@@ -32,50 +32,62 @@ function getBufferedPct(buffered, duration, currentTime) {
  */
 const SeekBar = memo(function SeekBar({ videoRef }) {
     const { state, actions } = usePlayerState();
-    const barRef       = useRef(null);
-    const thumbRef     = useRef(null);
-    const dragging     = useRef(false);
+    const barRef = useRef(null);
+    const thumbRef = useRef(null);
+    const dragging = useRef(false);
     const [isDragging, setIsDragging] = useState(false);
-    const [hoverInfo, setHoverInfo]   = useState(null); // { time, x }
-    const [isHovered, setIsHovered]   = useState(false);
+    const [hoverInfo, setHoverInfo] = useState(null); // { time, x }
+    const [isHovered, setIsHovered] = useState(false);
     const rafRef = useRef(null);
 
-    const getTimeFromClientX = useCallback((clientX) => {
-        const rect = barRef.current?.getBoundingClientRect();
-        if (!rect || !state.duration) return 0;
-        const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        return pct * state.duration;
-    }, [state.duration]);
+    const getTimeFromClientX = useCallback(
+        (clientX) => {
+            const rect = barRef.current?.getBoundingClientRect();
+            if (!rect || !state.duration) return 0;
+            const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+            return pct * state.duration;
+        },
+        [state.duration],
+    );
 
-    const applySeek = useCallback((clientX) => {
-        const t = getTimeFromClientX(clientX);
-        if (!isFinite(t) || isNaN(t)) return;
-        // Direct DOM mutation for zero-latency feel during drag
-        if (videoRef.current) videoRef.current.currentTime = t;
-        actions.setCurrentTime(t);
-    }, [getTimeFromClientX, videoRef, actions]);
+    const applySeek = useCallback(
+        (clientX) => {
+            const t = getTimeFromClientX(clientX);
+            if (!isFinite(t) || isNaN(t)) return;
+            // Direct DOM mutation for zero-latency feel during drag
+            if (videoRef.current) videoRef.current.currentTime = t;
+            actions.setCurrentTime(t);
+        },
+        [getTimeFromClientX, videoRef, actions],
+    );
 
     const getClientX = (e) => e.touches?.[0]?.clientX ?? e.clientX;
 
     // ── Pointer down (start drag) ────────────────────────────────────────────
-    const onPointerDown = useCallback((e) => {
-        e.preventDefault();
-        dragging.current = true;
-        setIsDragging(true);
-        applySeek(getClientX(e));
-    }, [applySeek]);
+    const onPointerDown = useCallback(
+        (e) => {
+            e.preventDefault();
+            dragging.current = true;
+            setIsDragging(true);
+            applySeek(getClientX(e));
+        },
+        [applySeek],
+    );
 
     // ── Mouse move for hover tooltip (non-drag) ──────────────────────────────
-    const onMouseMove = useCallback((e) => {
-        if (!isHovered && !dragging.current) return;
-        const rect = barRef.current?.getBoundingClientRect();
-        if (!rect || !state.duration) return;
-        const x = e.clientX - rect.left;
-        const clampedX = Math.max(0, Math.min(rect.width, x));
-        const t = (clampedX / rect.width) * state.duration;
-        setHoverInfo({ time: t, x: clampedX });
-        if (dragging.current) applySeek(e.clientX);
-    }, [isHovered, state.duration, applySeek]);
+    const onMouseMove = useCallback(
+        (e) => {
+            if (!isHovered && !dragging.current) return;
+            const rect = barRef.current?.getBoundingClientRect();
+            if (!rect || !state.duration) return;
+            const x = e.clientX - rect.left;
+            const clampedX = Math.max(0, Math.min(rect.width, x));
+            const t = (clampedX / rect.width) * state.duration;
+            setHoverInfo({ time: t, x: clampedX });
+            if (dragging.current) applySeek(e.clientX);
+        },
+        [isHovered, state.duration, applySeek],
+    );
 
     // ── Global pointer up / move for drag outside bar ────────────────────────
     useEffect(() => {
@@ -101,65 +113,51 @@ const SeekBar = memo(function SeekBar({ videoRef }) {
                 }
             });
         };
-        window.addEventListener("mouseup",    onUp,   { passive: true });
-        window.addEventListener("touchend",   onUp,   { passive: true });
-        window.addEventListener("mousemove",  onMove, { passive: true });
-        window.addEventListener("touchmove",  onMove, { passive: false });
+        window.addEventListener("mouseup", onUp, { passive: true });
+        window.addEventListener("touchend", onUp, { passive: true });
+        window.addEventListener("mousemove", onMove, { passive: true });
+        window.addEventListener("touchmove", onMove, { passive: false });
         return () => {
-            window.removeEventListener("mouseup",   onUp);
-            window.removeEventListener("touchend",  onUp);
+            window.removeEventListener("mouseup", onUp);
+            window.removeEventListener("touchend", onUp);
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("touchmove", onMove);
             if (rafRef.current) cancelAnimationFrame(rafRef.current);
         };
     }, [applySeek, state.duration]);
 
-    const playedPct   = state.duration ? (state.currentTime / state.duration) * 100 : 0;
+    const playedPct = state.duration ? (state.currentTime / state.duration) * 100 : 0;
     const bufferedPct = getBufferedPct(state.buffered, state.duration, state.currentTime);
-    const showThumb   = isHovered || isDragging;
+    const showThumb = isHovered || isDragging;
 
     return (
         <div
             className="flux-seek-root"
             onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => { setIsHovered(false); setHoverInfo(null); }}
+            onMouseLeave={() => {
+                setIsHovered(false);
+                setHoverInfo(null);
+            }}
             onMouseMove={onMouseMove}
             onMouseDown={onPointerDown}
-            onTouchStart={onPointerDown}
-        >
+            onTouchStart={onPointerDown}>
             {/* Hover tooltip */}
             {hoverInfo !== null && state.duration > 0 && (
-                <div
-                    className="flux-seek-tooltip"
-                    style={{ left: hoverInfo.x }}
-                >
+                <div className="flux-seek-tooltip" style={{ left: hoverInfo.x }}>
                     {formatTime(hoverInfo.time)}
                 </div>
             )}
 
             {/* Track */}
-            <div
-                ref={barRef}
-                className={`flux-seek-track ${isDragging ? "dragging" : ""}`}
-            >
+            <div ref={barRef} className={`flux-seek-track ${isDragging ? "dragging" : ""}`}>
                 {/* Buffered */}
-                <div
-                    className="flux-seek-buffered"
-                    style={{ width: `${bufferedPct}%` }}
-                />
+                <div className="flux-seek-buffered" style={{ width: `${bufferedPct}%` }} />
                 {/* Played */}
-                <div
-                    className="flux-seek-played"
-                    style={{ width: `${playedPct}%` }}
-                />
+                <div className="flux-seek-played" style={{ width: `${playedPct}%` }} />
             </div>
 
             {/* Thumb */}
-            <div
-                ref={thumbRef}
-                className={`flux-seek-thumb ${showThumb ? "active" : ""} ${isDragging ? "dragging" : ""}`}
-                style={{ left: `${playedPct}%` }}
-            />
+            <div ref={thumbRef} className={`flux-seek-thumb ${showThumb ? "active" : ""} ${isDragging ? "dragging" : ""}`} style={{ left: `${playedPct}%` }} />
         </div>
     );
 });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router";
-import { Tv, AlertCircle, Loader, List, RefreshCw } from "lucide-react";
+import { Tv, AlertCircle, Loader } from "lucide-react";
 import Hls from "hls.js";
 
 import { PlayerProvider, usePlayerState } from "./UsePlayerState";
@@ -9,7 +9,6 @@ import PlayerGestures from "./PlayerGestures";
 import PlayerLock from "./PlayerLock";
 import PlayerControls from "./PlayerControls";
 import { useIsMobile } from "./useIsMobile";
-import VideoSidebar, { SidebarItem } from "./VideoSidebar";
 
 // ── Landscape lock ────────────────────────────────────────────────────────────
 function useLandscapeLock(enabled, containerRef) {
@@ -37,12 +36,70 @@ function useLandscapeLock(enabled, containerRef) {
     }, [enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
+// ── extractNameMeta ─────────────────────────────────────────────────────────
+// Ported from backend normalizeChannel utility.
+// Strips noise tokens (HD, SD, 4K, codec tags, bracket junk) from IPTV channel
+// names and returns a clean display name + resolution metadata.
+
+const RES_TOKENS = /(4k|uhd|2160p?|fhd|1080[ip]?|hd|720p?|sd|480[ip]?|576[ip]?)/gi;
+const CODEC_TOKENS = /(h\.?264|h\.?265|hevc|avc|av1|vp9|aac|mp3|ac3|opus)/gi;
+const BRACKET_NOISE = /[\[(][^\])]*(hd|sd|4k|uhd|fhd|hevc|h\.?26[45]|avc)[^\])]*[\])]/gi;
+
+function extractNameMeta(rawName = "") {
+    if (!rawName) return { cleanName: "", resolution: null, isHD: false };
+
+    // Strip bracket/paren groups that are pure noise (resolution/codec only)
+    let name = rawName.replace(BRACKET_NOISE, "").trim();
+
+    // Collect resolution tokens before removing them
+    const resMatches = [];
+    name = name.replace(RES_TOKENS, (m) => {
+        resMatches.push(m.toLowerCase());
+        return "";
+    });
+    name = name.replace(CODEC_TOKENS, "").trim();
+
+    // Clean up leftover punctuation / double spaces
+    name = name
+        .replace(/[-|:,_]+$/g, "") // trailing separators
+        .replace(/^[-|:,_]+/g, "") // leading separators
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+    // Derive canonical resolution label from collected tokens
+    let resolution = null;
+    let isHD = false;
+    for (const t of resMatches) {
+        if (t === "4k" || t === "uhd" || t.startsWith("2160")) {
+            resolution = "4K";
+            isHD = true;
+            break;
+        }
+        if (t === "fhd" || t.startsWith("1080")) {
+            resolution = "1080p";
+            isHD = true;
+            break;
+        }
+        if (t === "hd" || t.startsWith("720")) {
+            resolution = "HD";
+            isHD = true;
+            break;
+        }
+        if (t === "sd" || t.startsWith("480") || t.startsWith("576")) {
+            resolution = "SD";
+            break;
+        }
+    }
+
+    return { cleanName: name || rawName, resolution, isHD };
+}
+
 // ── Live seek strip (used by PlayerControls SeekBar passthrough) ─────────────
 // PlayerControls renders its own SeekBar internally — no separate strip needed.
 
 // ── Main inner component ──────────────────────────────────────────────────────
 
-function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, stateCategory, stateChannels }) {
+function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo }) {
     const navigate = useNavigate();
     const videoRef = useRef(null);
     const containerRef = useRef(null);
@@ -53,30 +110,7 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
     const [loading, setLoading] = useState(true);
     const [videoError, setVideoError] = useState(false);
     const hlsRef = useRef(null);
-    const [refreshKey, setRefreshKey] = useState(0);
-
-    const refreshStream = useCallback(() => {
-        // Destroy current HLS instance and re-init by bumping refreshKey.
-        // channel dep in HLS effect won't re-fire for same channel obj,
-        // so we force it via a separate key dep added to the effect below.
-        if (hlsRef.current) {
-            hlsRef.current.destroy();
-            hlsRef.current = null;
-        }
-        actions.setPlaying(false);
-        actions.setBuffering(true);
-        setRefreshKey((k) => k + 1);
-    }, [actions]);
-
-    // ── Channel list sidebar ─────────────────────────────────────────────────
-    const [channelListOpen, setChannelListOpen] = useState(false);
-    const categoryName = stateCategory || "Channels";
-    const channelList = stateChannels || [];
-
-    const switchChannel = useCallback((ch) => {
-        setChannelListOpen(false);
-        setChannel(ch);
-    }, []);
+    const [subtitles, setSubtitles] = useState([]);
 
     // ── Landscape lock — fires once channel is ready on mobile
     useLandscapeLock(isMobile && !!channel, containerRef);
@@ -220,12 +254,6 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
         showControls();
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ── Live-specific quick-icon order ────────────────────────────────────────
-    // Remove VOD-only items (loop, shuffle, abRepeat, bgPlay) from quick row.
-    useEffect(() => {
-        actions.setQuickIconOrder(["speed", "rotation", "nightMode", "eq", "sleepTimer"]);
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
     // Sync quality level → HLS engine
     useEffect(() => {
         if (!hlsRef.current) return;
@@ -276,16 +304,41 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
                 actions.setBuffering(false);
                 if (hls.levels?.length > 0) {
                     actions.setQualityLevels(
-                        hls.levels.map((l, i) => ({
-                            index: i,
-                            height: l.height,
-                            width: l.width,
-                            bitrate: l.bitrate,
-                            label: l.height ? `${l.height}p` : `Profile ${i + 1}`,
-                        })),
+                        hls.levels
+                            .map((l, i) => ({
+                                index: i,
+                                height: l.height,
+                                width: l.width,
+                                bitrate: l.bitrate,
+                                label: (() => {
+                                    if (l.height > 0) return `${l.height}p`;
+                                    const { resolution: nameRes } = extractNameMeta(channel?.name || "");
+                                    if (nameRes) return nameRes;
+                                    if (l.bitrate > 0) {
+                                        const kbps = Math.round(l.bitrate / 1000);
+                                        return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`;
+                                    }
+                                    return "Live";
+                                })(),
+                            }))
+                            // Low → High: ascending bitrate order for display
+                            .sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0)),
                     );
                     actions.setActiveQuality(-1);
                 }
+                // Extract embedded HLS subtitle tracks (EXT-X-MEDIA TYPE=SUBTITLES)
+                if (hls.subtitleTracks?.length > 0) {
+                    const hlsSubs = hls.subtitleTracks.map((t, i) => ({
+                        index: i,
+                        lang: t.lang || t.language || "und",
+                        label: t.name || t.lang || `Track ${i + 1}`,
+                        url: null, // HLS-native track; switching via hls.subtitleTrack
+                        source: "hls",
+                        codec: "webvtt",
+                    }));
+                    setSubtitles(hlsSubs);
+                }
+
                 video
                     .play()
                     .then(() => actions.setPlaying(true))
@@ -327,7 +380,19 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
             actions.setCurrentTime(0);
             actions.setDuration(0);
         };
-    }, [channel, refreshKey]); // refreshKey forces re-init on manual refresh
+    }, [channel]);
+
+    // Sync active subtitle → HLS engine for HLS-native subtitle tracks
+    useEffect(() => {
+        if (!hlsRef.current) return;
+        if (!state.activeSubtitle) {
+            hlsRef.current.subtitleTrack = -1; // off
+            return;
+        }
+        if (state.activeSubtitle.source === "hls" && state.activeSubtitle.index != null) {
+            hlsRef.current.subtitleTrack = state.activeSubtitle.index;
+        }
+    }, [state.activeSubtitle]);
 
     // Sync playback speed to video element
     useEffect(() => {
@@ -362,6 +427,21 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
         }
     }, [state.playing]);
 
+    // Sync mute state → video element.
+    // PlayerControls calls actions.setMuted() (state only) — must mirror to DOM.
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.muted = state.muted;
+    }, [state.muted]);
+
+    // Sync volume → video element.
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.volume = state.volume;
+    }, [state.volume]);
+
     const handleBack = () => {
         if (window.history.length > 1) navigate(-1);
         else navigate("/live");
@@ -376,7 +456,10 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
 
     // mediaInfo — minimal shape PlayerControls needs for top bar title
     const mediaInfo = {
-        title: channel?.name || "Live",
+        title: (() => {
+            const m = extractNameMeta(channel?.cleanName || channel?.name || "");
+            return m.cleanName || channel?.name || "Live";
+        })(),
         type: "live",
         season: null,
         episode: null,
@@ -474,68 +557,32 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
                     ) : (
                         <Tv size={18} stroke="rgba(255,255,255,0.6)" />
                     )}
-                    <span className="text-white text-sm font-semibold truncate">{channel.name}</span>
+                    {(() => {
+                        const meta = extractNameMeta(channel.cleanName || channel.name);
+                        return (
+                            <>
+                                <span className="text-white text-sm font-semibold truncate">{meta.cleanName}</span>
+                                {meta.resolution && (
+                                    <span
+                                        style={{
+                                            flexShrink: 0,
+                                            fontSize: 9,
+                                            fontWeight: 800,
+                                            letterSpacing: "0.08em",
+                                            padding: "1px 5px",
+                                            borderRadius: 4,
+                                            background: meta.resolution === "4K" ? "rgba(255,200,50,0.2)" : meta.isHD ? "rgba(229,62,62,0.2)" : "rgba(255,255,255,0.12)",
+                                            color: meta.resolution === "4K" ? "#ffc832" : meta.isHD ? "#e53e3e" : "rgba(255,255,255,0.6)",
+                                            border: `1px solid ${meta.resolution === "4K" ? "rgba(255,200,50,0.4)" : meta.isHD ? "rgba(229,62,62,0.35)" : "rgba(255,255,255,0.2)"}`,
+                                        }}>
+                                        {meta.resolution}
+                                    </span>
+                                )}
+                            </>
+                        );
+                    })()}
                 </div>
             </div>
-
-            {/* ── Channel list sidebar ── */}
-            <VideoSidebar open={channelListOpen} onClose={() => setChannelListOpen(false)} title={categoryName}>
-                {channelList.map((ch, i) => (
-                    <SidebarItem key={ch.url || i} active={ch.url === channel?.url} onClick={() => switchChannel(ch)} icon={Tv}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            {ch.logo && (
-                                <img
-                                    src={ch.logo}
-                                    alt={ch.name}
-                                    style={{ width: 22, height: 22, borderRadius: 4, objectFit: "contain", background: "rgba(255,255,255,0.08)", flexShrink: 0 }}
-                                    onError={(e) => {
-                                        e.currentTarget.style.display = "none";
-                                    }}
-                                />
-                            )}
-                            <span>{ch.name}</span>
-                        </div>
-                    </SidebarItem>
-                ))}
-            </VideoSidebar>
-
-            {/* ── Channel list button — bottom-right, before quality icon ── */}
-            {/* Absolutely positioned to align with PlayerControls bottom bar.
-                Injected into the CSS scoped layer so it fades with controls.
-                Placed before the quality/fullscreen cluster via right offset
-                that matches PlayerControls right-cluster button widths. */}
-            {channelList.length > 0 && state.controlsVisible && (
-                <div
-                    data-gesture-exclude="true"
-                    style={{
-                        position: "absolute",
-                        bottom: "calc(max(0.75rem, env(safe-area-inset-bottom)) + 6px)",
-                        right: isMobile ? 172 : 148,
-                        zIndex: 35,
-                        pointerEvents: "auto",
-                    }}>
-                    <button onClick={() => setChannelListOpen(true)} className="flux-icon-btn" style={{ padding: isMobile ? "10px 10px" : "6px 8px" }} aria-label="Channel list" title={categoryName}>
-                        <List size={isMobile ? 20 : 16} stroke="#fff" />
-                    </button>
-                </div>
-            )}
-
-            {/* ── Refresh button — bottom-left, always in controls bar ── */}
-            {state.controlsVisible && (
-                <div
-                    data-gesture-exclude="true"
-                    style={{
-                        position: "absolute",
-                        bottom: "calc(max(0.75rem, env(safe-area-inset-bottom)) + 6px)",
-                        left: isMobile ? 160 : 140,
-                        zIndex: 35,
-                        pointerEvents: "auto",
-                    }}>
-                    <button onClick={refreshStream} className="flux-icon-btn" style={{ padding: isMobile ? "10px 10px" : "6px 8px" }} aria-label="Refresh stream" title="Refresh stream">
-                        <RefreshCw size={isMobile ? 20 : 16} stroke="#fff" />
-                    </button>
-                </div>
-            )}
 
             {/* ── PlayerControls — VOD-only buttons hidden via CSS scope ── */}
             <style>{`
@@ -552,7 +599,7 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo, s
                     mediaInfo={mediaInfo}
                     videoRef={videoRef}
                     containerRef={containerRef}
-                    subtitles={[]}
+                    subtitles={subtitles}
                     onBack={handleBack}
                     onShowControls={showControls}
                     controlsPhase={controlsPhase}
@@ -569,13 +616,7 @@ export default function LivePlayerPage() {
     const location = useLocation();
     return (
         <PlayerProvider>
-            <LivePlayerInner
-                stateStreamUrl={location.state?.streamUrl}
-                stateChannelName={location.state?.channelName}
-                stateChannelLogo={location.state?.channelLogo}
-                stateCategory={location.state?.categoryName}
-                stateChannels={location.state?.channels}
-            />
+            <LivePlayerInner stateStreamUrl={location.state?.streamUrl} stateChannelName={location.state?.channelName} stateChannelLogo={location.state?.channelLogo} />
         </PlayerProvider>
     );
 }

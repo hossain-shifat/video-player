@@ -12,13 +12,11 @@ function isValidId(id) {
     return typeof id === "string" && id.length > 0 && id.length < 512 && VALID_ID_RE.test(id);
 }
 
-// clientId validation — allow alphanumeric + hyphen/underscore (UUID-like)
 const VALID_CLIENT_RE = /^[A-Za-z0-9_-]+$/;
 function isValidClientId(id) {
     return typeof id === "string" && id.length > 0 && id.length < 128 && VALID_CLIENT_RE.test(id);
 }
 
-// Fallback clientId when none supplied (e.g. direct API calls / old clients)
 const DEFAULT_CLIENT = "default";
 
 function resolveClientId(clientId) {
@@ -26,12 +24,10 @@ function resolveClientId(clientId) {
     return DEFAULT_CLIENT;
 }
 
-// Safe own-property read
 function safeGet(obj, id) {
     return Object.prototype.hasOwnProperty.call(obj, id) ? obj[id] : null;
 }
 
-// Safe own-property delete
 function safeDelete(obj, id) {
     if (!Object.prototype.hasOwnProperty.call(obj, id)) return false;
     delete obj[id];
@@ -49,7 +45,22 @@ function readJson(file) {
         throw err;
     }
     if (!raw || !raw.trim()) return {};
-    return JSON.parse(raw);
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        // File exists but isn't valid JSON — likely a partial/corrupted write
+        // (e.g. interrupted rename on Windows, file locked by another
+        // process mid-write). Don't crash every single request forever:
+        // back up the bad file once so nothing is silently lost, then
+        // start fresh from {} so the route works again immediately.
+        console.error(`[Store] Corrupt JSON in ${file} — backing up and resetting. Error: ${err.message}`);
+        try {
+            fs.copyFileSync(file, `${file}.corrupt.${Date.now()}.bak`);
+        } catch (backupErr) {
+            console.error(`[Store] Could not back up corrupt file: ${backupErr.message}`);
+        }
+        return {};
+    }
 }
 
 function writeJson(file, data) {
@@ -62,41 +73,43 @@ function writeJson(file, data) {
 }
 
 // ─── History ─────────────────────────────────────────────────────────────────
-// Schema (multi-client namespaced):
+// Schema (multi-client namespaced — clientId is the "unique user" key, so
+// req #1's compound-unique-constraint is just "object key per clientId+mediaId",
+// already structurally enforced — every save is an upsert onto that one slot,
+// never a new record):
 // {
 //   "<clientId>": {
 //     "<mediaId>": {
-//       id, name, type, poster, streamUrl,
-//       watchedAt, position, duration, completed, watchCount, lastSessionStart
+//       id, mediaType,           // "movie" | "series" | "anime"
+//       title,                   // parent/show title (movie: same as the title)
+//       episodeTitle,            // e.g. "S1E3 · To You, in 2000 Years" — null for movies
+//       name,                    // legacy display field, kept for old clients
+//       poster, streamUrl,
+//       watchedAt,
+//       position,                // resume point — never moves backward except on reset
+//       maxPositionReached,      // milestone-lock high-water mark
+//       duration, completed,
+//       watchCount, lastSessionStart,
+//       subtitlePref,
+//       // NOTE: no thumbnail/image fields here at all — per spec #3, history
+//       // only ever stores the numeric resume_time. Preview frames are
+//       // generated on demand by GET /api/media/:id/thumbnail (ffmpeg),
+//       // never written into history.json.
 //     }
 //   }
 // }
-//
-// Each browser/device has its own clientId (generated in localStorage by the
-// frontend). History is isolated per clientId — no user collisions.
-// Single file: history.json. No per-user files.
 
-/**
- * Read the full history store. Returns { clientId: { mediaId: entry } }.
- */
 function getHistory(clientId) {
     const store = readJson(HISTORY_FILE);
     const cid = resolveClientId(clientId);
-    // If clientId supplied → return only that namespace
     if (clientId) return safeGet(store, cid) || {};
-    // No clientId → return flat merged view across all clients (for admin/dashboard)
     const merged = {};
     for (const cStore of Object.values(store)) {
-        if (cStore && typeof cStore === "object") {
-            Object.assign(merged, cStore);
-        }
+        if (cStore && typeof cStore === "object") Object.assign(merged, cStore);
     }
     return merged;
 }
 
-/**
- * Read single history entry for a clientId+mediaId pair.
- */
 function getHistoryEntry(id, clientId) {
     if (!isValidId(id)) return null;
     const store = readJson(HISTORY_FILE);
@@ -107,8 +120,14 @@ function getHistoryEntry(id, clientId) {
 }
 
 /**
- * saveProgress — called periodically by the client while playing.
- * Namespaced by clientId so multiple clients never collide.
+ * saveProgress — upsert for this clientId+mediaId pair.
+ *
+ * Milestone lock: if `data.position` is at or behind the previously saved
+ * high-water mark (`maxPositionReached`), the write is SKIPPED entirely and
+ * the existing entry is returned unchanged — this is what stops transcoding
+ * jitter / rewatching an already-completed segment from stomping the resume
+ * point backward. Pass `data.isResetAction: true` ("Start Over" button) to
+ * bypass the lock and force position back to 0.
  */
 function saveProgress(id, data, clientId) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
@@ -116,17 +135,33 @@ function saveProgress(id, data, clientId) {
     const cid = resolveClientId(clientId);
     const store = readJson(HISTORY_FILE);
 
-    // Ensure namespace exists
     if (!Object.prototype.hasOwnProperty.call(store, cid) || typeof store[cid] !== "object") {
         store[cid] = {};
     }
 
     const clientStore = store[cid];
-    const existing = safeGet(clientStore, id) || { watchCount: 0, position: 0, lastSessionStart: 0 };
+    const existing = safeGet(clientStore, id) || {
+        watchCount: 0,
+        position: 0,
+        maxPositionReached: 0,
+        lastSessionStart: 0,
+    };
 
-    const position = typeof data.position === "number" ? data.position : (existing.position ?? 0);
+    const isReset = !!data.isResetAction;
+    const incomingPosition = typeof data.position === "number" ? data.position : existing.position;
     const duration = typeof data.duration === "number" ? data.duration : (existing.duration ?? 0);
-    const completed = duration > 0 ? position / duration >= 0.9 : false;
+    const maxReached = existing.maxPositionReached || 0;
+
+    // ── Milestone lock ────────────────────────────────────────────────────
+    // Not a reset, entry already exists, and incoming position hasn't
+    // strictly surpassed the high-water mark → no-op, return as-is.
+    if (!isReset && existing.id && incomingPosition <= maxReached) {
+        return existing;
+    }
+
+    const position = isReset ? 0 : incomingPosition;
+    const maxPositionReached = isReset ? 0 : Math.max(maxReached, incomingPosition);
+    const completed = !isReset && duration > 0 ? position / duration >= 0.9 : false;
 
     const prevPosition = existing.position ?? 0;
     const isNewSession = !existing.id || (prevPosition === 0 && position > 3);
@@ -134,17 +169,21 @@ function saveProgress(id, data, clientId) {
 
     clientStore[id] = {
         id,
-        name: data.name || existing.name || "",
-        type: data.type || existing.type || "movie",
+        mediaType: data.mediaType || data.type || existing.mediaType || existing.type || "movie",
+        // Back-compat: some callers still send `type` instead of `mediaType`
+        type: data.mediaType || data.type || existing.mediaType || existing.type || "movie",
+        title: data.title ?? existing.title ?? data.name ?? existing.name ?? "",
+        episodeTitle: Object.prototype.hasOwnProperty.call(data, "episodeTitle") ? data.episodeTitle : (existing.episodeTitle ?? null),
+        name: data.name || existing.name || data.title || existing.title || "",
         poster: data.poster || existing.poster || null,
         streamUrl: data.streamUrl || existing.streamUrl || null,
         watchedAt: new Date().toISOString(),
         position: completed ? 0 : position,
+        maxPositionReached: completed ? 0 : maxPositionReached,
         duration,
         completed,
         watchCount,
         lastSessionStart: isNewSession ? position : existing.lastSessionStart,
-        // Subtitle preference: null means "off", object means the chosen track
         subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref") ? data.subtitlePref : (existing.subtitlePref ?? null),
     };
 
@@ -152,9 +191,6 @@ function saveProgress(id, data, clientId) {
     return clientStore[id];
 }
 
-/**
- * Delete single history entry for a clientId+mediaId pair.
- */
 function deleteHistoryEntry(id, clientId) {
     if (!isValidId(id)) return false;
     const cid = resolveClientId(clientId);
@@ -166,23 +202,18 @@ function deleteHistoryEntry(id, clientId) {
     return true;
 }
 
-/**
- * Clear all history for a clientId (or entire store if no clientId).
- */
 function clearHistory(clientId) {
     if (clientId !== null && clientId !== undefined) {
-        // Explicit clientId supplied — must be valid
         if (!isValidClientId(clientId)) throw new Error("Invalid clientId");
         const store = readJson(HISTORY_FILE);
         store[resolveClientId(clientId)] = {};
         writeJson(HISTORY_FILE, store);
     } else {
-        // null/undefined = intentional full-store clear
         writeJson(HISTORY_FILE, {});
     }
 }
 
-// ─── Userdata (watchlist + favourites) ───────────────────────────────────────
+// ─── Userdata (watchlist + favourites) — unchanged ───────────────────────────
 
 function getUserdata() {
     const d = readJson(USERDATA_FILE);

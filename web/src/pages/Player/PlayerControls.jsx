@@ -31,8 +31,16 @@ import {
     VolumeOff,
     Timer,
     SlidersHorizontal,
-    ScanLine,
+    Camera,
     AudioLines,
+    Lock,
+    Mic2,
+    Speaker,
+    Film,
+    Music2,
+    MoreVertical,
+    ChevronDown,
+    Waves,
     X,
     GripVertical,
     Maximize2,
@@ -40,11 +48,12 @@ import {
     Tv,
     Square,
 } from "lucide-react";
-import { MdOutlineHighQuality, MdHighQuality, MdOutlineScreenRotation, MdScreenLockRotation } from "react-icons/md";
+import { MdOutlineHighQuality, MdHighQuality, MdOutlineScreenRotation, MdScreenLockRotation, MdMusicNote, MdSubtitles } from "react-icons/md";
 import { usePlayerState } from "./UsePlayerState";
 import { useIsMobile } from "./useIsMobile";
 import SeekBar from "./SeekBar";
 import VideoSidebar, { SidebarItem } from "./VideoSidebar";
+import { SpeedSliderOverlay } from "./PlayerOverlays";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -154,7 +163,7 @@ function PopupItem({ active, onClick, children, icon: Icon }) {
     return (
         <button className={`flux-popup-item ${active ? "active" : ""}`} onClick={onClick}>
             {Icon && <Icon size={14} style={{ opacity: 0.6, flexShrink: 0 }} />}
-            <span style={{ flex: 1 }}>{children}</span>
+            <span style={{ flex: 1, display: "flex", alignItems: "center", minWidth: 0 }}>{children}</span>
             {active && <Check size={13} className="check" />}
         </button>
     );
@@ -225,30 +234,6 @@ function QualityPicker({ open, onClose, isMobile, controlsPhase }) {
                     <div>
                         <div>{lvl.label}</div>
                         {lvl.bitrate && <div style={{ fontSize: 11, opacity: 0.4 }}>{bitrateLabel(lvl.bitrate)}</div>}
-                    </div>
-                </MenuItem>
-            ))}
-        </MenuShell>
-    );
-}
-
-function AudioPicker({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Audio Track">
-            {state.audioTracks.map((track) => (
-                <MenuItem
-                    isMobile={isMobile}
-                    key={track.index}
-                    active={state.activeAudioTrack === track.index}
-                    onClick={() => {
-                        actions.setActiveAudioTrack(track.index);
-                        onClose();
-                    }}>
-                    <span style={{ fontSize: "1rem", lineHeight: 1, marginRight: 8 }}>{AUDIO_FLAGS[track.name] || "🎵"}</span>
-                    <div>
-                        <div>{track.name}</div>
-                        <div style={{ fontSize: 11, opacity: 0.4, textTransform: "uppercase" }}>{track.lang}</div>
                     </div>
                 </MenuItem>
             ))}
@@ -583,73 +568,470 @@ function AbRepeatPanel({ open, onClose, videoRef, isMobile, controlsPhase }) {
 
 // ─── Equalizer panel (3-band, real Web Audio DSP via VideoCore) ─────────────
 
-function EqPanel({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    if (!open) return null;
-    const { bass = 0, mid = 0, treble = 0 } = state.eqBands || {};
+// ─── Audio output device label (best-effort) ─────────────────────────────────
+// Browsers only expose real device labels (e.g. "My Headphones (Bluetooth)")
+// after mic/cam permission has been granted for some reason — we deliberately
+// do NOT prompt for that here (would be a confusing, unrelated permission ask
+// in a video player). If labels are already available we show the real one;
+// otherwise a generic fallback.
+function useAudioOutputLabel() {
+    const [label, setLabel] = useState("Device Audio");
 
-    const Slider = ({ label, value, onChange }) => (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", fontFamily: "ui-monospace,monospace" }}>{value > 0 ? `+${value}` : value}</span>
-            <input
-                type="range"
-                min={-12}
-                max={12}
-                step={1}
-                value={value}
-                onChange={(e) => onChange(+e.target.value)}
-                disabled={!state.eqEnabled}
-                style={{
-                    writingMode: "vertical-lr",
-                    direction: "rtl",
-                    width: 28,
-                    height: 110,
-                    accentColor: "#e53e3e",
-                    opacity: state.eqEnabled ? 1 : 0.4,
-                }}
-            />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 600 }}>{label}</span>
-        </div>
-    );
+    useEffect(() => {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        let cancelled = false;
+        const check = () => {
+            navigator.mediaDevices
+                .enumerateDevices()
+                .then((devices) => {
+                    if (cancelled) return;
+                    const out = devices.find((d) => d.kind === "audiooutput" && d.label);
+                    if (out) setLabel(out.label);
+                })
+                .catch(() => {});
+        };
+        check();
+        navigator.mediaDevices.addEventListener?.("devicechange", check);
+        return () => {
+            cancelled = true;
+            navigator.mediaDevices.removeEventListener?.("devicechange", check);
+        };
+    }, []);
 
+    return label;
+}
+
+const AUDIO_EFFECT_OPTIONS = [
+    { key: "original", label: "Original", icon: AudioLines },
+    { key: "clarity", label: "Clarity", icon: Mic2 },
+    { key: "bassBoost", label: "Bass Boost", icon: Speaker },
+    { key: "trebleBoost", label: "Treble Boost", icon: Waves },
+    { key: "movie", label: "Movie", icon: Film },
+    { key: "music", label: "Music", icon: Music2 },
+];
+
+const EQ_PRESET_OPTIONS = [
+    { key: "custom", label: "Custom" },
+    { key: "normal", label: "Normal" },
+    { key: "classical", label: "Classical" },
+    { key: "dance", label: "Dance" },
+    { key: "flat", label: "Flat" },
+    { key: "folk", label: "Folk" },
+    { key: "heavyMetal", label: "Heavy Metal" },
+    { key: "hipHop", label: "Hip Hop" },
+    { key: "jazz", label: "Jazz" },
+    { key: "pop", label: "Pop" },
+    { key: "rock", label: "Rock" },
+];
+const EQ_BAND_KEYS = [
+    { key: "b60", hz: "60 Hz" },
+    { key: "b230", hz: "230 Hz" },
+    { key: "b910", hz: "910 Hz" },
+    { key: "b4000", hz: "4000 Hz" },
+    { key: "b14000", hz: "14000 Hz" },
+];
+
+function DecoderLockedNotice({ onSwitch }) {
     return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Equalizer">
-            <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 16px 4px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "28px 20px" }}>
+            <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+                <Lock size={20} color="rgba(255,255,255,0.85)" style={{ flexShrink: 0, marginTop: 2 }} />
+                <p style={{ color: "rgba(255,255,255,0.85)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                    Audio effects are not available in HW decoder mode. Switch to HW+ decoder or SW decoder mode to enable.
+                </p>
+            </div>
+            <div style={{ display: "flex", gap: 8, paddingLeft: 34 }}>
                 <button
-                    onClick={() => actions.toggleEq()}
+                    onClick={() => onSwitch("hw+")}
                     style={{
-                        fontSize: 10,
+                        padding: "7px 14px",
+                        borderRadius: 8,
+                        border: "1px solid var(--color-primary)",
+                        background: "transparent",
+                        color: "var(--color-primary)",
+                        fontSize: 12,
                         fontWeight: 700,
-                        padding: "3px 10px",
-                        borderRadius: 999,
-                        border: "none",
                         cursor: "pointer",
-                        background: state.eqEnabled ? "#e53e3e" : "rgba(255,255,255,0.1)",
-                        color: "#fff",
                     }}>
-                    {state.eqEnabled ? "ON" : "OFF"}
+                    Use HW+
+                </button>
+                <button
+                    onClick={() => onSwitch("sw")}
+                    style={{
+                        padding: "7px 14px",
+                        borderRadius: 8,
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        background: "transparent",
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                    }}>
+                    Use SW
                 </button>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-around", padding: "16px 14px 12px", gap: 8 }}>
-                <Slider label="Bass" value={bass} onChange={(v) => actions.setEqBands({ bass: v })} />
-                <Slider label="Mid" value={mid} onChange={(v) => actions.setEqBands({ mid: v })} />
-                <Slider label="Treble" value={treble} onChange={(v) => actions.setEqBands({ treble: v })} />
-            </div>
-            <button
-                onClick={() => actions.setEqBands({ bass: 0, mid: 0, treble: 0 })}
+        </div>
+    );
+}
+
+const MOCK_AUDIO_TRACKS = ["HDHub4u.Ms - Hindi", "HDHub4u.Ms - English"];
+
+function RadioRow({ label, checked, onClick }) {
+    return (
+        <button
+            onClick={onClick}
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                width: "100%",
+                padding: "13px 16px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+            }}>
+            <span
                 style={{
-                    width: "calc(100% - 32px)",
-                    margin: "0 16px 12px",
-                    padding: "6px 0",
-                    borderRadius: 8,
-                    background: "rgba(255,255,255,0.06)",
-                    color: "rgba(255,255,255,0.6)",
-                    fontSize: 11,
-                    border: "none",
-                    cursor: "pointer",
+                    width: 20,
+                    height: 20,
+                    borderRadius: "50%",
+                    border: `2px solid ${checked ? "var(--color-primary)" : "rgba(255,255,255,0.5)"}`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
                 }}>
-                Reset
-            </button>
+                {checked && <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--color-primary)" }} />}
+            </span>
+            <span style={{ color: "#fff", fontSize: 14.5 }}>{label}</span>
+        </button>
+    );
+}
+
+function CheckboxRow({ label, checked, onClick }) {
+    return (
+        <button
+            onClick={onClick}
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                width: "100%",
+                padding: "13px 16px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+            }}>
+            <span
+                style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 4,
+                    border: `2px solid ${checked ? "var(--color-primary)" : "rgba(255,255,255,0.5)"}`,
+                    background: checked ? "var(--color-primary)" : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                }}>
+                {checked && <Check size={12} color="#fff" strokeWidth={3} />}
+            </span>
+            <span style={{ color: "#fff", fontSize: 14.5 }}>{label}</span>
+        </button>
+    );
+}
+
+function DisabledRow({ label }) {
+    return <div style={{ padding: "13px 16px", color: "rgba(255,255,255,0.35)", fontSize: 14.5 }}>{label}</div>;
+}
+
+function AudioTrackPanel({ open, onClose, isMobile, controlsPhase }) {
+    const { state, actions } = usePlayerState();
+    return (
+        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Audio Track">
+            {MOCK_AUDIO_TRACKS.map((track) => (
+                <RadioRow key={track} label={track} checked={state.mockAudioTrack === track} onClick={() => actions.setMockAudioTrack(track)} />
+            ))}
+            <RadioRow label="Disable" checked={state.mockAudioTrack === "disable"} onClick={() => actions.setMockAudioTrack("disable")} />
+            <CheckboxRow label="Use SW audio decoder" checked={state.useSwAudioDecoder} onClick={() => actions.toggleSwAudioDecoder()} />
+            <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "8px 0" }} />
+            {/* Backend doesn't support these yet — shown disabled, matching
+                the reference UI's grayed-out placeholder rows. */}
+            <DisabledRow label="Open" />
+            <DisabledRow label="Stereo mode" />
+            <DisabledRow label="Synchronization" />
+            <DisabledRow label="AV sync" />
+        </MenuShell>
+    );
+}
+
+const DECODER_LABELS = { hw: "HW", "hw+": "HW+", sw: "SW" };
+
+function DecoderModePanel({ open, onClose, isMobile, controlsPhase }) {
+    const { state, actions } = usePlayerState();
+    return (
+        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Decoder">
+            {["hw", "hw+", "sw"].map((mode) => (
+                <RadioRow key={mode} label={DECODER_LABELS[mode] + (mode === "hw+" ? " (Recommended)" : "")} checked={state.decoderMode === mode} onClick={() => actions.setDecoderMode(mode)} />
+            ))}
+        </MenuShell>
+    );
+}
+
+function CircularKnob({ label, value, onChange, disabled }) {
+    const knobRef = useRef(null);
+    const dragging = useRef(false);
+
+    const angleFor = (v) => -135 + (v / 100) * 270;
+    const angle = angleFor(value);
+    const handleX = 50 + 38 * Math.cos((angle * Math.PI) / 180);
+    const handleY = 50 + 38 * Math.sin((angle * Math.PI) / 180);
+
+    const updateFromEvent = (clientX, clientY) => {
+        const rect = knobRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        let deg = (Math.atan2(clientY - cy, clientX - cx) * 180) / Math.PI;
+        if (deg < -135) deg = -135;
+        if (deg > 135) deg = 135;
+        const pct = Math.round(((deg + 135) / 270) * 100);
+        onChange(Math.max(0, Math.min(100, pct)));
+    };
+
+    const onPointerDown = (e) => {
+        if (disabled) return;
+        dragging.current = true;
+        updateFromEvent(e.clientX, e.clientY);
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+    };
+    const onPointerMove = (e) => {
+        if (!dragging.current) return;
+        updateFromEvent(e.clientX, e.clientY);
+    };
+    const onPointerUp = () => {
+        dragging.current = false;
+    };
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flex: 1, opacity: disabled ? 0.4 : 1 }}>
+            <div
+                ref={knobRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                style={{
+                    position: "relative",
+                    width: 92,
+                    height: 92,
+                    borderRadius: "50%",
+                    background: "radial-gradient(circle at 35% 30%, color-mix(in oklch, var(--color-primary) 75%, white 10%), color-mix(in oklch, var(--color-primary) 90%, black 20%))",
+                    cursor: disabled ? "default" : "pointer",
+                    touchAction: "none",
+                    WebkitTapHighlightColor: "transparent",
+                }}>
+                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                    <span style={{ color: "#fff", fontSize: 17, fontWeight: 700 }}>{value}%</span>
+                </div>
+                <div
+                    style={{
+                        position: "absolute",
+                        left: `${handleX}%`,
+                        top: `${handleY}%`,
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "#fff",
+                        transform: "translate(-50%, -50%)",
+                        boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
+                        pointerEvents: "none",
+                    }}
+                />
+            </div>
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>{label}</span>
+        </div>
+    );
+}
+
+function AudioFxPanel({ open, onClose, isMobile, controlsPhase, initialTab = "effect", onTabChange }) {
+    const { state, actions } = usePlayerState();
+    const [tab, setTab] = useState(initialTab);
+    const deviceLabel = useAudioOutputLabel();
+    const locked = state.decoderMode === "hw";
+
+    useEffect(() => {
+        if (open) setTab(initialTab);
+    }, [open, initialTab]);
+
+    const changeTab = (next) => {
+        setTab(next);
+        onTabChange?.(next);
+    };
+
+    return (
+        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title={tab === "effect" ? "Audio Effect" : "Equalizer"}>
+            <div style={{ display: "flex", padding: "0 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                {[
+                    { key: "effect", label: "Audio Effect" },
+                    { key: "equalizer", label: "Equalizer" },
+                ].map((t) => (
+                    <button
+                        key={t.key}
+                        onClick={() => changeTab(t.key)}
+                        style={{
+                            flex: 1,
+                            padding: "10px 0",
+                            background: "none",
+                            border: "none",
+                            borderBottom: tab === t.key ? "2px solid var(--color-primary)" : "2px solid transparent",
+                            color: tab === t.key ? "#fff" : "rgba(255,255,255,0.5)",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            cursor: "pointer",
+                            WebkitTapHighlightColor: "transparent",
+                        }}>
+                        {t.label}
+                    </button>
+                ))}
+            </div>
+
+            {locked ? (
+                <DecoderLockedNotice onSwitch={actions.setDecoderMode} />
+            ) : (
+                <div style={{ padding: "14px 16px 8px", display: "flex", alignItems: "center", gap: 10, color: "rgba(255,255,255,0.8)", fontSize: 13 }}>
+                    <Headphones size={16} />
+                    <span>{deviceLabel}</span>
+                </div>
+            )}
+
+            {!locked && tab === "effect" && (
+                <div style={{ padding: "8px 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    {AUDIO_EFFECT_OPTIONS.map((opt) => {
+                        const Icon = opt.icon;
+                        const active = state.audioEffectPreset === opt.key;
+                        return (
+                            <button
+                                key={opt.key}
+                                onClick={() => actions.setAudioEffectPreset(opt.key)}
+                                style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    gap: 8,
+                                    padding: "14px 6px",
+                                    borderRadius: 10,
+                                    border: active ? "1px solid var(--color-primary)" : "1px solid rgba(255,255,255,0.15)",
+                                    background: active ? "color-mix(in oklch, var(--color-primary) 22%, transparent)" : "transparent",
+                                    cursor: "pointer",
+                                    WebkitTapHighlightColor: "transparent",
+                                }}>
+                                <Icon size={20} color={active ? "var(--color-primary)" : "#fff"} />
+                                <span style={{ fontSize: 11.5, fontWeight: 600, color: active ? "var(--color-primary)" : "#fff", textAlign: "center" }}>{opt.label}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
+            {!locked && tab === "equalizer" && (
+                <div style={{ padding: "4px 16px 16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 10, color: "#fff", fontSize: 14, fontWeight: 600 }}>
+                            <SlidersHorizontal size={16} />
+                            Equalizer
+                        </span>
+                        <button
+                            onClick={() => actions.toggleEq()}
+                            role="switch"
+                            aria-checked={state.eqEnabled}
+                            style={{
+                                width: 44,
+                                height: 26,
+                                borderRadius: 999,
+                                border: "none",
+                                position: "relative",
+                                background: state.eqEnabled ? "var(--color-primary)" : "rgba(255,255,255,0.2)",
+                                cursor: "pointer",
+                                flexShrink: 0,
+                                transition: "background 0.15s",
+                            }}>
+                            <span
+                                style={{
+                                    position: "absolute",
+                                    top: 3,
+                                    left: state.eqEnabled ? 21 : 3,
+                                    width: 20,
+                                    height: 20,
+                                    borderRadius: "50%",
+                                    background: "#fff",
+                                    transition: "left 0.15s",
+                                }}
+                            />
+                        </button>
+                    </div>
+
+                    <div className="flux-sidebar-scroll" style={{ display: "flex", gap: 6, padding: "6px 0 16px", overflowX: state.eqEnabled ? "auto" : "hidden" }}>
+                        {EQ_PRESET_OPTIONS.map(({ key, label }) => (
+                            <button
+                                key={key}
+                                onClick={() => actions.setEqPreset(key)}
+                                disabled={!state.eqEnabled}
+                                style={{
+                                    flexShrink: 0,
+                                    padding: "6px 12px",
+                                    borderRadius: 999,
+                                    border: "none",
+                                    background: state.eqPreset === key ? "var(--color-primary)" : "rgba(255,255,255,0.08)",
+                                    color: state.eqPreset === key ? "#fff" : "rgba(255,255,255,0.7)",
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: state.eqEnabled ? "pointer" : "default",
+                                    opacity: state.eqEnabled ? 1 : 0.5,
+                                    WebkitTapHighlightColor: "transparent",
+                                }}>
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "space-around", gap: 4 }}>
+                        {EQ_BAND_KEYS.map(({ key, hz }) => {
+                            const value = state.eqBands?.[key] ?? 0;
+                            return (
+                                <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
+                                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)", fontFamily: "ui-monospace,monospace" }}>{value > 0 ? `+${value}` : value} dB</span>
+                                    <input
+                                        type="range"
+                                        min={-12}
+                                        max={12}
+                                        step={1}
+                                        value={value}
+                                        onChange={(e) => actions.setEqBands({ [key]: +e.target.value })}
+                                        disabled={!state.eqEnabled}
+                                        style={{
+                                            writingMode: "vertical-lr",
+                                            direction: "rtl",
+                                            width: 24,
+                                            height: 100,
+                                            accentColor: "var(--color-primary)",
+                                            opacity: state.eqEnabled ? 1 : 0.4,
+                                        }}
+                                    />
+                                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", fontWeight: 600 }}>{hz}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "space-around", gap: 12, marginTop: 22, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                        <CircularKnob label="Bass Boost" value={state.bassBoostLevel} onChange={actions.setBassBoostLevel} disabled={!state.eqEnabled} />
+                        <CircularKnob label="Virtualizer" value={state.virtualizerLevel} onChange={actions.setVirtualizerLevel} disabled={!state.eqEnabled} />
+                    </div>
+                </div>
+            )}
         </MenuShell>
     );
 }
@@ -790,7 +1172,7 @@ const ALL_QUICK_ITEMS = {
     audioFx: { label: "Audio Effect", icon: AudioLines },
     eq: { label: "Equalizer", icon: SlidersHorizontal },
     speed: { label: "Speed", icon: Gauge }, // visual is the "1×" text glyph below (iconOverride), this is just a fallback
-    pip: { label: "Pop-out Play", icon: ScanLine },
+    screenshot: { label: "Screenshot", icon: Camera },
     bgPlay: { label: "Background Play", icon: Headphones },
     rotation: { label: "Screen Rotation", icon: MdOutlineScreenRotation },
 };
@@ -851,6 +1233,7 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
     const { state, actions } = usePlayerState();
     const [expanded, setExpanded] = useState(false);
     const [slideOut, setSlideOut] = useState(false); // true during the collapse slide animation
+    const [audioFxTab, setAudioFxTab] = useState("effect"); // which tab the shared eq/audioFx panel opens on
     const scrollRef = useRef(null);
     const overscrollStart = useRef(null); // { x, atEnd, atStart } captured at touchstart, used to detect swipe-past-boundary in either direction
 
@@ -941,19 +1324,83 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
                 </span>
             ),
         },
-        audioFx: { onClick: () => toggleMenu("eq"), active: state.eqEnabled || openMenu === "eq" },
-        eq: { onClick: () => toggleMenu("eq"), active: state.eqEnabled || openMenu === "eq" },
-        speed: {
-            onClick: () => toggleMenu("speed"),
-            active: state.playbackSpeed !== 1,
-            iconOverride: <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{state.playbackSpeed}×</span>,
+        audioFx: {
+            onClick: () => {
+                setAudioFxTab("effect");
+                toggleMenu("eq");
+            },
+            active: openMenu === "eq" && audioFxTab === "effect",
         },
-        pip: { onClick: () => containerRef?.current?._togglePiP?.() },
+        eq: {
+            onClick: () => {
+                setAudioFxTab("equalizer");
+                toggleMenu("eq");
+            },
+            active: state.eqEnabled || (openMenu === "eq" && audioFxTab === "equalizer"),
+        },
+        speed: {
+            onClick: () => toggleMenu("speedSlider"),
+            active: state.playbackSpeed !== 1,
+            // Plain "×" character instead of a separate Lucide <X> icon —
+            // a standalone icon next to the number had a different visual
+            // weight than the text (icon strokeWidth vs font-weight don't
+            // match up), and the fixed icon size didn't shrink for longer
+            // values like "0.25×"/"1.75×", causing them to overflow the
+            // 40px circular icon background. Single text run + fontSize
+            // scaled down for longer values fixes both at once.
+            iconOverride: (
+                <span
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        // Shrink for longer numbers (e.g. "0.25", "1.75")
+                        // so the whole "<value>×" string always fits
+                        // inside the 40px circle without clipping.
+                        fontSize: String(state.playbackSpeed).length > 1 ? 11 : 14,
+                        fontWeight: 700,
+                        color: "#fff",
+                        lineHeight: 1,
+                        whiteSpace: "nowrap",
+                    }}>
+                    {state.playbackSpeed}×
+                </span>
+            ),
+        },
+        screenshot: {
+            onClick: () => {
+                const video = videoRef?.current;
+                if (!video || !video.videoWidth) return;
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob((blob) => {
+                    if (!blob) return;
+                    const url = URL.createObjectURL(blob);
+                    // Open in a new tab instead of triggering a forced
+                    // download — Chrome blocks/warns on programmatic blob
+                    // downloads from plain http:// origins ("not saved
+                    // securely"), which this LAN server runs on. Opening
+                    // the image directly isn't subject to that same
+                    // download-specific policy; long-press/right-click to
+                    // save from there works normally.
+                    const win = window.open(url, "_blank");
+                    if (!win) {
+                        // Popup blocked — fall back to a same-tab navigation
+                        // so the screenshot still isn't silently lost.
+                        window.location.href = url;
+                    }
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                }, "image/png");
+            },
+        },
         bgPlay: { onClick: () => actions.toggleBackgroundPlay(), active: state.backgroundPlay },
         rotation: {
             onClick: () => containerRef?.current?._toggleRotation?.(),
             active: isPortraitOverride,
-            iconOverride: isPortraitOverride ? <MdScreenLockRotation size={17} color="var(--color-primary)" /> : <MdOutlineScreenRotation size={17} color="#fff" />,
+            iconOverride: isPortraitOverride ? <MdScreenLockRotation size={20} color="var(--color-primary)" /> : <MdOutlineScreenRotation size={20} color="#fff" />,
         },
     };
     const order = state.quickIconOrder;
@@ -1061,9 +1508,6 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
                             </div>
                             {expanded && <span style={{ fontSize: 9.5, color: "rgba(255,255,255,0.85)", textAlign: "center", lineHeight: 1.15, fontWeight: 500 }}>{item.label}</span>}
                         </button>
-                        {key === "customise" && <CustomiseItemsPanel open={openMenu === "customise"} onClose={() => toggleMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />}
-                        {key === "abRepeat" && <AbRepeatPanel open={openMenu === "abRepeat"} onClose={() => toggleMenu(null)} videoRef={videoRef} isMobile={isMobile} controlsPhase={controlsPhase} />}
-                        {(key === "eq" || key === "audioFx") && <EqPanel open={openMenu === "eq"} onClose={() => toggleMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />}
                     </div>
                 );
             })}
@@ -1094,6 +1538,10 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
                     <ChevronRight size={16} color="#fff" strokeWidth={2} />
                 </button>
             )}
+
+            <CustomiseItemsPanel open={openMenu === "customise"} onClose={() => toggleMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />
+            <AbRepeatPanel open={openMenu === "abRepeat"} onClose={() => toggleMenu(null)} videoRef={videoRef} isMobile={isMobile} controlsPhase={controlsPhase} />
+            <AudioFxPanel open={openMenu === "eq"} onClose={() => toggleMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} initialTab={audioFxTab} onTabChange={setAudioFxTab} />
         </div>
     );
 }
@@ -1105,11 +1553,29 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
     const isMobile = useIsMobile();
     const [openMenu, setOpenMenu] = useState(null);
 
-    const activeAudioName = state.audioTracks[state.activeAudioTrack]?.name || "";
     const activeQualityLabel = state.activeQuality === -1 ? (state.qualityLevels.length ? "Auto" : "") : state.qualityLevels[state.activeQuality]?.label || "";
 
     const toggleMenu = useCallback((menu) => setOpenMenu((v) => (v === menu ? null : menu)), []);
     const closeMenu = useCallback(() => setOpenMenu(null), []);
+
+    // VideoSidebar renders through a portal straight to document.body to
+    // dodge parent opacity cascades — but that means interaction inside an
+    // open sidebar (dragging a slider, tapping a list item) never bubbles up
+    // through PlayerControls' own DOM tree, so it never reaches the
+    // onClickCapture/onPointerDownCapture handlers on the top/center/bottom
+    // bars that normally reset the 3s inactivity countdown. Without this,
+    // controlsPhase can still march to ANIMATING_OUT/HIDDEN purely from idle
+    // time while a menu is open, which visually drags the open sidebar's
+    // containing controls layer down with it. Re-firing onShowControls on
+    // an interval for as long as openMenu is set keeps the countdown
+    // perpetually fresh, so the controls + whatever sidebar/menu is open
+    // stay visible until the user explicitly closes it.
+    useEffect(() => {
+        if (!openMenu) return;
+        onShowControls?.();
+        const id = setInterval(() => onShowControls?.(), 1000);
+        return () => clearInterval(id);
+    }, [openMenu, onShowControls]);
 
     const seek = useCallback(
         (delta) => {
@@ -1132,7 +1598,7 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
 
     const iconMain = isMobile ? 30 : 26;
     const iconSub = isMobile ? 22 : 18;
-    const iconTiny = isMobile ? 20 : 16;
+    const iconTiny = isMobile ? 24 : 16;
 
     // FIX: no center play/pause bubble on mobile anymore — removed per
     // explicit request ("remove the center play pause button which is with
@@ -1182,11 +1648,23 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                 layout). Rendered at this level since QuickIconRow's own
                 container doesn't span the whole player. */}
             <SleepTimerPanel open={openMenu === "sleepTimer"} onClose={() => setOpenMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />
+            <SpeedSliderOverlay open={openMenu === "speedSlider"} onClose={() => setOpenMenu(null)} />
 
-            {/* ── Top bar ──────────────────────────────────────────────────────── */}
+            {/* ══════════════════════════════════════════════════════════════════
+                TOP BAR
+                Order left→right: Back button → Title → [Quality] [Audio Track]
+                [Subtitle] [Decoder] [More ⋮] → Quick icon row (mobile only,
+                below the title row).
+                To reorder the right-side icons, just move their numbered
+                blocks (1-5) up/down inside the "shrink-0 ml-2" div below.
+                ══════════════════════════════════════════════════════════════════ */}
             <div
-                className="flex flex-col gap-3 px-3 pt-3 flux-controls-top"
-                style={{ pointerEvents: controlsPhase === "ANIMATING_OUT" ? "none" : "auto" }}
+                className="flex flex-col gap-3 px-3 pt-5 flux-controls-top"
+                style={{
+                    pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
+                    opacity: openMenu === "speedSlider" ? 0 : 1,
+                    transition: "opacity 200ms ease",
+                }}
                 onClickCapture={onShowControls}
                 onPointerDownCapture={onShowControls}>
                 <div className="flex items-start justify-between">
@@ -1196,20 +1674,72 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         </button>
                         <div className="min-w-0 flex-1">
                             <p className="text-white font-semibold text-sm sm:text-base leading-tight truncate">{title}</p>
-                            {subtitle && <p className="text-white/50 text-xs mt-0.5 truncate">{subtitle}</p>}
                         </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
                         {activeQualityLabel && !isMobile && <span className="flux-quality-badge">{activeQualityLabel}</span>}
-                        <button
-                            onClick={() => {
-                                actions.setLocked(true);
-                                actions.setControlsVisible(false);
-                            }}
-                            className="flux-icon-btn p-2"
-                            aria-label="Lock screen">
-                            <UnlockKeyhole size={20} strokeWidth={2.5} stroke="#fff" />
-                        </button>
+
+                        {/* ── 1. QUALITY / RESOLUTION button ───────────────────────────
+                            Opens <QualityPicker>. Only shows if there's more than
+                            one quality level available (state.qualityLevels). */}
+                        {state.qualityLevels.length > 0 && (
+                            <div style={{ position: "relative" }}>
+                                <button onClick={() => toggleMenu("quality")} className="flux-icon-btn p-2" aria-label="Quality">
+                                    {state.activeQuality !== -1 ? <MdHighQuality size={iconTiny} color="var(--color-primary)" /> : <MdOutlineHighQuality size={iconTiny} color="#fff" />}
+                                </button>
+                                <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                            </div>
+                        )}
+
+                        {/* ── 2. AUDIO TRACK button (music-note icon) ──────────────────
+                            Opens <AudioTrackPanel> — currently a MOCK UI (backend
+                            doesn't support real multi-track audio yet). Swap
+                            MOCK_AUDIO_TRACKS for state.audioTracks once it does. */}
+                        <div style={{ position: "relative" }}>
+                            <button onClick={() => toggleMenu("audioTrack")} className="flux-icon-btn p-2" aria-label="Audio track">
+                                <MdMusicNote size={iconTiny} />
+                            </button>
+                            <AudioTrackPanel open={openMenu === "audioTrack"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                        </div>
+
+                        {/* ── 3. SUBTITLE button ────────────────────────────────────────
+                            Opens <SubtitlePicker>. Highlights (active state) when
+                            a subtitle track is currently selected. */}
+                        <div style={{ position: "relative" }}>
+                            <IconBtn onClick={() => toggleMenu("sub")} active={!!state.activeSubtitle} size="sm" label="Subtitles">
+                                <MdSubtitles size={iconTiny} />
+                            </IconBtn>
+                            <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} />
+                        </div>
+
+                        {/* ── 4. DECODER badge (HW / HW+ / SW) ──────────────────────────
+                            Opens <DecoderModePanel>. Text label always shows the
+                            current mode — see DECODER_LABELS for the short names. */}
+                        <div style={{ position: "relative" }}>
+                            <button
+                                onClick={() => toggleMenu("decoder")}
+                                className="flux-icon-btn"
+                                style={{ padding: "6px 10px", fontSize: 13, fontWeight: 700, color: "#fff" }}
+                                aria-label="Decoder mode">
+                                {DECODER_LABELS[state.decoderMode]}
+                            </button>
+                            <DecoderModePanel open={openMenu === "decoder"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                        </div>
+
+                        {/* ── 5. OVERFLOW (3-dot) menu ──────────────────────────────────
+                            Opens a small <MenuShell> with placeholder rows (Cast/
+                            Share/Details). Add real rows here as features land —
+                            just add more <DisabledRow>/<MenuItem> children below. */}
+                        <div style={{ position: "relative" }}>
+                            <button onClick={() => toggleMenu("overflow")} className="flux-icon-btn p-2" aria-label="More options">
+                                <MoreVertical size={20} strokeWidth={2} /> {/* iconTiny */}
+                            </button>
+                            <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={openMenu === "overflow"} onClose={closeMenu} title="More" align="left">
+                                <DisabledRow label="Cast" />
+                                <DisabledRow label="Share" />
+                                <DisabledRow label="Details" />
+                            </MenuShell>
+                        </div>
                     </div>
                 </div>
 
@@ -1268,10 +1798,22 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                 </div>
             )}
 
-            {/* ── Bottom bar ────────────────────────────────────────────────── */}
+            {/* ══════════════════════════════════════════════════════════════════
+                BOTTOM BAR
+                Top row (mobile only): current time / duration.
+                Seek bar.
+                Main row, 3 zones: [Lock] ... [skip-back / play-pause /
+                skip-forward, centered] ... [loop/speed/PiP/fullscreen, right].
+                Desktop has its own separate big center-play cluster further
+                up the file (look for "Center controls (desktop)").
+                ══════════════════════════════════════════════════════════════════ */}
             <div
                 className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flux-controls-bottom"
-                style={{ pointerEvents: controlsPhase === "ANIMATING_OUT" ? "none" : "auto" }}
+                style={{
+                    pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
+                    opacity: openMenu === "speedSlider" ? 0 : 1,
+                    transition: "opacity 200ms ease",
+                }}
                 onClickCapture={onShowControls}
                 onPointerDownCapture={onShowControls}>
                 {isMobile && (
@@ -1282,8 +1824,33 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
 
                 <SeekBar videoRef={videoRef} />
 
-                <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`}>
-                    <div className={`flex items-center ${isMobile ? "gap-0.5" : "gap-0.5"}`}>
+                <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`} style={{ position: isMobile ? "relative" : "static" }}>
+                    {/* ── LOCK button (mobile, far-left) ──────────────────────────── */}
+                    {isMobile && (
+                        <button
+                            onClick={() => {
+                                actions.setLocked(true);
+                                actions.setControlsVisible(false);
+                            }}
+                            className="flux-icon-btn p-3"
+                            aria-label="Lock screen">
+                            <UnlockKeyhole size={20} strokeWidth={2.5} stroke="#fff" />
+                        </button>
+                    )}
+
+                    {/* ── PLAYBACK cluster: skip-back / play-pause / skip-forward ───
+                        On mobile this is pinned to the exact horizontal center of
+                        the screen (position:absolute + translateX(-50%)) so it
+                        stays centered regardless of how wide the lock button or
+                        the right-side icon cluster happen to be. On desktop it's
+                        just a normal flex item (see the separate desktop center
+                        controls block above, which already centers itself). */}
+                    <div className="flex items-center gap-0.5" style={isMobile ? { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" } : undefined}>
+                        <button type="button" onClick={() => seek(-10)} className={`flex flex-col items-center gap-0.5 flux-icon-btn ${isMobile ? "p-3" : "p-2"}`} aria-label="Back 10 seconds">
+                            <SkipBack size={iconSub} strokeWidth={1.8} />
+                        </button>
+                        {/* Play/Pause — now sits BETWEEN skip-back and skip-forward
+                            (previously was to the left of skip-back). */}
                         {isMobile && (
                             <button
                                 type="button"
@@ -1294,20 +1861,23 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                                 {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
                             </button>
                         )}
-                        <button type="button" onClick={() => seek(-10)} className={`flex flex-col items-center gap-0.5 flux-icon-btn ${isMobile ? "p-3" : "p-2"}`} aria-label="Back 10 seconds">
-                            <SkipBack size={iconSub} strokeWidth={1.8} />
-                            {isMobile && <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.5 }}>10</span>}
-                        </button>
                         <button type="button" onClick={() => seek(10)} className={`flex flex-col items-center gap-0.5 flux-icon-btn ${isMobile ? "p-3" : "p-2"}`} aria-label="Forward 10 seconds">
                             <SkipForward size={iconSub} strokeWidth={1.8} />
-                            {isMobile && <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.5 }}>10</span>}
                         </button>
-                        {!isMobile && <VolumeControl />}
-                        {!isMobile && <TimeDisplay style={{ marginLeft: 8 }} />}
                     </div>
+
+                    {/* ── Desktop-only volume/time, sits where the playback cluster
+                        used to live before the mobile centering change above. ── */}
+                    {!isMobile && (
+                        <div className="flex items-center gap-0.5">
+                            <VolumeControl />
+                            <TimeDisplay style={{ marginLeft: 8 }} />
+                        </div>
+                    )}
 
                     {!isMobile && <div style={{ flex: 1 }} />}
 
+                    {/* ── RIGHT-SIDE icon cluster (loop/speed/aspect/PiP/fullscreen) ── */}
                     <div className={`flex items-center shrink-0 ${isMobile ? "gap-0.5" : "gap-0.5"}`}>
                         {!isMobile && (
                             <IconBtn onClick={() => actions.cycleLoop()} active={state.loop !== "none"} size="sm" label="Loop" title={`Loop: ${state.loop}`}>
@@ -1339,50 +1909,14 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                                 <SpeedPicker open={openMenu === "speed"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
                             </div>
                         )}
-                        {state.qualityLevels.length > 0 && (
-                            <div style={{ position: "relative" }}>
-                                {isMobile ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleMenu("quality")}
-                                        className="flux-icon-btn"
-                                        style={{ display: "flex", alignItems: "center", padding: "10px 10px" }}
-                                        aria-label="Quality">
-                                        {state.activeQuality !== -1 ? <MdHighQuality size={iconTiny} color="var(--color-primary)" /> : <MdOutlineHighQuality size={iconTiny} color="#fff" />}
-                                    </button>
-                                ) : (
-                                    <button onClick={() => toggleMenu("quality")} className="flux-icon-btn" style={{ display: "flex", alignItems: "center", padding: "6px 8px" }} aria-label="Quality">
-                                        {state.activeQuality !== -1 ? <MdHighQuality size={iconTiny} color="var(--color-primary)" /> : <MdOutlineHighQuality size={iconTiny} color="#fff" />}
-                                    </button>
-                                )}
-                                <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
-                            </div>
-                        )}
-                        {state.audioTracks.length > 1 && (
-                            <div style={{ position: "relative" }}>
-                                <button
-                                    onClick={() => toggleMenu("audio")}
-                                    className="flux-icon-btn"
-                                    style={{ display: "flex", alignItems: "center", gap: 4, padding: isMobile ? "10px 10px" : "6px 8px" }}
-                                    aria-label="Audio track">
-                                    <Headphones size={iconTiny} strokeWidth={1.8} />
-                                    {!isMobile && <span style={{ fontSize: 12, fontWeight: 600 }}>{langAbbr(activeAudioName)}</span>}
-                                </button>
-                                <AudioPicker open={openMenu === "audio"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
-                            </div>
-                        )}
-                        <div style={{ position: "relative" }}>
-                            <IconBtn onClick={() => toggleMenu("sub")} active={!!state.activeSubtitle} size={isMobile ? "md" : "sm"} label="Subtitles">
-                                <Subtitles size={iconTiny} strokeWidth={1.8} />
-                            </IconBtn>
-                            <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} />
-                        </div>
+                        {/* --- Quality (resolution) button moved to the TOP bar --- */}
+                        {/* --- Subtitle button moved to the TOP bar --- */}
                         <AspectToggleButton size={isMobile ? 19 : 17} />
                         <IconBtn onClick={togglePiP} size="sm" className="hidden sm:flex" label="Picture in Picture">
                             <PictureInPicture2 size={16} strokeWidth={1.8} />
                         </IconBtn>
                         <IconBtn onClick={toggleFullscreen} size={isMobile ? "md" : "sm"} label={state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
-                            {state.isFullscreen ? <Minimize size={iconTiny} strokeWidth={1.8} /> : <Maximize size={iconTiny} strokeWidth={1.8} />}
+                            {state.isFullscreen ? <Minimize size={20} strokeWidth={1.8} /> : <Maximize size={20} strokeWidth={1.8} />}
                         </IconBtn>
                     </div>
                 </div>

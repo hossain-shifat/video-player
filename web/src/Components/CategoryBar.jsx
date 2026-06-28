@@ -10,7 +10,7 @@ const CategoryBar = ({ onSelect }) => {
             {/* Heading — block so full row is clickable */}
             <NavLink to="/category/all" className="flex items-center gap-1 mb-0.5 w-fit group">
                 <h2 className="text-base sm:text-lg font-semibold text-white group-hover:text-primary transition-colors duration-150">Browse Movies &amp; TV Shows</h2>
-                <ChevronRight size={18} className="text-base-content/40 group-hover:text-primary transition-colors duration-150 shrink-0" />
+                <ChevronRight size={18} className="text-base-content group-hover:text-primary transition-colors duration-150 shrink-0" />
             </NavLink>
             <p className="text-xs text-base-content/40 mb-3">On Demand</p>
 

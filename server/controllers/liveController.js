@@ -11,6 +11,8 @@ const {
     deleteSource,
     getPublicLive,
     getPublicLiveRich,
+    getLive,
+    writeLive,
     mergeChannelsForSource,
     removeChannelsForSource,
 } = require("../utils/iptvStore");
@@ -111,7 +113,9 @@ async function addUrlSource(req, res) {
             id: newSourceId(),
             name: (name || "").trim() || "Untitled Source",
             type: "url",
-            format: format !== "Unknown" ? format : "M3U",
+            // Keep "Unknown" when detectFormat can't tell from URL alone —
+            // sniffFormat() inside ingestSource() will detect from content.
+            format: format !== "Unknown" ? format : "Unknown",
             location: url.trim(),
             status: "pending",
             date: new Date().toISOString(),
@@ -148,7 +152,9 @@ async function addUploadSource(req, res) {
             id: newSourceId(),
             name,
             type: "file",
-            format: format !== "Unknown" ? format : "M3U",
+            // Keep "Unknown" — sniffFormat() reads content at ingest time
+            // so .yml/.yaml/.xml files aren't silently mis-parsed as M3U.
+            format: format !== "Unknown" ? format : "Unknown",
             location: req.file.originalname,
             filePath: req.file.path,
             status: "pending",
@@ -189,7 +195,7 @@ async function editSource(req, res) {
         if (urlChanged) {
             patch.location = url.trim();
             const f = detectFormat(url.trim());
-            patch.format = f !== "Unknown" ? f : "M3U";
+            patch.format = f !== "Unknown" ? f : "Unknown";
         }
 
         let updated = await updateSource(id, patch);
@@ -265,13 +271,14 @@ function buildFlatRows() {
     if (_flatCache && _flatCache.builtFromDate === rich.date) return _flatCache.rows;
 
     const rows = [];
+    let globalIndex = 0; // Initialize index counter starting from 0
+
     for (const [group, list] of Object.entries(rich.channels || {})) {
         for (const ch of list) {
             rows.push({
-                // Stable id derived from the stream URL — lets the frontend use
-                // it as a React key / cache key without the backend needing to
-                // track a separate id anywhere else.
+                // Stable id derived from the stream URL
                 id: Buffer.from(ch.url).toString("base64url"),
+                index: globalIndex++, // Assign sequential index
                 name: ch.name,
                 logo: ch.logo,
                 group: ch.group !== undefined && ch.group !== null ? ch.group : group,
@@ -282,7 +289,9 @@ function buildFlatRows() {
             });
         }
     }
-    rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+    // REMOVED: rows.sort(...) alphabetical sorting has been disabled
+    // to preserve the original structural index order.
 
     _flatCache = { builtFromDate: rich.date, rows };
     return rows;
@@ -351,10 +360,12 @@ function getChannelsFlat(req, res) {
         const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
         const q = (req.query.q || "").toLowerCase().trim();
         const category = (req.query.category || "").toLowerCase().trim();
-        const sort = ["name", "country", "category", "group"].includes(req.query.sort) ? req.query.sort : "name";
+
+        // 1. Add "index" to the allowed sort keys, and make it the default fallback
+        const sort = ["index", "name", "country", "category", "group"].includes(req.query.sort) ? req.query.sort : "index";
         const order = req.query.order === "desc" ? -1 : 1;
 
-        let flat = buildFlatRows().slice(); // copy — may re-sort by a different key below
+        let flat = buildFlatRows().slice();
 
         if (q) {
             flat = flat.filter(
@@ -369,7 +380,11 @@ function getChannelsFlat(req, res) {
             flat = flat.filter((c) => (c.category || "").toLowerCase() === category);
         }
 
+        // 2. Handle numeric sorting for 'index' vs string sorting for other fields
         flat.sort((a, b) => {
+            if (sort === "index") {
+                return (a.index - b.index) * order;
+            }
             const av = (a[sort] || "").toLowerCase();
             const bv = (b[sort] || "").toLowerCase();
             return av < bv ? -order : av > bv ? order : 0;
@@ -430,6 +445,160 @@ async function checkStreamStatus(req, res) {
     }
 }
 
+// ─── Bulk stream health checker ───────────────────────────────────────────────
+// Probes every channel URL in live.json concurrently (bounded pool) and writes
+// streamStatus + lastChecked back into each channel record.
+//
+// streamStatus values:
+//   "working"  — HTTP 2xx or 206
+//   "offline"  — got a response but non-2xx / non-206
+//   "timeout"  — no response within PROBE_TIMEOUT_MS
+//   "unknown"  — not yet probed (default on first ingest)
+//
+// Probe is HEAD first (fast, no body), falls back to GET with Range header
+// when server returns 405/501 (common for HLS/IPTV servers).
+// RTMP / SRT / UDP streams can't be HTTP-probed → marked "unknown".
+
+const PROBE_TIMEOUT_MS = 7_000;
+const PROBE_CONCURRENCY = 20; // simultaneous probes — keep below OS fd limit
+
+let _bulkCheckRunning = false; // prevent concurrent full-scan jobs
+
+async function probeUrl(url) {
+    // Non-HTTP protocols can't be probed via fetch
+    const lower = (url || "").toLowerCase();
+    if (/^(rtmp|rtmps|rtsp|udp|rtp|srt):\/\//.test(lower)) {
+        return { streamStatus: "unknown", httpCode: null };
+    }
+
+    async function tryFetch(method) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+        try {
+            const headers = {
+                ...BROWSER_HEADERS,
+                ...(method === "GET" ? { Range: "bytes=0-1023" } : {}),
+            };
+            return await fetch(url, { method, headers, signal: ctrl.signal, redirect: "follow" });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    try {
+        let r;
+        try {
+            r = await tryFetch("HEAD");
+            if (r.status === 405 || r.status === 501) r = await tryFetch("GET");
+        } catch {
+            r = await tryFetch("GET");
+        }
+        const streamStatus = r.ok || r.status === 206 ? "working" : "offline";
+        return { streamStatus, httpCode: r.status };
+    } catch (err) {
+        const streamStatus = err.name === "AbortError" ? "timeout" : "offline";
+        return { streamStatus, httpCode: null };
+    }
+}
+
+// Runs a bounded concurrent probe of all channels in live.json.
+// Writes streamStatus + lastChecked back via writeLive (queue-safe atomic write).
+// Returns a summary: { total, working, offline, timeout, unknown, durationMs }
+async function runBulkStreamCheck() {
+    if (_bulkCheckRunning) {
+        console.log("[IPTV] bulk check already running — skipping");
+        return null;
+    }
+    _bulkCheckRunning = true;
+    const startMs = Date.now();
+    console.log("[IPTV] Starting bulk stream health check...");
+
+    try {
+        const live = getLive();
+        const grouped = live.channels || {};
+
+        // Flatten all channels to a work list
+        const tasks = [];
+        for (const [group, list] of Object.entries(grouped)) {
+            for (let i = 0; i < list.length; i++) {
+                tasks.push({ group, index: i, url: list[i].url });
+            }
+        }
+
+        if (tasks.length === 0) {
+            _bulkCheckRunning = false;
+            return { total: 0, working: 0, offline: 0, timeout: 0, unknown: 0, durationMs: 0 };
+        }
+
+        const results = new Array(tasks.length);
+        let cursor = 0;
+
+        // Bounded concurrent pool — PROBE_CONCURRENCY workers drain task queue
+        async function worker() {
+            while (true) {
+                const idx = cursor++;
+                if (idx >= tasks.length) break;
+                results[idx] = await probeUrl(tasks[idx].url);
+            }
+        }
+        await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, worker));
+
+        // Merge probe results back into a copy of the grouped structure
+        const updatedGrouped = {};
+        for (const [group, list] of Object.entries(grouped)) {
+            updatedGrouped[group] = list.map((ch) => ({ ...ch }));
+        }
+        for (let i = 0; i < tasks.length; i++) {
+            const { group, index } = tasks[i];
+            const { streamStatus, httpCode } = results[i];
+            updatedGrouped[group][index] = {
+                ...updatedGrouped[group][index],
+                streamStatus,
+                httpCode,
+                lastChecked: new Date().toISOString(),
+            };
+        }
+
+        // Atomic write through the store's serialised queue
+        await writeLive({ date: live.date, channels: updatedGrouped });
+
+        const summary = {
+            total: tasks.length,
+            working: 0,
+            offline: 0,
+            timeout: 0,
+            unknown: 0,
+            durationMs: Date.now() - startMs,
+        };
+        for (const r of results) {
+            const s = r?.streamStatus || "unknown";
+            if (s in summary) summary[s]++;
+        }
+        console.log(`[IPTV] Bulk check done in ${summary.durationMs}ms —`, summary);
+        return summary;
+    } catch (err) {
+        console.error("[IPTV] runBulkStreamCheck failed:", err.message);
+        return null;
+    } finally {
+        _bulkCheckRunning = false;
+    }
+}
+
+// ─── POST /api/live/check/bulk — start background bulk check ─────────────────
+async function startBulkCheck(req, res) {
+    if (_bulkCheckRunning) {
+        return ok(res, { status: "already_running", message: "Bulk check already in progress" });
+    }
+    // Fire and forget — respond immediately with accepted
+    runBulkStreamCheck().catch((err) => console.error("[IPTV] bulk check failed:", err.message));
+    return ok(res, { status: "started", message: "Bulk stream health check started in background" }, 202);
+}
+
+// ─── GET /api/live/check/status — bulk check progress / summary ──────────────
+function getBulkCheckStatus(req, res) {
+    return ok(res, { running: _bulkCheckRunning });
+}
+
 // ─── POST /api/live/iptvorg/refresh — force re-download iptv-org DB ──────────
 async function refreshIptvOrgDb(req, res) {
     try {
@@ -452,5 +621,7 @@ module.exports = {
     getCategoriesList,
     getChannelsFlat,
     checkStreamStatus,
+    startBulkCheck,
+    getBulkCheckStatus,
     refreshIptvOrgDb,
 };

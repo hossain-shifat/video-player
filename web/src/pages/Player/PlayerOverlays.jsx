@@ -1,9 +1,11 @@
 import { useEffect, useState, useRef } from "react";
-import { Sun, Volume2, VolumeX, Volume1, FastForward, Rewind, Zap, Lock, Headphones, Moon, Wifi, WifiOff, RotateCcw } from "lucide-react";
+import { Sun, Volume2, VolumeX, Volume1, Zap, Lock, Headphones, Moon, Wifi, WifiOff, RotateCcw, Minus, Plus, Pencil, SquarePen } from "lucide-react";
+import { MdFastForward as FastForward, MdFastRewind as Rewind } from "react-icons/md";
+import { usePlayerState } from "./UsePlayerState";
 
 // ─── Hook: useOverlay ────────────────────────────────────────────────────────
 
-export function useOverlay(duration = 1500) {
+export function useOverlay(duration = 2000) {
     const [visible, setVisible] = useState(false);
     const timerRef = useRef(null);
 
@@ -59,7 +61,7 @@ function SeekZone({ visible, direction, seconds }) {
                 top: 0,
                 bottom: 0,
                 [isRight ? "right" : "left"]: 0,
-                width: "36%",
+                width: "25%",
                 zIndex: 40,
                 pointerEvents: "none",
                 display: "flex",
@@ -67,12 +69,8 @@ function SeekZone({ visible, direction, seconds }) {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 8,
-                borderRadius: isRight ? "0 8px 8px 0" : "8px 0 0 8px",
-                background: visible
-                    ? isRight
-                        ? "radial-gradient(ellipse at 30% 50%, rgba(255,107,53,0.18), transparent 70%)"
-                        : "radial-gradient(ellipse at 70% 50%, rgba(255,107,53,0.18), transparent 70%)"
-                    : "transparent",
+                borderRadius: isRight ? "100% 0 0 100%" : "0 100% 100% 0",
+                background: visible ? (isRight ? "rgba(0, 0, 0, 0.4)" : "rgba(0, 0, 0, 0.4)") : "transparent",
                 transition: "background 0.25s",
             }}>
             <div
@@ -80,17 +78,16 @@ function SeekZone({ visible, direction, seconds }) {
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
-                    gap: 6,
+                    gap: 4,
                     opacity: visible ? 1 : 0,
                     transform: visible ? "scale(1)" : "scale(0.8)",
                     transition: "opacity 0.2s, transform 0.2s cubic-bezier(0.34,1.56,0.64,1)",
                 }}>
-                <div style={{ display: "flex", gap: 2 }}>
-                    <Icon size={28} color="#fff" strokeWidth={1.8} />
-                    <Icon size={28} color="rgba(255,255,255,0.5)" strokeWidth={1.8} />
+                <div>
+                    <Icon size={35} color="#fff" fill="#fff" />
                 </div>
-                <span style={{ color: "#fff", fontWeight: 700, fontSize: 14 }}>
-                    {isRight ? "+" : "−"}
+                <span style={{ display: "flex", alignItems: "center", color: "#fff", fontWeight: 700, fontSize: 20 }}>
+                    {isRight ? <Plus size={15} strokeWidth={3.5} /> : <Minus size={15} strokeWidth={3.5} />}
                     {seconds}s
                 </span>
             </div>
@@ -116,6 +113,137 @@ function SpeedBoostBadge({ visible, speed = 2 }) {
             <div className="flux-speed-badge">
                 <Zap size={15} fill="currentColor" />
                 <span>{speed}× Speed</span>
+            </div>
+        </div>
+    );
+}
+
+// ─── Speed Boost Slider (tap-and-hold) ───────────────────────────────────────
+
+export function SpeedBoostSlider({ visible, speed = 2 }) {
+    const [showSlider, setShowSlider] = useState(true);
+    const [showPill, setShowPill] = useState(false);
+    const collapseTimer = useRef(null);
+    const pillHideTimer = useRef(null);
+    const lastSpeed = useRef(speed);
+
+    const MIN = 0.25;
+    const MAX = 4.0;
+    const TRACK_DOTS = [0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0];
+    const TOP_LABELS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+    const pctOf = (v) => ((v - MIN) / (MAX - MIN)) * 100;
+
+    useEffect(() => {
+        if (!visible) {
+            setShowSlider(true);
+            setShowPill(false);
+            clearTimeout(collapseTimer.current);
+            clearTimeout(pillHideTimer.current);
+            return;
+        }
+        if (speed !== lastSpeed.current) {
+            lastSpeed.current = speed;
+            setShowSlider(true);
+            setShowPill(false);
+            clearTimeout(pillHideTimer.current);
+        }
+        clearTimeout(collapseTimer.current);
+        collapseTimer.current = setTimeout(() => {
+            setShowSlider(false);
+            setShowPill(true);
+        }, 3000);
+        return () => clearTimeout(collapseTimer.current);
+    }, [visible, speed]);
+
+    useEffect(() => {
+        if (!showPill) return;
+        pillHideTimer.current = setTimeout(() => setShowPill(false), 3000);
+        return () => clearTimeout(pillHideTimer.current);
+    }, [showPill]);
+
+    if (!visible) return null;
+
+    return (
+        <div
+            style={{
+                position: "absolute",
+                top: 40,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 41,
+                pointerEvents: "none",
+            }}>
+            <div
+                style={{
+                    overflow: "hidden",
+                    width: showSlider ? "min(640px, 88vw)" : 0,
+                    maxHeight: showSlider ? 90 : 0,
+                    opacity: showSlider ? 1 : 0,
+                    transition: "width 0.25s cubic-bezier(0.4,0,0.2,1), max-height 0.25s cubic-bezier(0.4,0,0.2,1), opacity 0.2s",
+                    background: "rgba(0,0,0,0.5)",
+                    borderRadius: 16,
+                    padding: showSlider ? "14px 20px" : 0,
+                }}>
+                <div style={{ position: "relative", height: 18, marginBottom: 4 }}>
+                    {TOP_LABELS.map((v) => (
+                        <span
+                            key={v}
+                            style={{
+                                position: "absolute",
+                                left: `${pctOf(v)}%`,
+                                transform: "translateX(-50%)",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                color: Math.abs(v - speed) < 0.001 ? "var(--color-primary)" : "rgba(255,255,255,0.85)",
+                                whiteSpace: "nowrap",
+                            }}>
+                            {v.toFixed(1)}x
+                        </span>
+                    ))}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ color: "#fff", fontSize: 15, fontWeight: 600, flexShrink: 0 }}>0.25x</span>
+                    <div style={{ position: "relative", flex: 1, height: 18, display: "flex", alignItems: "center" }}>
+                        <div style={{ position: "absolute", left: 0, right: 0, height: 3, borderRadius: 99, background: "rgba(255,255,255,0.35)" }} />
+                        {TRACK_DOTS.map((v) => (
+                            <div
+                                key={v}
+                                style={{
+                                    position: "absolute",
+                                    left: `${pctOf(v)}%`,
+                                    top: "50%",
+                                    width: Math.abs(v - speed) < 0.001 ? 14 : 6,
+                                    height: Math.abs(v - speed) < 0.001 ? 14 : 6,
+                                    borderRadius: "50%",
+                                    background: Math.abs(v - speed) < 0.001 ? "var(--color-primary)" : "#fff",
+                                    transform: "translate(-50%, -50%)",
+                                }}
+                            />
+                        ))}
+                    </div>
+                    <span style={{ color: "#fff", fontSize: 15, fontWeight: 600, flexShrink: 0 }}>4.0x</span>
+                </div>
+            </div>
+
+            <div
+                style={{
+                    position: "absolute",
+                    top: 30,
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    padding: "10px 18px",
+                    borderRadius: 999,
+                    background: "rgba(0,0,0,0.5)",
+                    width: "fit-content",
+                    opacity: showPill ? 1 : 0,
+                    transition: "opacity 0.2s",
+                }}>
+                <FastForward size={16} color="#fff" />
+                <span style={{ color: "#fff", fontSize: 15, fontWeight: 600, whiteSpace: "nowrap" }}>{speed.toFixed(1)}x Speed Playing</span>
             </div>
         </div>
     );
@@ -263,25 +391,27 @@ export default function PlayerOverlays({ overlayState, overlayVis }) {
 
     const { showBrightness, showVolume, showSeek, showSpeedBoost, showLock, showAudioTrack } = overlayVis || {};
 
-    const brightnessNorm = (brightness - 0.5) / 1.5;
+    const brightnessNorm = Math.max(0, Math.min(1, brightness));
     const brightnessPercent = Math.round(brightnessNorm * 100);
     const volumePct = muted ? 0 : volume;
     const volumePercent = muted ? 0 : Math.round(volume * 100);
 
     return (
         <>
-            {/* Brightness — left */}
-            <BarPill visible={showBrightness} side="left" iconNode={<Moon size={22} color="#fff" strokeWidth={1.8} />} pct={brightnessNorm} label={`${brightnessPercent}%`} />
+            {/* Brightness — triggered by LEFT-side swipe, overlay shown on
+                the RIGHT (opposite side from the swipe zone, per spec). */}
+            <BarPill visible={showBrightness} side="right" iconNode={<Moon size={22} color="#fff" strokeWidth={1.8} />} pct={brightnessNorm} label={`${brightnessPercent}%`} />
 
-            {/* Volume — right */}
-            <BarPill visible={showVolume} side="right" iconNode={<VolumeIcon volume={volume} muted={muted} />} pct={volumePct} label={`${volumePercent}%`} />
+            {/* Volume — triggered by RIGHT-side swipe, overlay shown on the
+                LEFT (opposite side from the swipe zone, per spec). */}
+            <BarPill visible={showVolume} side="left" iconNode={<VolumeIcon volume={volume} muted={muted} />} pct={volumePct} label={`${volumePercent}%`} />
 
             {/* Seek zones */}
             <SeekZone visible={showSeek && seekDir === "backward"} direction="backward" seconds={seekSec} />
             <SeekZone visible={showSeek && seekDir === "forward"} direction="forward" seconds={seekSec} />
 
             {/* Speed boost */}
-            <SpeedBoostBadge visible={showSpeedBoost} speed={speed} />
+            <SpeedBoostSlider visible={showSpeedBoost} speed={speed} />
 
             {/* Lock */}
             <Pill visible={showLock} side="center">
@@ -295,5 +425,200 @@ export default function PlayerOverlays({ overlayState, overlayVis }) {
                 <span style={{ color: "#fff", fontSize: 12, fontWeight: 600 }}>{audioTrack || "Audio"}</span>
             </Pill>
         </>
+    );
+}
+
+// ─── Speed Slider Overlay (MX-Player-style scrubber) ─────────────────────────
+
+export function SpeedSliderOverlay({ open, onClose }) {
+    const { state, actions } = usePlayerState();
+    const MIN = 0.25;
+    const MAX = 4.0;
+    const STEP = 0.05;
+    const MAJORS = [0.25, 1.0, 2.0, 3.0, 4.0];
+    const dots = [];
+    for (let i = 0; i < MAJORS.length; i++) {
+        dots.push({ value: MAJORS[i], major: true });
+        if (i < MAJORS.length - 1) {
+            dots.push({ value: (MAJORS[i] + MAJORS[i + 1]) / 2, major: false });
+        }
+    }
+
+    const pctOf = (v) => ((v - MIN) / (MAX - MIN)) * 100;
+
+    const step = (dir) => {
+        const next = Math.round((state.playbackSpeed + dir * STEP) * 100) / 100;
+        actions.setPlaybackSpeed(Math.max(MIN, Math.min(MAX, next)));
+    };
+
+    if (!open) return null;
+
+    return (
+        <div
+            data-gesture-exclude="true"
+            onClick={onClose}
+            style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 70,
+                pointerEvents: "auto",
+            }}>
+            {/* Panel: 65% width, horizontally centered, anchored to the
+                bottom of the screen. */}
+            <div onClick={(e) => e.stopPropagation()} className="absolute left-1/2 bottom-5 w-[65%] -translate-x-1/2 py-5 px-7.5 bg-black/55 rounded-xl">
+                {/* -  [ 1.00x ✎ ]  + */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, marginBottom: 22 }}>
+                    <button
+                        onClick={() => step(-1)}
+                        aria-label="Decrease speed"
+                        style={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: "50%",
+                            background: "rgba(255,255,255,0.14)",
+                            border: "none",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            WebkitTapHighlightColor: "transparent",
+                        }}>
+                        <Minus size={20} color="#fff" strokeWidth={2.5} />
+                    </button>
+
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            padding: "10px 20px",
+                            borderRadius: 12,
+                        }}
+                        className="bg-gray-900/60">
+                        <span style={{ color: "#fff", fontSize: 26, fontWeight: 700, fontFamily: "ui-monospace,'SF Mono',monospace" }}>{state.playbackSpeed.toFixed(2)}x</span>
+                        <SquarePen size={18} color="#fff" strokeWidth={2} />
+                    </div>
+
+                    <button
+                        onClick={() => step(1)}
+                        aria-label="Increase speed"
+                        style={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: "50%",
+                            background: "rgba(255,255,255,0.14)",
+                            border: "none",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            WebkitTapHighlightColor: "transparent",
+                        }}>
+                        <Plus size={20} color="#fff" strokeWidth={2.5} />
+                    </button>
+                </div>
+
+                {/* Slider track + dots + reset, all on one row like the screenshot */}
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <div style={{ position: "relative", flex: 1, height: 28, display: "flex", alignItems: "center" }}>
+                        {/* Track */}
+                        <div style={{ position: "absolute", left: 0, right: 0, height: 3, borderRadius: 99, background: "rgba(255,255,255,0.3)" }} />
+                        {/* Filled portion up to current value */}
+                        <div style={{ position: "absolute", left: 0, width: `${pctOf(state.playbackSpeed)}%`, height: 3, borderRadius: 99, background: "var(--color-primary)" }} />
+                        {/* Tick dots — majors slightly bigger, midpoints smaller/dimmer */}
+                        {dots.map((d) => (
+                            <div
+                                key={d.value}
+                                style={{
+                                    position: "absolute",
+                                    left: `${pctOf(d.value)}%`,
+                                    top: "50%",
+                                    width: d.major ? 7 : 5,
+                                    height: d.major ? 7 : 5,
+                                    borderRadius: "50%",
+                                    background: d.value <= state.playbackSpeed ? "var(--color-primary)" : "#fff",
+                                    transform: "translate(-50%, -50%)",
+                                    pointerEvents: "none",
+                                }}
+                            />
+                        ))}
+                        {/* Active thumb */}
+                        <div
+                            style={{
+                                position: "absolute",
+                                left: `${pctOf(state.playbackSpeed)}%`,
+                                top: "50%",
+                                width: 18,
+                                height: 18,
+                                borderRadius: "50%",
+                                background: "var(--color-primary)",
+                                transform: "translate(-50%, -50%)",
+                                boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+                                pointerEvents: "none",
+                            }}
+                        />
+                        {/* Invisible range input handles the actual drag/tap interaction */}
+                        <input
+                            type="range"
+                            min={MIN}
+                            max={MAX}
+                            step={STEP}
+                            value={state.playbackSpeed}
+                            onChange={(e) => actions.setPlaybackSpeed(parseFloat(e.target.value))}
+                            style={{
+                                position: "absolute",
+                                inset: 0,
+                                width: "100%",
+                                height: "100%",
+                                opacity: 0,
+                                cursor: "pointer",
+                                margin: 0,
+                            }}
+                            aria-label="Playback speed"
+                        />
+                    </div>
+
+                    <button
+                        onClick={() => actions.setPlaybackSpeed(1)}
+                        aria-label="Reset speed"
+                        style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: "50%",
+                            background: "transparent",
+                            border: "none",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            WebkitTapHighlightColor: "transparent",
+                        }}>
+                        <RotateCcw size={20} color="#fff" strokeWidth={2} />
+                    </button>
+                </div>
+
+                {/* Labels under the 5 major stops only */}
+                <div style={{ position: "relative", marginTop: 8, height: 16 }}>
+                    {MAJORS.map((v) => (
+                        <span
+                            key={v}
+                            style={{
+                                position: "absolute",
+                                left: `${pctOf(v)}%`,
+                                transform: "translateX(-50%)",
+                                color: "rgba(255,255,255,0.85)",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                whiteSpace: "nowrap",
+                            }}>
+                            {v === 0.25 ? "0.25x" : `${v.toFixed(1)}x`}
+                        </span>
+                    ))}
+                </div>
+            </div>
+        </div>
     );
 }

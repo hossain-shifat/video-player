@@ -4,6 +4,7 @@ import { useApi } from "../../Context/apiContext";
 import CategoryBar from "../../Components/CategoryBar";
 import { HomeMediaSections } from "./HomeMediaSections";
 import LiveMediaRow from "../../Components/LiveMediaRow";
+import ContinueWatchingRow from "../../Components/ContinueWatchingRow";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -26,10 +27,10 @@ const Home = () => {
     };
 
     return (
-        <div className="flex flex-col gap-4">
-            <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
+        <div className="flex flex-col gap-5">
+            <ContinueWatchingRow />
 
-            {/* Continue Watching row — only renders if history exists */}
+            <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
 
             <LiveMediaRow />
 
