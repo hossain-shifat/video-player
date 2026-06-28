@@ -579,51 +579,94 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
     const audioCtxRef = useRef(null);
     const gainNodeRef = useRef(null);
     const sourceNodeRef = useRef(null);
-    const eqBandsRef = useRef({ bass: null, mid: null, treble: null });
+    const eqBandsRef = useRef({ b60: null, b230: null, b910: null, b4000: null, b14000: null });
+    const bassBoostNodeRef = useRef(null);
+    const widenerRef = useRef(null); // { splitter, merger, sideGain } for the mid-side stereo widener
 
     const ensureAudioGraph = useCallback(() => {
         const video = videoRef.current;
         if (!video || sourceNodeRef.current) return sourceNodeRef.current ? true : false;
+        // Pure HW decode has no access to the Web Audio pipeline on most
+        // platforms — EQ/Audio Effect must stay disabled in that mode (see
+        // the locked-state UI in PlayerControls). HW+/SW both allow it.
+        if (state.decoderMode === "hw") return false;
         try {
             const Ctx = window.AudioContext || window.webkitAudioContext;
             const ctx = new Ctx();
             const source = ctx.createMediaElementSource(video);
 
-            const bass = ctx.createBiquadFilter();
-            bass.type = "lowshelf";
-            bass.frequency.value = 200;
-            bass.gain.value = 0;
+            // 5-band graph, all peaking filters at Q=1.0 — standard 5-band
+            // graphic EQ spacing (60/230/910/4000/14000 Hz), matching the
+            // Equalizer UI exactly.
+            const FREQUENCIES = [60, 230, 910, 4000, 14000];
+            const [b60, b230, b910, b4000, b14000] = FREQUENCIES.map((freq) => {
+                const filter = ctx.createBiquadFilter();
+                filter.type = "peaking";
+                filter.frequency.value = freq;
+                filter.Q.value = 1.0;
+                filter.gain.value = 0;
+                return filter;
+            });
 
-            const mid = ctx.createBiquadFilter();
-            mid.type = "peaking";
-            mid.frequency.value = 1000;
-            mid.Q.value = 0.7;
-            mid.gain.value = 0;
+            // Bass Boost knob — separate low-shelf stage from the 5-band EQ
+            // itself, since it's a standalone Audio Effect control (0-100%
+            // -> 0-12dB) rather than one of the named EQ bands.
+            const bassBoost = ctx.createBiquadFilter();
+            bassBoost.type = "lowshelf";
+            bassBoost.frequency.value = 120;
+            bassBoost.gain.value = 0;
 
-            const treble = ctx.createBiquadFilter();
-            treble.type = "highshelf";
-            treble.frequency.value = 3000;
-            treble.gain.value = 0;
+            // Virtualizer knob — basic mid-side stereo widener. Split L/R,
+            // derive side = (L-R)/2 via inverted-R merge trick is non-trivial
+            // with stock nodes, so instead: boost the channel difference by
+            // widening gain on a duplicated/inverted side path. Simpler and
+            // stable approach: use a ChannelSplitter + two gains feeding a
+            // ChannelMerger, pushing L/R apart proportionally to the level.
+            const splitter = ctx.createChannelSplitter(2);
+            const merger = ctx.createChannelMerger(2);
+            const leftGain = ctx.createGain();
+            const rightGain = ctx.createGain();
+            const crossL = ctx.createGain(); // negative cross-feed from R into L
+            const crossR = ctx.createGain(); // negative cross-feed from L into R
+            leftGain.gain.value = 1;
+            rightGain.gain.value = 1;
+            crossL.gain.value = 0;
+            crossR.gain.value = 0;
+
+            splitter.connect(leftGain, 0);
+            splitter.connect(rightGain, 1);
+            splitter.connect(crossR, 0); // L → crossR (subtracted into right)
+            splitter.connect(crossL, 1); // R → crossL (subtracted into left)
+            leftGain.connect(merger, 0, 0);
+            crossL.connect(merger, 0, 0);
+            rightGain.connect(merger, 0, 1);
+            crossR.connect(merger, 0, 1);
 
             const gain = ctx.createGain();
 
-            source.connect(bass);
-            bass.connect(mid);
-            mid.connect(treble);
-            treble.connect(gain);
+            source.connect(b60);
+            b60.connect(b230);
+            b230.connect(b910);
+            b910.connect(b4000);
+            b4000.connect(b14000);
+            b14000.connect(bassBoost);
+            bassBoost.connect(splitter);
+            merger.connect(gain);
             gain.connect(ctx.destination);
 
             audioCtxRef.current = ctx;
             sourceNodeRef.current = source;
             gainNodeRef.current = gain;
-            eqBandsRef.current = { bass, mid, treble };
+            eqBandsRef.current = { b60, b230, b910, b4000, b14000 };
+            bassBoostNodeRef.current = bassBoost;
+            widenerRef.current = { crossL, crossR };
             return true;
         } catch {
             // Web Audio unavailable or blocked — both features silently
             // have no effect, native playback is completely unaffected.
             return false;
         }
-    }, [videoRef]);
+    }, [videoRef, state.decoderMode]);
 
     useEffect(() => {
         if (state.volumeBoost > 1) ensureAudioGraph();
@@ -637,23 +680,61 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         gainNodeRef.current.gain.value = state.volumeBoost;
     }, [state.volumeBoost]);
 
-    // ── 3-Band EQ ──────────────────────────────────────────────────────────────
-    // state.eqBands = { bass, mid, treble }, each in dB, range roughly
-    // -12..+12. Connects the shared audio graph on first non-zero use,
-    // same lazy pattern as volume boost.
+    // ── 5-Band EQ ──────────────────────────────────────────────────────────────
+    // state.eqBands = { b60, b230, b910, b4000, b14000 }, each in dB, range
+    // roughly -12..+12. Connects the shared audio graph on first non-zero
+    // use, same lazy pattern as volume boost. Disabled entirely in pure HW
+    // decode mode (ensureAudioGraph returns false, bands stay null, the
+    // gain-sync effect below becomes a no-op).
     useEffect(() => {
-        const { bass, mid, treble } = state.eqBands || {};
-        if (state.eqEnabled && (bass || mid || treble)) ensureAudioGraph();
+        const { b60, b230, b910, b4000, b14000 } = state.eqBands || {};
+        if (state.eqEnabled && (b60 || b230 || b910 || b4000 || b14000)) ensureAudioGraph();
     }, [state.eqBands, state.eqEnabled, ensureAudioGraph]);
 
     useEffect(() => {
         const bands = eqBandsRef.current;
-        if (!bands.bass) return;
-        const { bass = 0, mid = 0, treble = 0 } = state.eqEnabled ? state.eqBands || {} : {};
-        bands.bass.gain.value = bass;
-        bands.mid.gain.value = mid;
-        bands.treble.gain.value = treble;
+        const ctx = audioCtxRef.current;
+        if (!bands.b60 || !ctx) return;
+        const { b60 = 0, b230 = 0, b910 = 0, b4000 = 0, b14000 = 0 } = state.eqEnabled ? state.eqBands || {} : {};
+        // setTargetAtTime ramps over 100ms instead of jumping instantly —
+        // avoids audible pops/clicks when switching presets or dragging
+        // sliders quickly, per the smoothing requirement.
+        bands.b60.gain.setTargetAtTime(b60, ctx.currentTime, 0.1);
+        bands.b230.gain.setTargetAtTime(b230, ctx.currentTime, 0.1);
+        bands.b910.gain.setTargetAtTime(b910, ctx.currentTime, 0.1);
+        bands.b4000.gain.setTargetAtTime(b4000, ctx.currentTime, 0.1);
+        bands.b14000.gain.setTargetAtTime(b14000, ctx.currentTime, 0.1);
     }, [state.eqBands, state.eqEnabled]);
+
+    // ── Bass Boost knob (0-100% → 0-12dB low-shelf) ──────────────────────────
+    useEffect(() => {
+        if (state.bassBoostLevel > 0) ensureAudioGraph();
+    }, [state.bassBoostLevel, ensureAudioGraph]);
+
+    useEffect(() => {
+        const node = bassBoostNodeRef.current;
+        const ctx = audioCtxRef.current;
+        if (!node || !ctx) return;
+        const db = (state.bassBoostLevel / 100) * 12;
+        node.gain.setTargetAtTime(db, ctx.currentTime, 0.1);
+    }, [state.bassBoostLevel]);
+
+    // ── Virtualizer knob (0-100% → stereo widening via cross-feed) ──────────
+    useEffect(() => {
+        if (state.virtualizerLevel > 0) ensureAudioGraph();
+    }, [state.virtualizerLevel, ensureAudioGraph]);
+
+    useEffect(() => {
+        const widener = widenerRef.current;
+        const ctx = audioCtxRef.current;
+        if (!widener || !ctx) return;
+        // Negative cross-feed widens the stereo image — at 0% no cross-feed
+        // (mono-compatible, untouched). At 100%, cross-feed approaches -0.6,
+        // pulling each channel further from center without fully cancelling.
+        const amount = -(state.virtualizerLevel / 100) * 0.6;
+        widener.crossL.gain.setTargetAtTime(amount, ctx.currentTime, 0.1);
+        widener.crossR.gain.setTargetAtTime(amount, ctx.currentTime, 0.1);
+    }, [state.virtualizerLevel]);
 
     // ── Sync playback speed ───────────────────────────────────────────────────
     useEffect(() => {
@@ -772,6 +853,14 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
     // pixel-exact treatment (computeFixedRatioBox) so they can't leave an
     // uneven gap either. fill/stretch/1:1 are left on CSS object-fit since
     // they intentionally ignore native ratio / are symmetric by construction.
+    // Brightness gesture range is clamped to [0.3, 2.0] in PlayerGestures
+    // (1.0 = neutral/native). A scrim can only ever subtract light — it has
+    // no way to push past whatever the screen's actual current backlight is
+    // — so values above 1.0 are full-clear (0 scrim, same as 1.0) and values
+    // below 1.0 ramp the scrim up toward the spec's 0.85 max-dim ceiling.
+    const userBrightnessPct = Math.min(1, state.brightness); // 0.3-1.0 → 0.3-1.0, anything above 1.0 clamps to 1.0 (no scrim)
+    const brightnessScrimOpacity = Math.max(0, Math.min(0.85, 1 - userBrightnessPct));
+
     const isAutoMode = state.aspectRatio === "auto" || !state.aspectRatio;
     const isFixedRatioMode = state.aspectRatio === "16:9" || state.aspectRatio === "4:3";
     const computedBox = isAutoMode ? computeLetterboxBox(containerDims.w, containerDims.h, videoDims.w, videoDims.h) : null;
@@ -827,7 +916,6 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                 ref={videoRef}
                 style={{
                     ...videoStyle,
-                    filter: `brightness(${state.brightness})`,
                     background: "#000",
                     display: "block",
                     margin: "auto",
@@ -868,6 +956,24 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                 }}
                 onSeeking={() => actions.setBuffering(true)}
                 onSeeked={() => actions.setBuffering(false)}
+            />
+            {/* ── Brightness scrim ─────────────────────────────────────────────
+                Pure black layer, NOT a CSS filter on the video — a filter
+                mutates the actual pixel data (burns whites, flattens blacks,
+                reads as "contrast" instead of "brightness"). This sits on
+                top of the video and underneath the gesture/HUD layer instead,
+                so dimming is achieved by occlusion, not texture manipulation.
+                The video's own color space, saturation, and contrast are
+                completely untouched regardless of state.brightness. */}
+            <div
+                style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "#000",
+                    opacity: brightnessScrimOpacity,
+                    pointerEvents: "none",
+                    transition: "opacity 80ms linear",
+                }}
             />
         </div>
     );

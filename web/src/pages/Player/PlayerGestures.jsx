@@ -40,6 +40,19 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     const dragStart = useRef(null);
     const pinchStart = useRef(null);
 
+    // Mirrors state.volume/state.brightness without being a dependency of
+    // handleTouchStart — that callback used to list state.volume and
+    // state.brightness directly, which meant every gesture-driven update to
+    // either one (i.e. every touchmove during a brightness/volume swipe)
+    // produced a new handleTouchStart reference, which tore down and
+    // re-attached all three touch listeners on the container mid-gesture.
+    // Reading from this ref instead keeps handleTouchStart stable for the
+    // whole gesture.
+    const liveValues = useRef({ volume: state.volume, brightness: state.brightness });
+    useEffect(() => {
+        liveValues.current = { volume: state.volume, brightness: state.brightness };
+    }, [state.volume, state.brightness]);
+
     // ── New gesture-system refs (player-controls.md spec) ──────────────────────
     const axisLock = useRef(null); // null | "horizontal" | "vertical" — set once slop is crossed, held for the rest of the gesture
     const seekCancelled = useRef(false); // true once swipe-to-cancel has fired for this gesture
@@ -419,8 +432,8 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 x,
                 y,
                 zone,
-                volume: state.volume,
-                brightness: state.brightness,
+                volume: liveValues.current.volume,
+                brightness: liveValues.current.brightness,
                 currentTime: videoRef.current?.currentTime || 0,
             };
 
@@ -442,7 +455,7 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 }
             }, 480);
         },
-        [state.isLocked, state.volume, state.brightness, state.aspectRatio, containerRef, videoRef, actions, setOverlayState, seekBy, triggerSpeedBoost, resetZoom],
+        [state.isLocked, state.aspectRatio, containerRef, videoRef, actions, setOverlayState, seekBy, triggerSpeedBoost, resetZoom],
     );
 
     // ── handleTouchEnd ───────────────────────────────────────────────────────
@@ -633,6 +646,25 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 }
             }
 
+            // ── Speed-boost custom slide: while the long-press boost is
+            // active, dragging horizontally anywhere on screen lets the user
+            // pick a custom speed on the 0.25x-4.0x slider shown by
+            // SpeedBoostSlider, instead of being stuck at the default 2x.
+            // Maps the finger's absolute x-position across the full screen
+            // width to the slider range — mirrors how the slider's own touch
+            // handler computes position, so dragging here and dragging the
+            // visible dots produce the same result.
+            if (speedBoostActive.current) {
+                const MIN_SPEED = 0.25;
+                const MAX_SPEED = 4.0;
+                const pct = Math.max(0, Math.min(1, x / rect.width));
+                const rawSpeed = MIN_SPEED + pct * (MAX_SPEED - MIN_SPEED);
+                const customSpeed = Math.round(rawSpeed * 20) / 20;
+                actions.setPlaybackSpeed(customSpeed);
+                setOverlayState((s) => ({ ...s, speed: customSpeed }));
+                return;
+            }
+
             // ── Axis lock (doc Rule 1): don't interpret direction at the
             // exact down-point. Wait until movement crosses SLOP (15-25px),
             // then commit to whichever axis broke the threshold first and
@@ -650,9 +682,19 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             }
 
             if (axisLock.current === "vertical" && zone === "left") {
-                // Brightness — left vertical swipe
+                // Brightness — left vertical swipe. Range is 0.0 (scrim
+                // fully dims toward the spec's 0.85 black ceiling) to 1.0
+                // (scrim fully clear, native screen brightness). No boost
+                // ceiling above 1.0 here — unlike volume, there's no way to
+                // push light output past whatever the real backlight is
+                // currently at from inside a browser tab; the scrim can only
+                // subtract light, never add it.
                 const delta = -dy / (rect.height * 0.65);
-                const newBrightness = Math.max(0.3, Math.min(2, dragStart.current.brightness + delta * 1.5));
+                const rawBrightness = Math.max(0, Math.min(1, dragStart.current.brightness + delta));
+                // Quantize to 5% steps so the value advances in clean
+                // increments rather than tracking every sub-pixel of finger
+                // movement — avoids visible flicker on the scrim opacity.
+                const newBrightness = Math.round(rawBrightness * 20) / 20;
                 actions.setBrightness(newBrightness);
                 setOverlayState((s) => ({ ...s, brightness: newBrightness }));
                 triggerBrightness();
@@ -662,7 +704,9 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
                 // <video>.volume, the 1-2 portion is the GainNode boost
                 // wired in VideoCore (see boostGain prop / applyVolumeBoost).
                 const delta = -dy / (rect.height * 0.65);
-                const newVol = Math.max(0, Math.min(2, dragStart.current.volume + delta * 2));
+                const rawVol = Math.max(0, Math.min(2, dragStart.current.volume + delta * 2));
+                // Quantize to 5% steps, same reasoning as brightness above.
+                const newVol = Math.round(rawVol * 20) / 20;
                 actions.setVolume(Math.min(1, newVol));
                 actions.setVolumeBoost(Math.max(1, newVol));
                 setOverlayState((s) => ({ ...s, volume: newVol, muted: false }));

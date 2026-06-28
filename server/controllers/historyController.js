@@ -2,7 +2,6 @@
 
 const { getHistory, getHistoryEntry, saveProgress, deleteHistoryEntry, clearHistory } = require("../utils/userStore");
 
-// Extract clientId from X-Flux-Client header (set by frontend / promoted from query param by beaconBodyParser)
 function getClientId(req) {
     return req.headers["x-flux-client"] || req.query.clientId || null;
 }
@@ -26,7 +25,20 @@ function getOne(req, res) {
     return res.json({ ...entry, exists: true });
 }
 
-// POST /api/history/:id — save/update watch progress for this client
+/**
+ * POST /api/history/:id — save/update watch progress for this client.
+ *
+ * Per spec #3: this route ONLY ever writes the numeric resume_time
+ * (position/duration) + lightweight metadata — never an image. Preview
+ * frames are generated lazily and on-demand by the history card's <img>
+ * hitting GET /api/media/:id/thumbnail, not here.
+ *
+ * Body:
+ *   position, duration             — currentTime / total length in seconds
+ *   isResetAction: true             — "Start Over": force position → 0,
+ *                                      bypasses the milestone lock
+ *   title, episodeTitle, mediaType  — parent/episode metadata (series/anime)
+ */
 function logProgress(req, res) {
     try {
         const clientId = getClientId(req);
@@ -47,17 +59,14 @@ function deleteOne(req, res) {
 }
 
 // DELETE /api/history — clear history for this client only
-// clientId is required; without it, pass ?all=true for intentional full-store clear
 function clearAll(req, res) {
     const clientId = getClientId(req);
     if (!clientId) {
-        // No client identified — require explicit confirmation to avoid accidental wipe
         if (req.query.all !== "true") {
             return res.status(400).json({
                 error: "X-Flux-Client header required. To clear all history pass ?all=true",
             });
         }
-        // ?all=true — intentional admin-level clear of entire store
         clearHistory(null);
         return res.json({ message: "All history cleared" });
     }

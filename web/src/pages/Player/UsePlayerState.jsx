@@ -41,11 +41,50 @@ const initialState = {
     backgroundPlay: false, // keep audio playing if tab/app backgrounded
     nightMode: false, // placeholder toggle, no visual effect yet (per product decision)
     eqEnabled: false, // master on/off — when false, VideoCore applies 0 gain on all bands regardless of stored values
-    eqBands: { bass: 0, mid: 0, treble: 0 }, // dB, range -12..+12 each
+    eqBands: { b60: 0, b230: 0, b910: 0, b4000: 0, b14000: 0 }, // dB, range -12..+12 each, 5-band (60/230/910/4000/14000 Hz)
+
+    eqPreset: "normal", // 'custom' | 'normal' | 'classical' | 'dance' | 'flat' — manual slider edits switch this to 'custom'
+    audioEffectPreset: "original", // 'original' | 'clarity' | 'bassBoost' | 'trebleBoost' | 'movie' | 'music' — convenience curves, same 5-band EQ under the hood
+    decoderMode: "hw+", // 'hw' | 'hw+' | 'sw' — audio effects/EQ are disabled in pure 'hw' decode (no Web Audio graph access)
+    // Mock audio-track selection UI (top-bar music-note icon). Backend
+    // doesn't support real multi-track audio yet — this is placeholder
+    // state matching the reference screenshots until that's wired up.
+    mockAudioTrack: "HDHub4u.Ms - English",
+    useSwAudioDecoder: false,
+    bassBoostLevel: 0, // 0-100%, extra low-shelf boost layered on top of the 5-band EQ
+    virtualizerLevel: 0, // 0-100%, stereo widening effect
     // Which 5 icons show in the collapsed mobile row before the chevron;
     // order also defines "Customise Items" drag-reorder result.
-    quickIconOrder: ["eq", "speed", "pip", "audioFx", "rotation"],
+    quickIconOrder: ["eq", "speed", "screenshot", "audioFx", "rotation"],
     volumeBoost: 1, // 1.0-2.0 — software gain multiplier on top of native volume, doc: "Volume Boost up to 200%"
+};
+
+// ─── EQ preset curves (dB per band: 60/230/910/4000/14000 Hz) ────────────────
+// Shared by both the Equalizer tab's named presets and the Audio Effect
+// tab's convenience presets — they're the same 5-band graph underneath.
+// Matrix per spec: Band1=60Hz, Band2=230Hz, Band3=910Hz, Band4=4kHz, Band5=14kHz.
+
+export const EQ_PRESETS = {
+    custom: null, // not a curve — manual mode, no auto-apply
+    normal: { b60: 0, b230: 0, b910: 0, b4000: 0, b14000: 0 },
+    classical: { b60: 5, b230: 3, b910: -2, b4000: 4, b14000: 4 },
+    dance: { b60: 6, b230: 0, b910: 2, b4000: 4, b14000: 1 },
+    flat: { b60: 0, b230: 0, b910: 0, b4000: 0, b14000: 0 },
+    folk: { b60: 3, b230: 1, b910: 0, b4000: 2, b14000: -1 },
+    heavyMetal: { b60: 4, b230: 1, b910: 9, b4000: 3, b14000: 0 },
+    hipHop: { b60: 5, b230: 3, b910: 0, b4000: 1, b14000: 3 },
+    jazz: { b60: 4, b230: 2, b910: -2, b4000: 2, b14000: 5 },
+    pop: { b60: -2, b230: -1, b910: 5, b4000: 1, b14000: -2 },
+    rock: { b60: 5, b230: 3, b910: -3, b4000: 2, b14000: 5 },
+};
+
+export const AUDIO_EFFECT_PRESETS = {
+    original: { b60: 0, b230: 0, b910: 0, b4000: 0, b14000: 0 },
+    clarity: { b60: -2, b230: 0, b910: 3, b4000: 4, b14000: 2 },
+    bassBoost: { b60: 8, b230: 4, b910: 0, b4000: 0, b14000: 0 },
+    trebleBoost: { b60: 0, b230: 0, b910: 0, b4000: 4, b14000: 7 },
+    movie: { b60: 4, b230: 2, b910: 0, b4000: 1, b14000: 2 },
+    music: { b60: 3, b230: 1, b910: 0, b4000: 2, b14000: 3 },
 };
 
 // ─── Action Types ─────────────────────────────────────────────────────────────
@@ -89,6 +128,13 @@ export const A = {
     TOGGLE_NIGHT_MODE: "TOGGLE_NIGHT_MODE",
     TOGGLE_EQ: "TOGGLE_EQ",
     SET_EQ_BANDS: "SET_EQ_BANDS",
+    SET_EQ_PRESET: "SET_EQ_PRESET",
+    SET_AUDIO_EFFECT_PRESET: "SET_AUDIO_EFFECT_PRESET",
+    SET_DECODER_MODE: "SET_DECODER_MODE",
+    SET_MOCK_AUDIO_TRACK: "SET_MOCK_AUDIO_TRACK",
+    TOGGLE_SW_AUDIO_DECODER: "TOGGLE_SW_AUDIO_DECODER",
+    SET_BASS_BOOST_LEVEL: "SET_BASS_BOOST_LEVEL",
+    SET_VIRTUALIZER_LEVEL: "SET_VIRTUALIZER_LEVEL",
     SET_QUICK_ICON_ORDER: "SET_QUICK_ICON_ORDER",
     SET_VOLUME_BOOST: "SET_VOLUME_BOOST",
 };
@@ -184,8 +230,32 @@ function playerReducer(state, action) {
             return { ...state, eqEnabled: !state.eqEnabled };
         case A.SET_EQ_BANDS: {
             const clamp = (v) => Math.max(-12, Math.min(12, v));
-            return { ...state, eqBands: { ...state.eqBands, ...Object.fromEntries(Object.entries(action.payload).map(([k, v]) => [k, clamp(v)])) } };
+            return {
+                ...state,
+                eqBands: { ...state.eqBands, ...Object.fromEntries(Object.entries(action.payload).map(([k, v]) => [k, clamp(v)])) },
+                eqPreset: "custom", // manual slider drag always detaches from whatever named preset was active
+            };
         }
+        case A.SET_EQ_PRESET: {
+            const preset = action.payload;
+            const curve = EQ_PRESETS[preset];
+            return { ...state, eqPreset: preset, eqBands: curve ? { ...curve } : state.eqBands, audioEffectPreset: "original" };
+        }
+        case A.SET_AUDIO_EFFECT_PRESET: {
+            const preset = action.payload;
+            const curve = AUDIO_EFFECT_PRESETS[preset];
+            return { ...state, audioEffectPreset: preset, eqBands: curve ? { ...curve } : state.eqBands, eqPreset: "custom" };
+        }
+        case A.SET_DECODER_MODE:
+            return { ...state, decoderMode: action.payload };
+        case A.SET_MOCK_AUDIO_TRACK:
+            return { ...state, mockAudioTrack: action.payload };
+        case A.TOGGLE_SW_AUDIO_DECODER:
+            return { ...state, useSwAudioDecoder: !state.useSwAudioDecoder };
+        case A.SET_BASS_BOOST_LEVEL:
+            return { ...state, bassBoostLevel: Math.max(0, Math.min(100, action.payload)) };
+        case A.SET_VIRTUALIZER_LEVEL:
+            return { ...state, virtualizerLevel: Math.max(0, Math.min(100, action.payload)) };
         case A.SET_QUICK_ICON_ORDER:
             return { ...state, quickIconOrder: action.payload };
         case A.SET_VOLUME_BOOST:
@@ -247,6 +317,13 @@ export function PlayerProvider({ children }) {
     const toggleNightMode = useCallback(() => dispatch({ type: A.TOGGLE_NIGHT_MODE }), []);
     const toggleEq = useCallback(() => dispatch({ type: A.TOGGLE_EQ }), []);
     const setEqBands = useCallback((v) => dispatch({ type: A.SET_EQ_BANDS, payload: v }), []);
+    const setEqPreset = useCallback((v) => dispatch({ type: A.SET_EQ_PRESET, payload: v }), []);
+    const setAudioEffectPreset = useCallback((v) => dispatch({ type: A.SET_AUDIO_EFFECT_PRESET, payload: v }), []);
+    const setDecoderMode = useCallback((v) => dispatch({ type: A.SET_DECODER_MODE, payload: v }), []);
+    const setMockAudioTrack = useCallback((v) => dispatch({ type: A.SET_MOCK_AUDIO_TRACK, payload: v }), []);
+    const toggleSwAudioDecoder = useCallback(() => dispatch({ type: A.TOGGLE_SW_AUDIO_DECODER }), []);
+    const setBassBoostLevel = useCallback((v) => dispatch({ type: A.SET_BASS_BOOST_LEVEL, payload: v }), []);
+    const setVirtualizerLevel = useCallback((v) => dispatch({ type: A.SET_VIRTUALIZER_LEVEL, payload: v }), []);
     const setQuickIconOrder = useCallback((v) => dispatch({ type: A.SET_QUICK_ICON_ORDER, payload: v }), []);
     const setVolumeBoost = useCallback((v) => dispatch({ type: A.SET_VOLUME_BOOST, payload: v }), []);
 
@@ -292,6 +369,13 @@ export function PlayerProvider({ children }) {
             toggleNightMode,
             toggleEq,
             setEqBands,
+            setEqPreset,
+            setAudioEffectPreset,
+            setDecoderMode,
+            setMockAudioTrack,
+            toggleSwAudioDecoder,
+            setBassBoostLevel,
+            setVirtualizerLevel,
             setQuickIconOrder,
             setVolumeBoost,
         }),
@@ -336,6 +420,13 @@ export function PlayerProvider({ children }) {
             toggleNightMode,
             toggleEq,
             setEqBands,
+            setEqPreset,
+            setAudioEffectPreset,
+            setDecoderMode,
+            setMockAudioTrack,
+            toggleSwAudioDecoder,
+            setBassBoostLevel,
+            setVirtualizerLevel,
             setQuickIconOrder,
             setVolumeBoost,
         ],

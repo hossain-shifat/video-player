@@ -72,7 +72,7 @@ export default function LiveCard({ item }) {
                     <img
                         src={thumb}
                         alt={title}
-                        className={`w-full h-full ${programme?.thumbnail ? "object-cover" : "object-contain p-4 bg-black/40"}`}
+                        className={`w-full h-full ${programme?.thumbnail ? "object-cover" : "object-fit bg-black/40"}`}
                         loading="lazy"
                         draggable={false}
                         onError={() => setImgError(true)}

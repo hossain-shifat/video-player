@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router";
+import { NavLink } from "react-router";
 import { ChevronRight, List } from "lucide-react";
 import LiveCard from "./LiveCard";
 import { getLiveChannels } from "../api/live";
@@ -19,7 +19,7 @@ function LiveCardSkeleton() {
 // ─── "All Channels" button card ───────────────────────────────────────────────
 function AllChannelsCard({ count }) {
     return (
-        <Link to="/live" className="group shrink-0 w-56 sm:w-64 cursor-pointer select-none no-underline">
+        <NavLink to="/live" className="group shrink-0 w-56 sm:w-64 cursor-pointer select-none no-underline">
             <div
                 className="relative aspect-video rounded-xl overflow-hidden
                            bg-linear-to-br from-primary via-primary/80 to-secondary
@@ -38,7 +38,7 @@ function AllChannelsCard({ count }) {
                 <p className="text-[13px] font-medium text-base-content truncate leading-tight">All Channels</p>
                 <p className="text-[11px] text-base-content/45 font-medium mt-1">{count} channels</p>
             </div>
-        </Link>
+        </NavLink>
     );
 }
 
@@ -64,7 +64,11 @@ export default function LiveMediaRow() {
         staleTime: 60 * 1000,
     });
 
-    const items = data?.channels ?? [];
+    const items = (data?.channels ?? []).sort((a, b) => {
+        const aHas = a.logo && a.logo.trim() !== "" ? 0 : 1;
+        const bHas = b.logo && b.logo.trim() !== "" ? 0 : 1;
+        return aHas - bHas;
+    });
     const total = data?.total ?? 0;
 
     // Hide while auth loading, not authed, or not approved
@@ -73,10 +77,10 @@ export default function LiveMediaRow() {
 
     return (
         <section>
-            <Link to="/live" className="flex items-center gap-1.5 mb-0.5 no-underline">
-                <h2 className="text-base sm:text-lg font-semibold text-base-content">What's On Now</h2>
-                <ChevronRight size={18} className="text-base-content/60" />
-            </Link>
+            <NavLink to="/live" className="flex items-center gap-1 mb-0.5 w-fit group">
+                <h2 className="text-base sm:text-lg font-semibold text-white group-hover:text-primary transition-colors duration-150">What&apos;s On Now</h2>
+                <ChevronRight size={18} className="text-base-content group-hover:text-primary transition-colors duration-150 shrink-0" />
+            </NavLink>
             <p className="text-xs text-base-content/45 mb-3">Live TV</p>
 
             {error ? (

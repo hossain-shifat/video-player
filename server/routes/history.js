@@ -22,7 +22,6 @@ function beaconBodyParser(req, res, next) {
             } catch {
                 req.body = {};
             }
-            // Promote query params to headers so controller can read them normally
             if (req.query.clientId && !req.headers["x-flux-client"]) {
                 req.headers["x-flux-client"] = req.query.clientId;
             }
