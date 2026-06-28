@@ -24,15 +24,15 @@
  *   DELETE /api/epg/aliases/:xmltvId     — remove alias
  */
 
-const crypto  = require("crypto");
-const epgStore     = require("./epgStore");
-const epgScheduler = require("./epgScheduler");
-const { loadKeywords, saveKeywords } = require("./epgEventDetector");
-const { createProvider } = require("./epgProvider");
-const { ChannelMatcher } = require("./epgMatcher");
+const crypto = require("crypto");
+const epgStore = require("../utils/epgStore");
+const epgScheduler = require("../utils/epgScheduler");
+const { loadKeywords, saveKeywords } = require("../utils/epgEventDetector");
+const { createProvider } = require("../utils/epgProvider");
+const { ChannelMatcher } = require("../utils/epgMatcher");
 
-const ok   = (res, data, status = 200) => res.status(status).json({ success: true,  data });
-const fail = (res, msg,  status = 500) => res.status(status).json({ success: false, message: msg });
+const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
+const fail = (res, msg, status = 500) => res.status(status).json({ success: false, message: msg });
 
 // Lazy live-rows helper (avoids circular dep)
 function getLiveRows() {
@@ -43,21 +43,23 @@ function getLiveRows() {
         for (const [group, list] of Object.entries(rich.channels || {})) {
             for (const ch of list) {
                 rows.push({
-                    id:          Buffer.from(ch.url).toString("base64url"),
-                    name:        ch.name,
-                    cleanName:   ch.cleanName || ch.name,
-                    tvgId:       ch.tvgId  || null,
-                    tvgName:     ch.tvgName || null,
+                    id: Buffer.from(ch.url).toString("base64url"),
+                    name: ch.name,
+                    cleanName: ch.cleanName || ch.name,
+                    tvgId: ch.tvgId || null,
+                    tvgName: ch.tvgName || null,
                     streamStatus: ch.streamStatus || "unknown",
-                    logo:        ch.logo || null,
-                    url:         ch.url,
-                    resolution:  ch.resolution || null,
-                    isHD:        ch.isHD || false,
+                    logo: ch.logo || null,
+                    url: ch.url,
+                    resolution: ch.resolution || null,
+                    isHD: ch.isHD || false,
                 });
             }
         }
         return rows;
-    } catch { return []; }
+    } catch {
+        return [];
+    }
 }
 
 // ─── Now / Next ───────────────────────────────────────────────────────────────
@@ -70,15 +72,19 @@ function getNow(req, res) {
             result[id] = { now: data.now, next: data.next };
         }
         return ok(res, { channels: result, total: cache.size, updatedAt: new Date().toISOString() });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function getChannelNow(req, res) {
     try {
         const { id } = req.params;
-        const data   = epgScheduler.getNowForChannel(id);
+        const data = epgScheduler.getNowForChannel(id);
         return ok(res, data);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────
@@ -86,12 +92,14 @@ function getChannelNow(req, res) {
 function getSchedule(req, res) {
     try {
         const { id } = req.params;
-        const now    = Date.now();
-        const from   = parseInt(req.query.from, 10) || now - 3 * 60 * 60 * 1000;   // default: 3h ago
-        const to     = parseInt(req.query.to,   10) || now + 24 * 60 * 60 * 1000;  // default: next 24h
-        const progs  = epgStore.getSchedule(id, from, to);
+        const now = Date.now();
+        const from = parseInt(req.query.from, 10) || now - 3 * 60 * 60 * 1000; // default: 3h ago
+        const to = parseInt(req.query.to, 10) || now + 24 * 60 * 60 * 1000; // default: next 24h
+        const progs = epgStore.getSchedule(id, from, to);
         return ok(res, { channelId: id, from, to, programmes: progs, total: progs.length });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Events ───────────────────────────────────────────────────────────────────
@@ -99,12 +107,14 @@ function getSchedule(req, res) {
 function getEvents(req, res) {
     try {
         const cache = epgScheduler.getEventsCache();
-        const type  = (req.query.type || "").toLowerCase();
+        const type = (req.query.type || "").toLowerCase();
         if (type && type in cache) {
             return ok(res, { type, events: cache[type], updatedAt: cache.updatedAt });
         }
         return ok(res, cache);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Recommendations ─────────────────────────────────────────────────────────
@@ -112,7 +122,9 @@ function getEvents(req, res) {
 function getRecommendations(req, res) {
     try {
         return ok(res, epgScheduler.getRecoCache());
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Status ───────────────────────────────────────────────────────────────────
@@ -120,14 +132,19 @@ function getRecommendations(req, res) {
 function getStatus(req, res) {
     try {
         return ok(res, epgScheduler.getStatus());
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Keywords ────────────────────────────────────────────────────────────────
 
 function getKeywords(req, res) {
-    try { return ok(res, loadKeywords()); }
-    catch (err) { return fail(res, err.message); }
+    try {
+        return ok(res, loadKeywords());
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function putKeywords(req, res) {
@@ -136,14 +153,19 @@ function putKeywords(req, res) {
         if (typeof kw !== "object" || Array.isArray(kw)) return fail(res, "Body must be keyword config object", 400);
         saveKeywords(kw);
         return ok(res, { message: "Keywords updated" });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Sources CRUD ─────────────────────────────────────────────────────────────
 
 function listSources(req, res) {
-    try { return ok(res, epgStore.getSources()); }
-    catch (err) { return fail(res, err.message); }
+    try {
+        return ok(res, epgStore.getSources());
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function addSource(req, res) {
@@ -152,28 +174,32 @@ function addSource(req, res) {
         if (!type || !location) return fail(res, "type and location are required", 400);
 
         // Validate type
-        const VALID_TYPES = ["xmltv_url","xmltv_file","xmltv_gz_url","xmltv_gz_file"];
+        const VALID_TYPES = ["xmltv_url", "xmltv_file", "xmltv_gz_url", "xmltv_gz_file"];
         if (!VALID_TYPES.includes(type)) return fail(res, `type must be one of: ${VALID_TYPES.join(", ")}`, 400);
 
         const src = {
-            id:        crypto.randomUUID(),
-            name:      (name || "").trim() || type,
+            id: crypto.randomUUID(),
+            name: (name || "").trim() || type,
             type,
-            location:  location.trim(),
-            priority:  parseInt(priority, 10) || 50,
-            enabled:   enabled !== false,
-            addedAt:   new Date().toISOString(),
+            location: location.trim(),
+            priority: parseInt(priority, 10) || 50,
+            enabled: enabled !== false,
+            addedAt: new Date().toISOString(),
         };
         epgStore.saveSource(src);
         return ok(res, src, 201);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function deleteSource(req, res) {
     try {
         epgStore.deleteSource(req.params.id);
         return ok(res, { message: "EPG source deleted", id: req.params.id });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function editSource(req, res) {
@@ -181,7 +207,9 @@ function editSource(req, res) {
         const src = epgStore.updateSource(req.params.id, req.body);
         if (!src) return fail(res, "Source not found", 404);
         return ok(res, src);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 async function refreshSource(req, res) {
@@ -192,7 +220,7 @@ async function refreshSource(req, res) {
         // Fire and forget — respond immediately
         (async () => {
             const liveRows = getLiveRows();
-            const matcher  = new ChannelMatcher(liveRows);
+            const matcher = new ChannelMatcher(liveRows);
             try {
                 const provider = createProvider(src);
                 const { channels, programmes } = await provider.run();
@@ -216,7 +244,9 @@ async function refreshSource(req, res) {
         })();
 
         return ok(res, { message: "Source refresh started", id: src.id }, 202);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Full ingest trigger ──────────────────────────────────────────────────────
@@ -228,7 +258,9 @@ async function triggerIngest(req, res) {
         }
         epgScheduler.ingestAll().catch((e) => console.error("[EPG] Manual ingest failed:", e.message));
         return ok(res, { message: "EPG ingest started" }, 202);
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 // ─── Aliases ─────────────────────────────────────────────────────────────────
@@ -241,8 +273,11 @@ function getMatcher() {
 }
 
 function getAliases(req, res) {
-    try { return ok(res, getMatcher().getAliases()); }
-    catch (err) { return fail(res, err.message); }
+    try {
+        return ok(res, getMatcher().getAliases());
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function setAlias(req, res) {
@@ -251,21 +286,36 @@ function setAlias(req, res) {
         if (!xmltvId || !liveId) return fail(res, "xmltvId and liveId are required", 400);
         getMatcher().setAlias(xmltvId, liveId);
         return ok(res, { message: "Alias set", xmltvId, liveId });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 function removeAlias(req, res) {
     try {
         getMatcher().removeAlias(req.params.xmltvId);
         return ok(res, { message: "Alias removed", xmltvId: req.params.xmltvId });
-    } catch (err) { return fail(res, err.message); }
+    } catch (err) {
+        return fail(res, err.message);
+    }
 }
 
 module.exports = {
-    getNow, getChannelNow, getSchedule,
-    getEvents, getRecommendations,
-    getStatus, getKeywords, putKeywords,
-    listSources, addSource, deleteSource, editSource, refreshSource,
+    getNow,
+    getChannelNow,
+    getSchedule,
+    getEvents,
+    getRecommendations,
+    getStatus,
+    getKeywords,
+    putKeywords,
+    listSources,
+    addSource,
+    deleteSource,
+    editSource,
+    refreshSource,
     triggerIngest,
-    getAliases, setAlias, removeAlias,
+    getAliases,
+    setAlias,
+    removeAlias,
 };

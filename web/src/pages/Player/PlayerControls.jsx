@@ -48,7 +48,7 @@ import {
     Tv,
     Square,
 } from "lucide-react";
-import { MdOutlineHighQuality, MdHighQuality, MdOutlineScreenRotation, MdScreenLockRotation, MdMusicNote } from "react-icons/md";
+import { MdOutlineHighQuality, MdHighQuality, MdOutlineScreenRotation, MdScreenLockRotation, MdMusicNote, MdSubtitles } from "react-icons/md";
 import { usePlayerState } from "./UsePlayerState";
 import { useIsMobile } from "./useIsMobile";
 import SeekBar from "./SeekBar";
@@ -1341,7 +1341,31 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
         speed: {
             onClick: () => toggleMenu("speedSlider"),
             active: state.playbackSpeed !== 1,
-            iconOverride: <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{state.playbackSpeed}×</span>,
+            // Plain "×" character instead of a separate Lucide <X> icon —
+            // a standalone icon next to the number had a different visual
+            // weight than the text (icon strokeWidth vs font-weight don't
+            // match up), and the fixed icon size didn't shrink for longer
+            // values like "0.25×"/"1.75×", causing them to overflow the
+            // 40px circular icon background. Single text run + fontSize
+            // scaled down for longer values fixes both at once.
+            iconOverride: (
+                <span
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        // Shrink for longer numbers (e.g. "0.25", "1.75")
+                        // so the whole "<value>×" string always fits
+                        // inside the 40px circle without clipping.
+                        fontSize: String(state.playbackSpeed).length > 1 ? 11 : 14,
+                        fontWeight: 700,
+                        color: "#fff",
+                        lineHeight: 1,
+                        whiteSpace: "nowrap",
+                    }}>
+                    {state.playbackSpeed}×
+                </span>
+            ),
         },
         screenshot: {
             onClick: () => {
@@ -1376,7 +1400,7 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
         rotation: {
             onClick: () => containerRef?.current?._toggleRotation?.(),
             active: isPortraitOverride,
-            iconOverride: isPortraitOverride ? <MdScreenLockRotation size={17} color="var(--color-primary)" /> : <MdOutlineScreenRotation size={17} color="#fff" />,
+            iconOverride: isPortraitOverride ? <MdScreenLockRotation size={20} color="var(--color-primary)" /> : <MdOutlineScreenRotation size={20} color="#fff" />,
         },
     };
     const order = state.quickIconOrder;
@@ -1683,7 +1707,7 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                             a subtitle track is currently selected. */}
                         <div style={{ position: "relative" }}>
                             <IconBtn onClick={() => toggleMenu("sub")} active={!!state.activeSubtitle} size="sm" label="Subtitles">
-                                <Subtitles size={iconTiny} strokeWidth={1.8} />
+                                <MdSubtitles size={iconTiny} />
                             </IconBtn>
                             <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} />
                         </div>
