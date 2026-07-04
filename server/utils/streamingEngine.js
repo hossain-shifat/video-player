@@ -100,11 +100,17 @@ function extractMediaInfo(probeData) {
     const container = normalizeContainer(format.format_name);
     const durationSec = parseFloat(format.duration) || 0;
     const sizeMB = (parseInt(format.size) || 0) / (1024 * 1024);
+    // Some containers (notably certain MKV remuxes) report a non-zero
+    // start_time — without accounting for this, the transcoder can end up
+    // opening playback at this offset instead of true 0:00. See its usage
+    // in transcoderService.js's buildFFmpegArgs (sourceStartOffset).
+    const startTimeOffset = parseFloat(format.start_time) || 0;
 
     return {
         container,
         duration: durationSec,
         sizeMB,
+        startTimeOffset,
         video: videoStream
             ? {
                   codec: normalizeCodec(videoStream.codec_name),

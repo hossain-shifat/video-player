@@ -41,6 +41,7 @@ const { sanitizePath, isSubtitleFile } = require("../utils/fileHelpers");
 const mediaCache = require("../utils/mediaCache");
 const { probe } = require("../utils/ffprobe");
 const { decidePlayback, DECISION } = require("../utils/streamingEngine");
+const { parseFilename } = require("../utils/nameParser");
 const {
     createSession,
     getSession,
@@ -221,7 +222,7 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
         console.warn(`[Stream] waitForM3U8 timeout session ${session.id} (status=${session.status}) — returning URL for HLS.js retry`);
     }
 
-    const hlsUrl = `/stream/hls/${session.id}/index.m3u8`;
+    const hlsUrl = `/stream/hls/${session.id}/${session.isMultiAudioPath ? "master.m3u8" : "index.m3u8"}`;
     res.setHeader("X-Stream-Decision", decision.decision);
     res.setHeader("X-Session-Id", session.id);
     return res.json({
@@ -235,6 +236,12 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
         // Added: player top-bar title + correct history key
         title: fileObj.name || null,
         mediaId: fileObj.id || null,
+        // Multi-audio: every track FFmpeg mapped into the HLS output, in the
+        // same order as their position in the master playlist's audio
+        // groups. The player reads this to build its audio-track switcher —
+        // switching is just an HLS.js audioTrack index change, no new
+        // request to this server, no session restart.
+        audioTracks: session.isMultiAudioPath ? (mediaInfo?.audio || []).map((t, i) => ({ index: i, language: t.language, channels: t.channels, default: t.default || i === 0 })) : [],
     });
 }
 
@@ -258,6 +265,14 @@ async function streamVideo(req, res) {
         let mediaInfo;
         try {
             mediaInfo = await probe(filePath);
+            // The library scanner already parsed language hints out of the
+            // release filename (e.g. ["hi","en"]) when it indexed this file —
+            // same data the UI shows elsewhere. Reuse it here rather than
+            // having the transcoder re-derive language guesses from scratch;
+            // it's the more authoritative source when ffprobe's own language
+            // tags are missing ("und").
+            if (mediaInfo) mediaInfo.parsedLanguages = parseFilename(fileObj.name)?.languages || [];
+            console.log(`[Stream] filename language hints for "${fileObj.name}": ${JSON.stringify(mediaInfo?.parsedLanguages || [])}`);
         } catch (err) {
             console.warn(`[Stream] ffprobe failed: ${err.message}`);
         }
@@ -306,7 +321,9 @@ async function serveHLSFile(req, res) {
         // FFmpeg may have already finished; files are usable even without live session.
         if (!session) {
             const diskDir = path.join(TEMP_DIR, sessionId);
-            const diskManifest = path.join(diskDir, "index.m3u8");
+            const diskManifestFlat = path.join(diskDir, "index.m3u8");
+            const diskManifestMaster = path.join(diskDir, "master.m3u8");
+            const diskManifest = fs.existsSync(diskManifestMaster) ? diskManifestMaster : diskManifestFlat;
             const diskFile = path.join(diskDir, filePart);
 
             // Verify the sessionId directory exists and is inside TEMP_DIR
@@ -352,11 +369,14 @@ async function serveHLSFile(req, res) {
         // ── m3u8 manifest ─────────────────────────────────────────────────────
         if (ext === ".m3u8") {
             try {
-                await waitForM3U8(resolved, 15_000);
+                await waitForM3U8(resolved, 45_000);
             } catch {
                 return res.status(504).json({ error: "Manifest not ready" });
             }
             let content = await fsp.readFile(resolved, "utf-8");
+
+            const isVideoPlaylist = session.isMultiAudioPath && (filePart.startsWith(`${session.videoVariantIndex}${path.sep}`) || filePart.startsWith(`${session.videoVariantIndex}/`));
+            const appliesSentinelPattern = !session.isMultiAudioPath || isVideoPlaylist;
 
             // FIX (Report-15): Solve the ENDLIST deadlock.
             //
@@ -375,7 +395,11 @@ async function serveHLSFile(req, res) {
             //
             // This mirrors how Jellyfin handles chunked on-demand transcoding:
             // the manifest always has one entry beyond current transcode position.
-            if (session && session.status !== "dead" && content.includes("#EXT-X-ENDLIST")) {
+            //
+            // Only applies to the VIDEO variant's playlist (or the legacy flat
+            // single-file layout) — master.m3u8 has no segments to sentinel,
+            // and audio track playlists don't drive the restart pacing.
+            if (appliesSentinelPattern && session && session.status !== "dead" && content.includes("#EXT-X-ENDLIST")) {
                 // Find highest segment number in manifest
                 const segNums = [...content.matchAll(/index(\d+)\.ts/g)].map((m) => parseInt(m[1], 10)).filter((n) => !isNaN(n));
                 const lastSeg = segNums.length > 0 ? Math.max(...segNums) : session.startSegment - 1;
@@ -403,9 +427,41 @@ async function serveHLSFile(req, res) {
             if (!segMatch) return res.status(400).json({ error: "Invalid segment name" });
             const requestedSeg = parseInt(segMatch[1], 10);
 
+            // Multi-audio layout: filePart looks like "<variantIndex>/index00042.ts".
+            // Gap-restart/seek logic only matters for the VIDEO variant — audio
+            // segments are requested independently by HLS.js and aren't subject
+            // to the same on-demand transcode-ahead pacing as video.
+            const isVideoSegment = !session.isMultiAudioPath || filePart.startsWith(`${session.videoVariantIndex}${path.sep}`) || filePart.startsWith(`${session.videoVariantIndex}/`);
+
+            if (!isVideoSegment) {
+                // Plain serve for audio-track segments — just wait for the file
+                // to exist (audio tracks transcode/copy fast, no restart needed)
+                // and stream it.
+                try {
+                    await waitForSegment(resolved, 45_000);
+                } catch {
+                    if (!fs.existsSync(resolved)) {
+                        return res.status(404).json({ error: "Segment not ready" });
+                    }
+                }
+                res.setHeader("Content-Type", "video/mp2t");
+                res.setHeader("Cache-Control", "max-age=86400");
+                res.setHeader("Access-Control-Allow-Origin", "*");
+                res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+                const audioStream = fs.createReadStream(resolved);
+                audioStream.on("error", (err) => {
+                    console.error("[Stream] audio segment read error:", err.message);
+                    if (!res.headersSent) res.status(500).end();
+                });
+                res.on("close", () => {
+                    if (!audioStream.destroyed) audioStream.destroy();
+                });
+                return audioStream.pipe(res);
+            }
+
             // Jellyfin gap detection:
             // If requested segment is behind current OR too far ahead → restart
-            const currentIdx = await getCurrentSegmentIndex(session.sessionDir);
+            const currentIdx = await getCurrentSegmentIndex(session.videoDir);
 
             let needsRestart = false;
             if (currentIdx === null) {
@@ -422,7 +478,7 @@ async function serveHLSFile(req, res) {
                     console.log(`[Stream] Forward gap ${gap} > ${SEGMENT_GAP_RESTART} for seg${requestedSeg} — restart`);
                 } else if (gap < 0) {
                     // Segment behind current transcode — check if still on disk
-                    const segFileCheck = makeSegPath(session.sessionDir, requestedSeg);
+                    const segFileCheck = makeSegPath(session.videoDir, requestedSeg);
                     if (!fs.existsSync(segFileCheck)) {
                         needsRestart = true;
                         console.log(`[Stream] Seg${requestedSeg} deleted by cleanup (currentIdx=${currentIdx}) — restart`);
@@ -432,7 +488,7 @@ async function serveHLSFile(req, res) {
                     // caused HLS.js to request this segment. It doesn't exist yet on disk →
                     // restart FFmpeg from this segment. This is the gap detection trigger
                     // for the ENDLIST-sentinel pattern used in the m3u8 serve block.
-                    const segFileCheck = makeSegPath(session.sessionDir, requestedSeg);
+                    const segFileCheck = makeSegPath(session.videoDir, requestedSeg);
                     if (!fs.existsSync(segFileCheck)) {
                         needsRestart = true;
                         console.log(`[Stream] Session done, sentinel seg${requestedSeg} requested — restarting from seg${requestedSeg}`);
@@ -451,6 +507,8 @@ async function serveHLSFile(req, res) {
                     let mediaInfo;
                     try {
                         mediaInfo = await probe(fileObj.path);
+                        const realFileObj = await resolveFileById(fileObj.id);
+                        if (mediaInfo) mediaInfo.parsedLanguages = (realFileObj?.name ? parseFilename(realFileObj.name)?.languages : []) || [];
                     } catch {}
 
                     session = await createSession({
@@ -459,9 +517,12 @@ async function serveHLSFile(req, res) {
                         decision: oldDecision,
                         mediaInfo,
                         startSegment: requestedSeg,
+                        reuseSessionId: sessionId,
                     });
-                    await waitForM3U8(session.m3u8Path, 20_000);
-                    // Update reference in response headers so client can track new session
+                    await waitForM3U8(session.m3u8Path, 45_000);
+                    // Session ID is unchanged (reused) — this header is now
+                    // purely informational, kept for any future client-side
+                    // diagnostics, but nothing depends on it anymore.
                     res.setHeader("X-New-Session-Id", session.id);
                 } catch (err) {
                     console.error("[Stream] session restart failed:", err.message);
@@ -474,9 +535,9 @@ async function serveHLSFile(req, res) {
             session.downloadPositionSec = Math.max(session.downloadPositionSec || 0, segEndSec);
 
             // Wait for this specific segment to exist
-            const segFile = makeSegPath(session.sessionDir, requestedSeg);
+            const segFile = makeSegPath(session.videoDir, requestedSeg);
             try {
-                await waitForSegment(segFile, 30_000);
+                await waitForSegment(segFile, 45_000);
             } catch {
                 // Segment wait timed out — session might have produced it with different name
                 // Try the direct resolved path as fallback
@@ -526,6 +587,8 @@ async function startTranscode(req, res) {
         let mediaInfo;
         try {
             mediaInfo = await probe(fileObj.path);
+            if (mediaInfo) mediaInfo.parsedLanguages = parseFilename(fileObj.name)?.languages || [];
+            console.log(`[Stream] filename language hints for "${fileObj.name}": ${JSON.stringify(mediaInfo?.parsedLanguages || [])}`);
         } catch {}
 
         const decision = decidePlayback(mediaInfo, clientCaps, options);
@@ -540,9 +603,10 @@ async function startTranscode(req, res) {
         return res.json({
             sessionId: session.id,
             decision: session.decision,
-            hlsUrl: `/stream/hls/${session.id}/index.m3u8`,
+            hlsUrl: `/stream/hls/${session.id}/${session.isMultiAudioPath ? "master.m3u8" : "index.m3u8"}`,
             startSegment: startSeg,
             segmentDuration: SEGMENT_DURATION,
+            audioTracks: session.isMultiAudioPath ? (mediaInfo?.audio || []).map((t, i) => ({ index: i, language: t.language, channels: t.channels, default: t.default || i === 0 })) : [],
         });
     } catch (err) {
         console.error("[Stream] startTranscode error:", err);
@@ -559,7 +623,7 @@ function pingSessionHandler(req, res) {
     if (!s) {
         // Check if disk files exist — server might have restarted but files are still there
         const diskDir = path.join(TEMP_DIR, req.params.sessionId);
-        if (fs.existsSync(path.join(diskDir, "index.m3u8"))) {
+        if (fs.existsSync(path.join(diskDir, "master.m3u8")) || fs.existsSync(path.join(diskDir, "index.m3u8"))) {
             return res.json({ ok: true, ghost: true, downloadPositionSec: 0 });
         }
         return res.status(404).json({ error: "Session not found" });

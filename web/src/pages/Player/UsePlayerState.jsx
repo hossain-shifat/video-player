@@ -21,6 +21,39 @@ const initialState = {
     subtitleFontSize: 20, // px
     subtitleColor: "#ffffff",
     subtitleBgOpacity: 0.72,
+
+    // ── Subtitle Customization panel (separate sidebar from the main
+    // Subtitle picker) — matches the reference screenshots' Layout/Text/
+    // Advanced sections.
+    subtitleSpeed: 100, // % — independent of playback rate, slows/speeds the subtitle TIMELINE itself
+    subtitleAlignment: "center", // 'left' | 'center' | 'right'
+    subtitleBottomMargin: 0, // px, distance from the bottom edge
+    subtitleBackgroundEnabled: false,
+    subtitleBackgroundColor: "#000000",
+    subtitleFitToVideo: false, // constrain subtitle box to the video frame instead of the full player
+    subtitleFont: "default",
+    subtitleScale: 100, // %, separate from subtitleFontSize — scales the rendered size without changing the base px value
+    subtitleBold: true,
+    subtitleBorderEnabled: false,
+    subtitleBorderColor: "#000000",
+    subtitleBorderWidth: 50, // %
+    // Advanced rendering toggles (ASS/SSA-focused — mostly relevant once a
+    // real subtitle renderer like libass is wired in; harmless no-ops for
+    // plain WebVTT in the meantime).
+    subtitleImproveStroke: true,
+    subtitleShadow: true,
+    subtitleFadeOut: true,
+    subtitleImproveSSA: false,
+    subtitleImproveComplexScripts: true,
+    subtitleIgnoreSSAFont: false,
+    subtitleIgnoreBrokenSSAFont: false,
+
+    // Locally-opened subtitle file (via the "Open" row in the Subtitle
+    // panel) — kept separate from the backend-provided `subtitles` prop
+    // list so a local pick always takes priority and isn't lost if the
+    // backend list re-fetches.
+    localSubtitleFile: null, // { url (blob:), filename, lang, source: "local" } or null
+
     qualityLevels: [], // HLS quality levels [{ index, height, width, bitrate, label }]
     activeQuality: -1, // -1 = auto
     audioTracks: [], // [{ index, id, name, lang, default }]
@@ -108,6 +141,8 @@ export const A = {
     SET_SUBTITLE_FONT_SIZE: "SET_SUBTITLE_FONT_SIZE",
     SET_SUBTITLE_COLOR: "SET_SUBTITLE_COLOR",
     SET_SUBTITLE_BG_OPACITY: "SET_SUBTITLE_BG_OPACITY",
+    SET_SUBTITLE_CUSTOM: "SET_SUBTITLE_CUSTOM", // generic partial-merge for every Customization-panel field below
+    SET_LOCAL_SUBTITLE_FILE: "SET_LOCAL_SUBTITLE_FILE",
     SET_QUALITY_LEVELS: "SET_QUALITY_LEVELS",
     SET_ACTIVE_QUALITY: "SET_ACTIVE_QUALITY",
     SET_AUDIO_TRACKS: "SET_AUDIO_TRACKS",
@@ -185,6 +220,14 @@ function playerReducer(state, action) {
             return { ...state, subtitleColor: action.payload };
         case A.SET_SUBTITLE_BG_OPACITY:
             return { ...state, subtitleBgOpacity: Math.max(0, Math.min(1, action.payload)) };
+        case A.SET_SUBTITLE_CUSTOM:
+            // Generic partial-merge for the Customization panel's many small
+            // fields (alignment, scale, bold, border, advanced toggles,
+            // etc.) — same pattern as SET_EQ_BANDS, avoids one action type
+            // per field.
+            return { ...state, ...action.payload };
+        case A.SET_LOCAL_SUBTITLE_FILE:
+            return { ...state, localSubtitleFile: action.payload };
         case A.SET_QUALITY_LEVELS:
             return { ...state, qualityLevels: action.payload };
         case A.SET_ACTIVE_QUALITY:
@@ -297,6 +340,8 @@ export function PlayerProvider({ children }) {
     const setSubtitleFontSize = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_FONT_SIZE, payload: v }), []);
     const setSubtitleColor = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_COLOR, payload: v }), []);
     const setSubtitleBgOpacity = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_BG_OPACITY, payload: v }), []);
+    const setSubtitleCustom = useCallback((v) => dispatch({ type: A.SET_SUBTITLE_CUSTOM, payload: v }), []);
+    const setLocalSubtitleFile = useCallback((v) => dispatch({ type: A.SET_LOCAL_SUBTITLE_FILE, payload: v }), []);
     const setQualityLevels = useCallback((v) => dispatch({ type: A.SET_QUALITY_LEVELS, payload: v }), []);
     const setActiveQuality = useCallback((v) => dispatch({ type: A.SET_ACTIVE_QUALITY, payload: v }), []);
     const setAudioTracks = useCallback((v) => dispatch({ type: A.SET_AUDIO_TRACKS, payload: v }), []);
@@ -349,6 +394,8 @@ export function PlayerProvider({ children }) {
             setSubtitleFontSize,
             setSubtitleColor,
             setSubtitleBgOpacity,
+            setSubtitleCustom,
+            setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
             setAudioTracks,
@@ -400,6 +447,8 @@ export function PlayerProvider({ children }) {
             setSubtitleFontSize,
             setSubtitleColor,
             setSubtitleBgOpacity,
+            setSubtitleCustom,
+            setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
             setAudioTracks,

@@ -319,3 +319,79 @@ module.exports = {
     setAlias,
     removeAlias,
 };
+
+// ─── Sports Event Handlers ────────────────────────────────────────────────────
+// Added here (not a separate controller) to reuse the same ok/fail helpers
+// and getLiveRows(). Mounted via existing live.js route under /api/live/events/*.
+
+const sportsService   = require("../utils/sportsService");
+const sportsScheduler = require("../utils/sportsScheduler");
+const sportsStore     = require("../utils/sportsStore");
+
+async function getSportsLive(req, res) {
+    try {
+        return ok(res, { events: await sportsService.getLiveEvents(), updatedAt: new Date().toISOString() });
+    } catch (err) { return fail(res, err.message); }
+}
+
+async function getSportsToday(req, res) {
+    try {
+        return ok(res, { events: await sportsService.getTodayEvents(), updatedAt: new Date().toISOString() });
+    } catch (err) { return fail(res, err.message); }
+}
+
+async function getSportsUpcoming(req, res) {
+    try {
+        return ok(res, { events: await sportsService.getUpcomingEvents(), updatedAt: new Date().toISOString() });
+    } catch (err) { return fail(res, err.message); }
+}
+
+async function getSportsEventById(req, res) {
+    try {
+        const event = await sportsService.getEventById(req.params.id);
+        if (!event) return fail(res, "Event not found", 404);
+        return ok(res, event);
+    } catch (err) { return fail(res, err.message); }
+}
+
+function getSportsEventChannels(req, res) {
+    try {
+        const channels = sportsService.getEventChannels(req.params.id);
+        if (!channels) return fail(res, "Event not found", 404);
+        return ok(res, { channels, total: channels.length });
+    } catch (err) { return fail(res, err.message); }
+}
+
+async function getFeaturedEvents(req, res) {
+    try {
+        return ok(res, await sportsService.getFeaturedEvents());
+    } catch (err) { return fail(res, err.message); }
+}
+
+function getSportsStatus(req, res) {
+    try {
+        return ok(res, sportsScheduler.getStatus());
+    } catch (err) { return fail(res, err.message); }
+}
+
+async function triggerSportsRefresh(req, res) {
+    try {
+        const bucket = req.query.bucket || "all"; // all | live | today | upcoming
+        if (bucket === "live")     sportsScheduler.refreshLive().catch(()     => {});
+        else if (bucket === "today")    sportsScheduler.refreshToday().catch(()    => {});
+        else if (bucket === "upcoming") sportsScheduler.refreshUpcoming().catch(() => {});
+        else                            sportsScheduler.refreshAll().catch(()     => {});
+        return ok(res, { message: `Sports refresh started (${bucket})` }, 202);
+    } catch (err) { return fail(res, err.message); }
+}
+
+Object.assign(module.exports, {
+    getSportsLive,
+    getSportsToday,
+    getSportsUpcoming,
+    getSportsEventById,
+    getSportsEventChannels,
+    getFeaturedEvents,
+    getSportsStatus,
+    triggerSportsRefresh,
+});

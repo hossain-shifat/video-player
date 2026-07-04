@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router";
-import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck, ChevronRight } from "lucide-react";
+import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck } from "lucide-react";
 import { useTheme } from "../../Context/themeContext";
 import { useApi } from "../../Context/apiContext";
 import { useAuth } from "../../auth/AuthContext";
@@ -16,47 +16,40 @@ import PrivacySection from "./PrivacySection";
 import AboutSection from "./AboutSection";
 import AddFolderModal from "./AddFolderModal";
 
-const NAV_ITEMS = [
-    { id: "profile",    label: "Profile",       icon: User },
-    { id: "appearance", label: "Appearance",     icon: Palette },
-    { id: "library",    label: "Media Library",  icon: Database },
-    { id: "playback",   label: "Playback",       icon: Play },
-    { id: "subtitles",  label: "Subtitles",      icon: Captions },
-    { id: "server",     label: "Server",         icon: Server },
-    { id: "privacy",    label: "Privacy",        icon: ShieldCheck },
-    { id: "about",      label: "About",          icon: Info },
+const NAV = [
+    { id: "profile", label: "Profile", icon: User, desc: "Account & identity" },
+    { id: "appearance", label: "Appearance", icon: Palette, desc: "Themes & typography" },
+    { id: "library", label: "Library", icon: Database, desc: "Media folders" },
+    { id: "playback", label: "Playback", icon: Play, desc: "Player behaviour" },
+    { id: "subtitles", label: "Subtitles", icon: Captions, desc: "Caption settings" },
+    { id: "server", label: "Server", icon: Server, desc: "Connection & streaming" },
+    { id: "privacy", label: "Privacy", icon: ShieldCheck, desc: "Data & visibility" },
+    { id: "about", label: "About", icon: Info, desc: "App info & reset" },
 ];
-
-const VALID_TABS = NAV_ITEMS.map((n) => n.id);
+const IDS = NAV.map((n) => n.id);
 
 export default function Settings() {
     const { theme, setTheme, themes } = useTheme();
     const { folders, addLibraryFolder, removeLibraryFolder, updateLibraryFolder, refreshAll, loading } = useApi();
-
     const [searchParams, setSearchParams] = useSearchParams();
-    const tabParam = searchParams.get("tab");
-    const initialTab = VALID_TABS.includes(tabParam) ? tabParam : "profile";
-
-    const [active, setActive] = useState(initialTab);
+    const initial = IDS.includes(searchParams.get("tab")) ? searchParams.get("tab") : "profile";
+    const [active, setActive] = useState(initial);
+    const contentRef = useRef(null);
 
     useEffect(() => {
         const t = searchParams.get("tab");
-        if (t && VALID_TABS.includes(t) && t !== active) setActive(t);
-    }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (t && IDS.includes(t) && t !== active) setActive(t);
+    }, [searchParams]); // eslint-disable-line
 
-    const switchTab = (id) => {
+    const go = (id) => {
         setActive(id);
         setSearchParams({ tab: id }, { replace: true });
+        contentRef.current?.scrollTo({ top: 0 });
     };
 
     const [addFolderOpen, setAddFolderOpen] = useState(false);
-
     const { user, logout } = useAuth();
     const { openAuthModal } = useAuthModal();
-
-    useEffect(() => {}, [user?.name]);
-
-    const handleLogout = () => logout();
 
     const [prefs, setPrefsState] = useState(() => {
         try {
@@ -65,8 +58,7 @@ export default function Settings() {
             return {};
         }
     });
-
-    const setPref = (key, val) => {
+    const setPref = (key, val) =>
         setPrefsState((p) => {
             const next = { ...p, [key]: val };
             try {
@@ -74,14 +66,15 @@ export default function Settings() {
             } catch {}
             return next;
         });
-    };
 
-    const renderSection = () => {
+    const activeNav = NAV.find((n) => n.id === active);
+
+    const section = (() => {
         switch (active) {
             case "profile":
-                return <ProfileSection handleLogout={handleLogout} setLoginOpen={() => openAuthModal({ view: "login" })} />;
+                return <ProfileSection handleLogout={() => logout()} setLoginOpen={() => openAuthModal({ view: "login" })} />;
             case "appearance":
-                return <AppearanceSection theme={theme} setTheme={setTheme} themes={themes} />;
+                return <AppearanceSection />;
             case "library":
                 return (
                     <LibrarySection
@@ -106,102 +99,79 @@ export default function Settings() {
             default:
                 return null;
         }
-    };
-
-    const activeItem = NAV_ITEMS.find((n) => n.id === active);
+    })();
 
     return (
-        <div className="-m-4 sm:-m-6 lg:-m-8 min-h-screen flex flex-col bg-base-100">
-            {/* ── Header ── */}
-            <div className="px-5 sm:px-8 py-5 border-b border-white/[0.07] bg-base-200/40 shrink-0">
-                <h1 className="text-2xl font-bold text-white tracking-tight">Settings</h1>
-                <p className="text-xs text-white/40 mt-0.5">Manage your Flux preferences</p>
+        <div className="-m-4 sm:-m-6 lg:-m-8 flex flex-col overflow-hidden" style={{ height: "calc(100vh - var(--navbar-height, 56px))" }}>
+            {/* ── Mobile tab strip ── */}
+            <div className="sm:hidden shrink-0 border-b border-white/[0.06] sticky top-0 z-20" style={{ background: "rgba(10,10,14,0.97)", backdropFilter: "blur(16px)" }}>
+                <div className="flex overflow-x-auto px-3 py-2.5 gap-1" style={{ scrollbarWidth: "none" }}>
+                    {NAV.map(({ id, label, icon: Icon }) => (
+                        <button
+                            key={id}
+                            onClick={() => go(id)}
+                            style={{ outline: "none", boxShadow: "none" }}
+                            className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-all focus:outline-none
+                                ${active === id ? "bg-primary/15 text-primary border border-primary/20" : "text-white/40 hover:text-white/70 border border-transparent hover:bg-white/[0.05]"}`}>
+                            <Icon size={11} strokeWidth={active === id ? 2.5 : 2} />
+                            {label}
+                        </button>
+                    ))}
+                </div>
             </div>
 
-            {/* ── Body ── */}
-            <div className="flex flex-1 min-h-0 overflow-hidden">
-
-                {/* Sidebar — desktop */}
-                <aside
-                    className="hidden sm:flex flex-col shrink-0 border-r border-white/[0.07]"
-                    style={{ width: "var(--flux-sidebar-width, 15rem)", background: "oklch(from var(--color-base-200) calc(l - 0.01) c h / 0.6)" }}>
-                    <nav className="p-3 space-y-0.5 flex-1 overflow-y-auto">
-                        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-                            const isActive = active === id;
+            {/* ── Desktop body ── */}
+            <div className="flex flex-1 min-h-0">
+                {/* Sidebar with labels */}
+                <aside className="hidden sm:flex flex-col shrink-0 border-r border-white/[0.06]" style={{ width: "200px", background: "rgba(0,0,0,0.18)" }}>
+                    <nav className="flex flex-col py-3 px-2.5 gap-0.5 flex-1">
+                        {NAV.map(({ id, icon: Icon, label }) => {
+                            const on = active === id;
                             return (
                                 <button
                                     key={id}
-                                    onClick={() => switchTab(id)}
+                                    onClick={() => go(id)}
                                     style={{ outline: "none", boxShadow: "none" }}
-                                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150 cursor-pointer group focus:outline-none ${
-                                        isActive
-                                            ? "bg-primary/15 text-white"
-                                            : "text-white/55 hover:text-white hover:bg-white/[0.05]"
-                                    }`}>
-                                    <Icon
-                                        size={15}
-                                        className={`shrink-0 transition-colors ${
-                                            isActive ? "text-primary" : "text-white/35 group-hover:text-white/70"
-                                        }`}
-                                    />
-                                    <span className="text-sm font-medium flex-1">{label}</span>
-                                    {isActive && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                                    )}
+                                    className={`relative flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-left transition-all cursor-pointer focus:outline-none
+                                        ${on ? "bg-primary/12 text-primary" : "text-white/35 hover:text-white/75 hover:bg-white/[0.05]"}`}>
+                                    {on && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r bg-primary" />}
+                                    <Icon size={15} strokeWidth={on ? 2.2 : 1.8} className="shrink-0" />
+                                    <span className="text-[13px] font-medium">{label}</span>
                                 </button>
                             );
                         })}
                     </nav>
-                    <div className="px-4 py-3 border-t border-white/[0.06]">
-                        <p className="text-[11px] text-white/20 font-mono">Flux v0.1.0</p>
+                    <div className="px-4 py-3 border-t border-white/[0.05] shrink-0">
+                        <p className="text-[10px] text-white/15 font-mono">Flux v0.1.0</p>
                     </div>
                 </aside>
 
-                {/* Mobile tab bar */}
-                <div
-                    className="sm:hidden fixed left-0 right-0 z-10"
-                    style={{ top: "calc(var(--navbar-height, 56px) + 73px)" }}>
-                    <div
-                        className="flex overflow-x-auto bg-base-100/98 backdrop-blur-md border-b border-white/[0.07] px-2 py-2 gap-1"
-                        style={{ scrollbarWidth: "none" }}>
-                        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-                            <button
-                                key={id}
-                                onClick={() => switchTab(id)}
-                                style={{ outline: "none", boxShadow: "none" }}
-                                className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap focus:outline-none ${
-                                    active === id
-                                        ? "bg-primary text-white"
-                                        : "text-white/50 hover:text-white hover:bg-white/[0.06]"
-                                }`}>
-                                <Icon size={13} />
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Content area */}
-                <main className="flex-1 overflow-y-auto h-full">
-                    {/* Section heading — desktop */}
-                    <div className="hidden sm:flex items-center gap-3 px-8 py-5 border-b border-white/[0.05] bg-base-200/20 sticky top-0 z-10 backdrop-blur-sm">
-                        {activeItem && (
+                {/* Section panel */}
+                <div className="flex-1 flex flex-col min-h-0 min-w-0">
+                    {/* Section header — desktop only */}
+                    <div className="hidden sm:flex items-center gap-4 px-7 py-4 border-b border-white/[0.05] shrink-0" style={{ background: "rgba(0,0,0,0.08)" }}>
+                        {activeNav && (
                             <>
-                                <activeItem.icon size={16} className="text-primary shrink-0" />
-                                <span className="text-sm font-semibold text-white">{activeItem.label}</span>
+                                <div
+                                    className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                                    <activeNav.icon size={15} className="text-primary" />
+                                </div>
+                                <div>
+                                    <h2 className="text-[14px] font-semibold text-white leading-tight">{activeNav.label}</h2>
+                                    <p className="text-[11px] text-white/30 leading-none mt-0.5">{activeNav.desc}</p>
+                                </div>
                             </>
                         )}
                     </div>
 
-                    <div
-                        className="px-4 sm:px-8 py-6 mt-14 sm:mt-0 mx-auto"
-                        style={{ maxWidth: "var(--flux-content-width, 720px)" }}>
-                        {renderSection()}
-                    </div>
-                </main>
+                    {/* Scrollable content */}
+                    <main ref={contentRef} className="flex-1 overflow-y-auto">
+                        <div className="px-5 sm:px-7 py-6 w-full">{section}</div>
+                    </main>
+                </div>
             </div>
 
-            {/* Modals */}
             <AddFolderModal open={addFolderOpen} onClose={() => setAddFolderOpen(false)} onAdd={addLibraryFolder} />
         </div>
     );

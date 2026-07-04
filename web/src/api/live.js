@@ -11,6 +11,12 @@ import { api, axiosInstance } from "./client";
  * @param {string}  params.category — filter by programme category
  * @param {number}  params.page     — page number (default 1)
  * @param {number}  params.limit    — items per page (default 50)
+ * @param {string}  [params.sort]   — sort key (alphabetical|popularity|recommended|recent|live|working) — backend-defined
+ * @param {string}  [params.order]  — asc|desc
+ * @param {boolean} [params.workingOnly] — only return working-status channels
+ * @param {string}  [params.country]
+ * @param {string}  [params.language]
+ * @param {string}  [params.quality]
  */
 export function getLiveChannels(params = {}) {
     const qs = new URLSearchParams();
@@ -18,6 +24,12 @@ export function getLiveChannels(params = {}) {
     if (params.category) qs.set("category", params.category);
     if (params.page) qs.set("page", String(params.page));
     if (params.limit) qs.set("limit", String(params.limit));
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.order) qs.set("order", params.order);
+    if (params.workingOnly) qs.set("workingOnly", "true");
+    if (params.country) qs.set("country", params.country);
+    if (params.language) qs.set("language", params.language);
+    if (params.quality) qs.set("quality", params.quality);
     const query = qs.toString();
     return api.get(`/api/live/channels${query ? `?${query}` : ""}`);
 }
@@ -54,7 +66,45 @@ export function refreshLiveEpg() {
     return api.post("/api/live/refresh");
 }
 
-// ─── IPTV Source Management (admin — DashIPTV.jsx) ───────────────────────────
+// ─── Sports Events (Hybrid EPG + Sports Event Service) ────────────────────────
+// Backend is the single source of truth for matching, scoring, and working-
+// status filtering — the frontend only renders what these return.
+
+/**
+ * GET /api/live/featured-events
+ * Homepage-ready payload: featuredEvents, liveNow, todayMatches,
+ * upcomingHighlights, recommendedChannels, recentlyFinished.
+ */
+export function getFeaturedEvents() {
+    return api.get("/api/live/featured-events");
+}
+
+/** GET /api/live/events/live — all currently live sports events + channels */
+export function getSportsLiveEvents() {
+    return api.get("/api/live/events/live");
+}
+
+/** GET /api/live/events/today — today's sports events + channels */
+export function getSportsTodayEvents() {
+    return api.get("/api/live/events/today");
+}
+
+/** GET /api/live/events/upcoming — upcoming sports events + channels */
+export function getSportsUpcomingEvents() {
+    return api.get("/api/live/events/upcoming");
+}
+
+/** GET /api/live/events/:id — single event with full channel list */
+export function getSportsEvent(id) {
+    return api.get(`/api/live/events/${encodeURIComponent(id)}`);
+}
+
+/** GET /api/live/events/:id/channels — just the channel list for one event */
+export function getSportsEventChannels(id) {
+    return api.get(`/api/live/events/${encodeURIComponent(id)}/channels`);
+}
+
+// ─── IPTV Source Management (admin — DashIPTV.jsx) ─────────────────────────────
 // Separate concern from the EPG functions above: these manage the raw
 // playlist sources (M3U/YAML/JSON) that feed the channel list, not programme
 // schedule data. JWT is auto-attached by client.js's request interceptor.
@@ -83,11 +133,6 @@ export async function addLiveUploadSource(name, file) {
     const form = new FormData();
     if (name) form.append("name", name);
     form.append("file", file);
-    // Root-cause fix: axiosInstance default "Content-Type: application/json"
-    // clobbers the multipart/form-data boundary that the browser needs to
-    // set — multer then sees the wrong content-type and req.file is undefined.
-    // Explicitly set to undefined so axios auto-detects FormData and lets
-    // the browser write the correct "multipart/form-data; boundary=..." header.
     const res = await axiosInstance.post("/api/live/sources/upload", form, {
         headers: { "Content-Type": undefined },
     });
@@ -132,12 +177,52 @@ export function getLiveChannelsFlat(params = {}) {
 /**
  * GET /api/live/check?url=... — tests one stream URL's reachability.
  * Returns { status: 'working' | 'offline' | 'timeout' }.
- * Caller (DashIPTV.jsx) is responsible for queueing/concurrency limiting —
- * this is a single fire-and-await call.
  * @param {string} url
- * @param {AbortSignal} [signal] — pass to cancel in-flight checks on unmount
+ * @param {AbortSignal} [signal]
  */
 export async function checkLiveStreamStatus(url, signal) {
     const res = await axiosInstance.get(`/api/live/check`, { params: { url }, signal });
     return res.data;
+}
+
+// ─── Channel State — Active / Edit / Delete (DashIPTV.jsx) ─────────────────────
+// Backed by channelStateStore.js on the server (server/data/channel-state.json).
+// Separate from source management above — these act on individual channels.
+
+/** GET /api/live/channels/active — full channel objects currently pinned active */
+export function getActiveLiveChannels() {
+    return api.get("/api/live/channels/active");
+}
+
+/**
+ * POST /api/live/channels/:id/active — pin a channel to the Active tab
+ * @param {string} id — channel id (base64url of its stream url, from ch.id)
+ * @param {object} channel — the channel object snapshot to store
+ */
+export function markLiveChannelActive(id, channel) {
+    return api.post(`/api/live/channels/${encodeURIComponent(id)}/active`, channel);
+}
+
+/** DELETE /api/live/channels/:id/active — unpin from Active */
+export function unmarkLiveChannelActive(id) {
+    return api.delete(`/api/live/channels/${encodeURIComponent(id)}/active`);
+}
+
+/**
+ * PATCH /api/live/channels/:id — edit name/category/country
+ * @param {string} id
+ * @param {{ name?: string, category?: string, country?: string }} data
+ */
+export function updateLiveChannel(id, data) {
+    return api.patch(`/api/live/channels/${encodeURIComponent(id)}`, data);
+}
+
+/** DELETE /api/live/channels/:id — hide channel everywhere (player + dashboard) */
+export function deleteLiveChannel(id) {
+    return api.delete(`/api/live/channels/${encodeURIComponent(id)}`);
+}
+
+/** POST /api/live/channels/:id/restore — undo a hide */
+export function restoreLiveChannel(id) {
+    return api.post(`/api/live/channels/${encodeURIComponent(id)}/restore`);
 }

@@ -1,177 +1,198 @@
 import { useState, useRef, useEffect } from "react";
-import { User, LogOut, LogIn, Camera, Check, Mail, ShieldCheck, Clock, CalendarDays, Hash, MapPin, Globe, Pencil, X, ChevronRight, Sparkles, Lock, Activity } from "lucide-react";
-import { Modal } from "./shared";
+import {
+    Camera,
+    Check,
+    X,
+    Mail,
+    ShieldCheck,
+    ShieldAlert,
+    Clock,
+    Hash,
+    Pencil,
+    Lock,
+    Unlock,
+    LogOut,
+    LogIn,
+    KeyRound,
+    Sparkles,
+    User,
+    AlertTriangle,
+    Hourglass,
+    Infinity as InfinityIcon,
+    BadgeCheck,
+} from "lucide-react";
+import { Modal, Input, Card } from "./shared";
 import { useAuth } from "../../auth/AuthContext";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function fmtDate(iso) {
+// ─── Utils ────────────────────────────────────────────────────────────────────
+const fmtDate = (iso) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
+
+const daysLeft = (iso) => {
     if (!iso) return null;
-    return new Date(iso).toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-    });
-}
+    return Math.ceil((new Date(iso) - new Date()) / 86400000);
+};
 
-function getInitials(name) {
-    if (!name) return "U";
-    const parts = name.trim().split(/\s+/);
-    return parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : name[0].toUpperCase();
-}
+const initials = (name, email) => {
+    const src = name || email || "?";
+    const w = src.trim().split(/\s+/);
+    return (w.length >= 2 ? w[0][0] + w[1][0] : src[0]).toUpperCase();
+};
 
-// ─── Avatar ───────────────────────────────────────────────────────────────────
-function Avatar({ src, name, size = 72, ring = true, className = "" }) {
-    const initials = getInitials(name);
-    const fontSize = Math.round(size * 0.36);
+// ─── Avatar — shows the real image when present, falls back to initials ──────
+function Avatar({ src, name, email, size = 76 }) {
     return (
-        <div className={`relative shrink-0 rounded-full overflow-hidden ${ring ? "ring-[3px] ring-base-100 shadow-lg" : ""} ${className}`} style={{ width: size, height: size }}>
+        <div className="rounded-2xl overflow-hidden shrink-0" style={{ width: size, height: size }}>
             {src ? (
-                <img src={src} alt={name} className="w-full h-full object-cover" />
+                <img src={src} alt={name || email || "avatar"} className="w-full h-full object-cover" />
             ) : (
                 <div
-                    className="w-full h-full flex items-center justify-center font-bold text-primary"
-                    style={{
-                        fontSize,
-                        background: "radial-gradient(circle at 30% 30%, oklch(58% 0.22 20 / 0.18), oklch(58% 0.22 20 / 0.08))",
-                        border: "1px solid oklch(58% 0.22 20 / 0.2)",
-                    }}>
-                    {initials}
+                    className="w-full h-full flex items-center justify-center font-extrabold text-primary"
+                    style={{ fontSize: size * 0.34, background: "linear-gradient(145deg, oklch(20% 0.06 260), oklch(15% 0.03 240))" }}>
+                    {initials(name, email)}
                 </div>
             )}
         </div>
     );
 }
 
-// ─── Badge ────────────────────────────────────────────────────────────────────
-function Badge({ variant = "default", children }) {
-    const styles = {
-        admin: "bg-primary/10 text-primary border-primary/20 shadow-[0_0_12px_oklch(58%_0.22_20_/_0.1)]",
-        moderator: "bg-accent/10 text-accent border-accent/20",
-        member: "bg-base-content/5 text-base-content/40 border-base-content/10",
-        success: "bg-success/10 text-success border-success/20",
-        warning: "bg-warning/10 text-warning border-warning/20",
-        error: "bg-error/10 text-error border-error/20",
-        default: "bg-base-content/5 text-base-content/40 border-base-content/10",
-    };
-    return <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${styles[variant] || styles.default}`}>{children}</span>;
+// ─── Chips — bumped up a size, full-opacity text ─────────────────────────────
+const ROLE_CLS = { admin: "text-primary bg-primary/12 border-primary/25", moderator: "text-accent bg-accent/12 border-accent/25" };
+const STATUS_CLS = {
+    approved: "text-success bg-success/12 border-success/25",
+    pending: "text-warning bg-warning/12 border-warning/25",
+    blocked: "text-error bg-error/12 border-error/25",
+    rejected: "text-error bg-error/12 border-error/25",
+};
+const STATUS_DOT = { approved: "bg-success", pending: "bg-warning animate-pulse", blocked: "bg-error", rejected: "bg-error" };
+
+function Chip({ children, cls }) {
+    return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] sm:text-[10.5px] font-bold uppercase tracking-wide border whitespace-nowrap ${cls}`}>{children}</span>;
 }
 
-function StatusBadge({ status }) {
-    const map = {
-        approved: { variant: "success", dot: "bg-success", label: "Active" },
-        pending: { variant: "warning", dot: "bg-warning animate-pulse", label: "Pending" },
-        blocked: { variant: "error", dot: "bg-error", label: "Blocked" },
-        rejected: { variant: "error", dot: "bg-error", label: "Rejected" },
-    };
-    const { variant, dot, label } = map[status] || { variant: "default", dot: "bg-base-content/30", label: status };
+// ─── Info row — bigger, fully solid text ──────────────────────────────────────
+function InfoRow({ icon: Icon, label, value, mono, last }) {
     return (
-        <Badge variant={variant}>
-            <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-            {label}
-        </Badge>
-    );
-}
-
-function RoleBadge({ role }) {
-    const variantMap = { admin: "admin", moderator: "moderator", member: "member" };
-    return (
-        <Badge variant={variantMap[role] || "member"}>
-            {role === "admin" && <ShieldCheck size={9} />}
-            {role || "member"}
-        </Badge>
-    );
-}
-
-// ─── Info Row ────────────────────────────────────────────────────────────────
-function InfoRow({ icon: Icon, label, value, mono, subtle }) {
-    if (!value) return null;
-    return (
-        <div className="group flex items-center gap-4 py-3.5 border-b border-white/[0.04] last:border-0 hover:bg-white/[0.015] -mx-5 px-5 rounded-lg transition-colors">
-            <div className="w-9 h-9 rounded-xl bg-base-300/60 flex items-center justify-center shrink-0 group-hover:bg-base-300 transition-colors">
-                <Icon size={14} className="text-base-content/35 group-hover:text-base-content/60 transition-colors" />
+        <div className={`flex items-center gap-3 py-3.5 min-w-0 ${last ? "" : "border-b border-white/10"}`}>
+            <div className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/[0.1] flex items-center justify-center shrink-0">
+                <Icon size={13} className="text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-semibold text-base-content/28 uppercase tracking-[0.1em] mb-0.5">{label}</p>
-                <p className={`text-sm leading-snug truncate ${mono ? "font-mono" : "font-medium"} ${subtle ? "text-base-content/50" : "text-base-content/75"}`}>{value}</p>
+                <p className="text-[10px] sm:text-[11px] font-bold text-white/55 uppercase tracking-[0.08em] leading-none mb-1">{label}</p>
+                <p className={`text-[12.5px] sm:text-[13px] truncate font-medium ${value ? "text-white/90" : "text-white/35"} ${mono ? "font-mono" : ""}`}>{value || "Not set"}</p>
             </div>
         </div>
     );
 }
 
-// ─── Section Card ─────────────────────────────────────────────────────────────
-function SectionCard({ title, icon: Icon, children }) {
+// ─── Stat pill — bigger, solid text ───────────────────────────────────────────
+function StatPill({ icon: Icon, label, value, tone = "default" }) {
+    const toneCls = { default: "bg-primary/12 text-primary", warn: "bg-warning/12 text-warning", danger: "bg-error/12 text-error", ok: "bg-success/12 text-success" }[tone];
     return (
-        <div className="rounded-2xl border border-white/[0.07] bg-base-200 overflow-hidden">
-            <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-white/[0.05]">
-                {Icon && <Icon size={12} className="text-base-content/30" />}
-                <p className="text-[10px] font-bold text-base-content/30 uppercase tracking-[0.12em]">{title}</p>
+        <div className="flex items-center gap-2.5 px-4 py-3.5 rounded-xl border border-white/10 bg-white/[0.035] min-w-0">
+            <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 ${toneCls}`}>
+                <Icon size={14} />
             </div>
-            <div className="px-5 py-1">{children}</div>
+            <div className="min-w-0">
+                <p className="text-[14px] sm:text-[15px] font-bold text-white/90 leading-none truncate">{value}</p>
+                <p className="text-[10px] sm:text-[11px] text-white/55 mt-1 leading-none truncate font-medium">{label}</p>
+            </div>
         </div>
     );
+}
+
+// ─── Status banner — bigger, more opaque ──────────────────────────────────────
+function StatusBanner({ isPending, isBlocked, isExpired }) {
+    if (isBlocked) {
+        return (
+            <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl border border-error/25 bg-error/10">
+                <ShieldAlert size={16} className="text-error shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                    <p className="text-[13px] font-bold text-error">Account blocked</p>
+                    <p className="text-[12px] text-white/60 mt-0.5 leading-relaxed">Your access has been revoked by an administrator. Contact support if you believe this is a mistake.</p>
+                </div>
+            </div>
+        );
+    }
+    if (isExpired) {
+        return (
+            <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl border border-error/25 bg-error/10">
+                <Hourglass size={16} className="text-error shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                    <p className="text-[13px] font-bold text-error">Access expired</p>
+                    <p className="text-[12px] text-white/60 mt-0.5 leading-relaxed">Your temporary access window has ended. Request renewed access to continue using Flux.</p>
+                </div>
+            </div>
+        );
+    }
+    if (isPending) {
+        return (
+            <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl border border-warning/25 bg-warning/10">
+                <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                    <p className="text-[13px] font-bold text-warning">Approval pending</p>
+                    <p className="text-[12px] text-white/60 mt-0.5 leading-relaxed">An administrator needs to approve your account before you can stream media.</p>
+                </div>
+            </div>
+        );
+    }
+    return null;
 }
 
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
-function EditProfileModal({ open, onClose, profile, user, onSave, onAvatarUpload }) {
+function EditModal({ open, onClose, user, onSave, onAvatarUpload }) {
     const [name, setName] = useState("");
-    const [bio, setBio] = useState("");
-    const [location, setLocation] = useState("");
-    const [website, setWebsite] = useState("");
     const [password, setPassword] = useState("");
+    const [confirm, setConfirm] = useState("");
+    const [preview, setPreview] = useState(null);
+    const [uploading, setUploading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
-    const [previewAvatar, setPreviewAvatar] = useState(null);
-    const [uploadingAvatar, setUploadingAvatar] = useState(false);
     const fileRef = useRef(null);
 
     useEffect(() => {
         if (open) {
             setName(user?.name || "");
-            setBio("");
-            setLocation("");
-            setWebsite("");
             setPassword("");
-            setPreviewAvatar(user?.avatar || null);
+            setConfirm("");
+            setPreview(user?.avatar || null);
             setError(null);
             setSaving(false);
         }
-    }, [open, profile, user]);
+    }, [open, user]);
 
-    async function handleAvatarChange(e) {
+    async function handleFile(e) {
         const file = e.target.files?.[0];
         if (!file) return;
-
-        // Instant local preview
         const reader = new FileReader();
-        reader.onload = (ev) => setPreviewAvatar(ev.target.result);
+        reader.onload = (ev) => setPreview(ev.target.result);
         reader.readAsDataURL(file);
-
-        setUploadingAvatar(true);
-        setError(null);
+        setUploading(true);
         try {
-            // Returns the ImgBB hosted URL after upload + profile save
-            const uploadedUrl = await onAvatarUpload(file);
-            // Swap blob preview → real URL so handleSave writes the hosted URL
-            if (uploadedUrl) {
-                setPreviewAvatar(uploadedUrl);
-                // Auto-save immediately to DB
-                await onSave({ name: name.trim() || user?.name, bio, location, website, avatar: uploadedUrl });
-            }
+            const url = await onAvatarUpload(file);
+            if (url) setPreview(url);
         } catch (err) {
-            setError(err.message || "Avatar upload failed");
+            setError(err.message || "Upload failed");
         } finally {
-            setUploadingAvatar(false);
+            setUploading(false);
         }
     }
 
-    async function handleSave() {
-        if (!name.trim()) return;
+    async function save() {
+        if (!name.trim()) {
+            setError("Display name is required");
+            return;
+        }
+        if (password && password !== confirm) {
+            setError("Passwords don't match");
+            return;
+        }
         setSaving(true);
         setError(null);
         try {
-            const dataToSave = { name: name.trim(), bio, location, website, avatar: previewAvatar };
-            if (password) dataToSave.password = password;
-            await onSave(dataToSave);
+            const d = { name: name.trim(), avatar: preview };
+            if (password) d.password = password;
+            await onSave(d);
             onClose();
         } catch (err) {
             setError(err.message || "Save failed");
@@ -180,90 +201,73 @@ function EditProfileModal({ open, onClose, profile, user, onSave, onAvatarUpload
         }
     }
 
-    const fields = [
-        { label: "Display Name", required: true, value: name, set: setName, ph: "Your name", autoFocus: true },
-        { label: "New Password", required: false, value: password, set: setPassword, ph: "Leave blank to keep current", type: "password" },
-        { label: "Location", required: false, value: location, set: setLocation, ph: "City, Country" },
-        { label: "Website", required: false, value: website, set: setWebsite, ph: "https://example.com" },
-    ];
-
     return (
-        <Modal open={open} onClose={onClose} title="Edit Profile">
+        <Modal open={open} onClose={onClose} title="Edit Profile" subtitle="Update your photo, display name, or password.">
             <div className="space-y-5">
                 {error && (
-                    <div className="rounded-xl bg-error/8 border border-error/15 px-4 py-3 text-xs text-error flex items-center gap-2.5">
-                        <div className="w-4 h-4 rounded-full bg-error/20 flex items-center justify-center shrink-0">
-                            <X size={10} />
-                        </div>
-                        {error}
+                    <div className="rounded-lg bg-error/10 border border-error/25 px-3 py-2.5 text-sm text-error flex items-center gap-2">
+                        <X size={12} className="shrink-0" /> {error}
                     </div>
                 )}
 
-                {/* Avatar upload */}
-                <div className="flex justify-center pt-2">
-                    <div className="relative group cursor-pointer" role="button" tabIndex={0} onClick={() => fileRef.current?.click()} onKeyDown={(e) => e.key === "Enter" && fileRef.current?.click()}>
-                        <Avatar src={previewAvatar} name={name || user?.name} size={88} ring />
-                        <div className="absolute inset-0 rounded-full bg-black/50 flex flex-col items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                            {uploadingAvatar ? (
-                                <div className="loading loading-spinner loading-sm text-white" />
+                <div className="flex justify-center pt-1">
+                    <div className="relative group cursor-pointer" onClick={() => fileRef.current?.click()}>
+                        <div className="rounded-2xl overflow-hidden ring-2 ring-white/15" style={{ width: 84, height: 84 }}>
+                            {preview ? (
+                                <img src={preview} alt="" className="w-full h-full object-cover" />
                             ) : (
-                                <>
-                                    <Camera size={16} className="text-white" />
-                                    <span className="text-[9px] text-white/80 font-semibold tracking-wider uppercase">Change</span>
-                                </>
+                                <div
+                                    className="w-full h-full flex items-center justify-center text-2xl font-bold text-primary"
+                                    style={{ background: "linear-gradient(145deg,oklch(20% 0.06 260),oklch(15% 0.03 240))" }}>
+                                    {initials(name || user?.name, user?.email)}
+                                </div>
                             )}
                         </div>
-                        <div className="absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full bg-primary flex items-center justify-center ring-2 ring-base-200">
+                        <div className="absolute inset-0 rounded-2xl bg-black/55 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
+                            {uploading ? <span className="loading loading-spinner loading-xs text-white" /> : <Camera size={18} className="text-white" />}
+                        </div>
+                        <span className="absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full bg-primary flex items-center justify-center ring-2 ring-base-200">
                             <Pencil size={9} className="text-primary-content" />
-                        </div>
+                        </span>
                     </div>
-                    <label htmlFor="profile-avatar-upload" className="sr-only">Upload avatar</label>
-                    <input id="profile-avatar-upload" name="avatar" ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+                    <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
                 </div>
 
-                {/* Fields */}
-                <div className="space-y-3">
-                    {fields.map(({ label, required, value, set, ph, autoFocus, type }) => (
-                        <div key={label} className="space-y-1.5">
-                            <label htmlFor={`profile-${label.toLowerCase().replace(/\s+/g, "-")}`} className="block text-xs font-semibold text-base-content/40 uppercase tracking-wider">
-                                {label} {required && <span className="text-error normal-case tracking-normal font-normal">*</span>}
-                            </label>
-                            <input
-                                id={`profile-${label.toLowerCase().replace(/\s+/g, "-")}`}
-                                name={label.toLowerCase().replace(/\s+/g, "-")}
-                                autoFocus={autoFocus}
-                                value={value}
-                                type={type || "text"}
-                                onChange={(e) => set(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleSave()}
-                                placeholder={ph}
-                                style={{ outline: "none", boxShadow: "none" }}
-                                className="input input-sm w-full bg-base-300/50 border border-white/8 hover:border-white/15 focus:border-primary/40 rounded-xl text-sm transition-colors"
-                            />
-                        </div>
-                    ))}
+                <div className="space-y-1.5">
+                    <label htmlFor="em-name" className="text-[10px] font-bold text-white/55 uppercase tracking-[0.08em] block">
+                        Display Name <span className="text-error">*</span>
+                    </label>
+                    <Input id="em-name" name="name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Your name" autoFocus />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                        <label htmlFor="profile-bio" className="block text-xs font-semibold text-base-content/40 uppercase tracking-wider">Bio</label>
-                        <textarea
-                            id="profile-bio"
-                            name="bio"
-                            value={bio}
-                            onChange={(e) => setBio(e.target.value)}
-                            placeholder="A short bio…"
-                            rows={3}
-                            style={{ outline: "none", boxShadow: "none" }}
-                            className="textarea textarea-sm w-full bg-base-300/50 border border-white/8 hover:border-white/15 focus:border-primary/40 rounded-xl text-sm resize-none transition-colors"
-                        />
+                        <label htmlFor="em-pw" className="text-[10px] font-bold text-white/55 uppercase tracking-[0.08em] block">
+                            New Password
+                        </label>
+                        <Input id="em-pw" name="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Leave blank to keep" />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label htmlFor="em-pw2" className="text-[10px] font-bold text-white/55 uppercase tracking-[0.08em] block">
+                            Confirm
+                        </label>
+                        <Input id="em-pw2" name="confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Repeat password" />
                     </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex gap-2.5 pt-1">
-                    <button onClick={onClose} style={{ outline: "none" }} className="btn btn-sm btn-ghost rounded-xl flex-1 text-base-content/50 hover:text-base-content hover:bg-base-300">
+                <div className="flex gap-2 pt-1">
+                    <button
+                        onClick={onClose}
+                        style={{ outline: "none" }}
+                        className="flex-1 py-2 rounded-lg text-[12px] font-semibold text-white/55 hover:text-white/80 hover:bg-white/[0.06] transition-colors border border-white/[0.1]">
                         Cancel
                     </button>
-                    <button onClick={handleSave} disabled={!name.trim() || saving} style={{ outline: "none" }} className="btn btn-sm btn-primary rounded-xl gap-2 flex-1 border-none">
-                        {saving ? <span className="loading loading-spinner loading-xs" /> : <Check size={13} />}
+                    <button
+                        onClick={save}
+                        disabled={!name.trim() || saving}
+                        style={{ outline: "none" }}
+                        className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none disabled:opacity-40 flex items-center justify-center gap-1.5">
+                        {saving ? <span className="loading loading-spinner loading-xs" /> : <Check size={12} />}
                         {saving ? "Saving…" : "Save Changes"}
                     </button>
                 </div>
@@ -272,217 +276,218 @@ function EditProfileModal({ open, onClose, profile, user, onSave, onAvatarUpload
     );
 }
 
-// ─── Stat Pill ─────────────────────────────────────────────────────────────────
-function StatPill({ icon: Icon, label, value }) {
-    if (!value) return null;
+// ─── Logged out ───────────────────────────────────────────────────────────────
+function LoggedOut({ setLoginOpen }) {
     return (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-base-300/40 border border-white/[0.05]">
-            <Icon size={12} className="text-base-content/30 shrink-0" />
-            <div className="min-w-0">
-                <p className="text-[9px] text-base-content/30 font-semibold uppercase tracking-widest leading-none mb-0.5">{label}</p>
-                <p className="text-xs text-base-content/60 font-medium truncate">{value}</p>
+        <div className="w-full flex flex-col items-center justify-center py-24 sm:py-28 gap-5 text-center px-4">
+            <div className="w-16 h-16 rounded-2xl bg-white/[0.06] border border-white/15 flex items-center justify-center">
+                <User size={26} className="text-white/40" />
+            </div>
+            <div>
+                <p className="text-lg sm:text-xl font-bold text-white">Not signed in</p>
+                <p className="text-sm text-white/60 mt-2 max-w-[260px] leading-relaxed mx-auto">Sign in to manage your account and preferences.</p>
+            </div>
+            <button
+                onClick={() => setLoginOpen?.()}
+                style={{ outline: "none" }}
+                className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-primary text-primary-content text-sm font-bold hover:opacity-90 transition-opacity border-none">
+                <LogIn size={15} /> Sign in
+            </button>
+        </div>
+    );
+}
+
+// ─── Loading skeleton ─────────────────────────────────────────────────────────
+function ProfileSkeleton() {
+    return (
+        <div className="w-full space-y-5 animate-pulse">
+            <div className="rounded-2xl border border-white/10 h-[160px] sm:h-[120px] bg-white/[0.04]" />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-[68px] rounded-xl border border-white/10 bg-white/[0.04]" />
+                ))}
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-white/10 h-[200px] bg-white/[0.04]" />
+                <div className="rounded-2xl border border-white/10 h-[200px] bg-white/[0.04]" />
             </div>
         </div>
     );
 }
 
-// ─── Permission Tag ───────────────────────────────────────────────────────────
-function PermissionTag({ name }) {
-    return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-base-300/40 border border-white/[0.06] text-xs font-mono text-base-content/45 hover:bg-base-300/70 hover:text-base-content/65 transition-colors">
-            <Lock size={9} className="opacity-50" />
-            {name}
-        </span>
-    );
-}
-
-// ─── Cover ────────────────────────────────────────────────────────────────────
-function ProfileCover() {
-    return (
-        <div className="h-32 relative overflow-hidden rounded-t-2xl">
-            {/* Base gradient */}
-            <div className="absolute inset-0 bg-base-300/80" />
-            {/* Primary orb */}
-            <div
-                className="absolute rounded-full"
-                style={{
-                    width: 220,
-                    height: 220,
-                    top: -60,
-                    left: -40,
-                    background: "radial-gradient(circle, oklch(58% 0.22 20 / 0.25) 0%, transparent 70%)",
-                    filter: "blur(2px)",
-                }}
-            />
-            {/* Accent orb */}
-            <div
-                className="absolute rounded-full"
-                style={{
-                    width: 160,
-                    height: 160,
-                    top: -30,
-                    right: 40,
-                    background: "radial-gradient(circle, oklch(65% 0.2 240 / 0.18) 0%, transparent 70%)",
-                    filter: "blur(1px)",
-                }}
-            />
-            {/* Fine grid overlay */}
-            <div
-                className="absolute inset-0 opacity-[0.04]"
-                style={{
-                    backgroundImage: "linear-gradient(oklch(88% 0.01 260) 1px, transparent 1px), linear-gradient(90deg, oklch(88% 0.01 260) 1px, transparent 1px)",
-                    backgroundSize: "24px 24px",
-                }}
-            />
-            {/* Bottom fade */}
-            <div
-                className="absolute bottom-0 left-0 right-0 h-12"
-                style={{
-                    background: "linear-gradient(to bottom, transparent, oklch(16% 0.01 260))",
-                }}
-            />
-        </div>
-    );
-}
-
-// ─── Logged-out State ─────────────────────────────────────────────────────────
-function LoggedOutState({ setLoginOpen }) {
-    return (
-        <div className="rounded-2xl border border-white/[0.07] bg-base-200 overflow-hidden">
-            <div className="flex flex-col items-center gap-6 px-8 py-16 text-center">
-                {/* Icon */}
-                <div className="relative">
-                    <div className="w-24 h-24 rounded-2xl bg-base-300/50 border border-white/8 flex items-center justify-center">
-                        <User size={36} className="text-base-content/15" />
-                    </div>
-                    <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center">
-                        <Sparkles size={11} className="text-primary/70" />
-                    </div>
-                </div>
-                {/* Copy */}
-                <div className="space-y-2">
-                    <p className="font-semibold text-base-content/70 text-base">Sign in to your account</p>
-                    <p className="text-xs text-base-content/35 max-w-xs leading-relaxed">Save preferences, sync watch history, and personalize your experience across devices.</p>
-                </div>
-                {/* Action */}
-                <button onClick={() => setLoginOpen?.()} style={{ outline: "none", boxShadow: "none" }} className="btn btn-primary btn-sm rounded-xl gap-2 px-8 border-none">
-                    <LogIn size={14} />
-                    Sign In
-                </button>
-            </div>
-        </div>
-    );
-}
-
+// ─── Main ─────────────────────────────────────────────────────────────────────
+// Full outlet width, fully opaque/larger text (especially on large screens).
 export default function ProfileSection({ handleLogout, setLoginOpen }) {
-    const { user, updateMe } = useAuth();
+    const { user, loading, isApproved, isPending, isBlocked, isExpired, isAdmin, permissions, updateMe } = useAuth();
     const [editOpen, setEditOpen] = useState(false);
 
-    if (!user) return <LoggedOutState setLoginOpen={setLoginOpen} />;
+    if (loading) return <ProfileSkeleton />;
+    if (!user) return <LoggedOut setLoginOpen={setLoginOpen} />;
 
-    const displayName = user?.name || user?.username || "User";
-    const joinedAt = fmtDate(user?.createdAt);
-    const accessExpiry = fmtDate(user?.accessExpiresAt);
-    const hasPermissions = user?.permissions && Object.entries(user.permissions).some(([, v]) => v);
+    const displayName = user?.name || user?.email?.split("@")[0] || "User";
+    const role = user?.role || "member";
+    const status = user?.status || (isApproved ? "approved" : isPending ? "pending" : isBlocked ? "blocked" : null);
+    const accessType = user?.accessType ? user.accessType.charAt(0).toUpperCase() + user.accessType.slice(1) : "Permanent";
+    const isTemporary = user?.accessType === "temporary";
+    const expiryDays = isTemporary ? daysLeft(user?.accessExpiresAt) : null;
 
-    async function handleSave(data) {
-        await updateMe({ name: data.name, avatar: data.avatar, username: data.username, password: data.password });
+    const permEntries = permissions ? Object.entries(permissions) : [];
+    const grantedPerms = permEntries.filter(([, v]) => v);
+    const deniedPerms = permEntries.filter(([, v]) => !v);
+
+    async function onSave(data) {
+        await updateMe(data);
     }
-    
-    async function handleAvatarUpload(file) {
-        // Implement upload via dashApi or authApi if needed, or inline
-        // Actually uploadAvatar was previously in profileApi.
-        // Let's just use the direct imgbb API call inline for now
-        const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY;
-        if (!IMGBB_API_KEY) throw new Error("ImgBB API key not configured");
-        const formData = new FormData();
-        formData.append("image", file);
-        const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: "POST", body: formData });
-        if (!res.ok) throw new Error("Failed to upload image");
-        const json = await res.json();
-        return json.data.display_url;
+
+    async function onAvatarUpload(file) {
+        const key = import.meta.env.VITE_IMGBB_API_KEY;
+        if (!key) throw new Error("Image upload not configured");
+        const fd = new FormData();
+        fd.append("image", file);
+        const r = await fetch(`https://api.imgbb.com/1/upload?key=${key}`, { method: "POST", body: fd });
+        if (!r.ok) throw new Error("Upload failed");
+        return (await r.json()).data.display_url;
     }
 
     return (
-        <div className="space-y-3 max-w-2xl">
-            {/* ── Hero Card ── */}
-            <div className="rounded-2xl border border-white/[0.07] bg-base-200 overflow-hidden">
-                <ProfileCover />
+        <div className="w-full space-y-5">
+            {/* ── Status banner ── */}
+            <StatusBanner isPending={isPending} isBlocked={isBlocked} isExpired={isExpired} />
 
-                <div className="px-6 pb-6">
-                    {/* Avatar row */}
-                    <div className="flex items-end justify-between -mt-12 mb-5">
-                        <div className="relative">
-                            <Avatar src={user?.avatar} name={displayName} size={76} ring />
-                            {user.role === "admin" && (
-                                <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center ring-2 ring-base-200">
-                                    <ShieldCheck size={9} className="text-primary-content" />
-                                </div>
+            {/* ── Identity card — stacks on mobile, row on sm+ ── */}
+            <Card>
+                <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-5 min-w-0">
+                    <div className="flex items-center gap-4 min-w-0">
+                        <div className="relative shrink-0">
+                            <Avatar src={user?.avatar} name={user?.name} email={user?.email} size={76} />
+                            {isAdmin && (
+                                <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-primary flex items-center justify-center ring-2 ring-base-200">
+                                    <ShieldCheck size={11} className="text-primary-content" />
+                                </span>
                             )}
                         </div>
 
-                        <button
-                            onClick={() => setEditOpen(true)}
-                            style={{ outline: "none", boxShadow: "none" }}
-                            className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg border border-white/10 bg-base-300/50 text-xs font-medium text-base-content/45 hover:text-base-content hover:border-white/20 hover:bg-base-300 transition-all">
-                            <Pencil size={11} />
-                            Edit Profile
-                        </button>
-                    </div>
-
-                    {/* Name + bio */}
-                    <div className="space-y-3">
-                        <div>
-                            <h2 className="text-xl font-bold text-base-content leading-tight">{displayName}</h2>
-                            {user.username && user.username !== displayName && <p className="text-xs text-base-content/30 font-mono mt-0.5">@{user.username}</p>}
+                        <div className="flex-1 min-w-0">
+                            <h2 className="text-[17px] sm:text-[19px] font-bold text-white leading-tight truncate">{displayName}</h2>
+                            {user?.email && <p className="text-[12px] sm:text-[13px] text-white/60 mt-0.5 truncate">{user.email}</p>}
+                            <div className="flex items-center flex-wrap gap-2 mt-3">
+                                <Chip cls={ROLE_CLS[role] || "text-white/85 bg-white/[0.08] border-white/20"}>
+                                    {isAdmin && <ShieldCheck size={10} />}
+                                    {role}
+                                </Chip>
+                                {status && (
+                                    <Chip cls={STATUS_CLS[status] || "text-white/70 bg-white/[0.08] border-white/15"}>
+                                        <span className={`w-2 h-2 rounded-full ${STATUS_DOT[status] || "bg-white/50"}`} />
+                                        {status}
+                                    </Chip>
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
-            </div>
-            {/* ── Account Details ── */}
-            <SectionCard title="Account Details" icon={User}>
-                <InfoRow icon={Mail} label="Email Address" value={user.email} />
-                <InfoRow icon={Hash} label="Username" value={user.username} mono />
-                <InfoRow icon={ShieldCheck} label="Access Type" value={user.accessType ? user.accessType.charAt(0).toUpperCase() + user.accessType.slice(1) : null} />
-                <InfoRow icon={Clock} label="Access Expires" value={accessExpiry} subtle />
-                <InfoRow icon={CalendarDays} label="Member Since" value={joinedAt} subtle />
-            </SectionCard>
 
-            {/* ── Permissions ── */}
-            {hasPermissions && (
-                <SectionCard title="Permissions" icon={Lock}>
-                    <div className="py-4 flex flex-wrap gap-2">
-                        {Object.entries(user.permissions)
-                            .filter(([, v]) => v)
-                            .map(([k]) => (
-                                <PermissionTag key={k} name={k} />
-                            ))}
+                    {/* Actions — full width row on mobile, compact stack on desktop */}
+                    <div className="flex flex-row sm:flex-col gap-2 sm:ml-auto sm:shrink-0">
+                        <button
+                            onClick={() => setEditOpen(true)}
+                            style={{ outline: "none" }}
+                            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.12] bg-white/[0.05] text-[12px] font-semibold text-white/70 hover:text-white hover:border-white/25 hover:bg-white/[0.09] transition-all whitespace-nowrap">
+                            <Pencil size={12} /> Edit Profile
+                        </button>
+                        <button
+                            onClick={handleLogout}
+                            style={{ outline: "none" }}
+                            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-error/20 text-[12px] font-semibold text-error/70 hover:text-error hover:bg-error/10 hover:border-error/35 transition-all whitespace-nowrap">
+                            <LogOut size={12} /> Sign Out
+                        </button>
                     </div>
-                </SectionCard>
-            )}
-
-            {/* ── Danger Zone ── */}
-            <div className="rounded-2xl border border-error/10 bg-base-200 overflow-hidden">
-                <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-error/8">
-                    <Activity size={11} className="text-error/35" />
-                    <p className="text-[10px] font-bold text-error/35 uppercase tracking-[0.12em]">Session</p>
                 </div>
-                <div className="flex items-center justify-between px-5 py-4">
-                    <div className="space-y-0.5">
-                        <p className="text-sm font-semibold text-base-content/65">Sign Out</p>
-                        <p className="text-xs text-base-content/35">End your session on this device</p>
+            </Card>
+
+            {/* ── Stat pills ── */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <StatPill
+                    icon={isApproved ? BadgeCheck : isPending ? Hourglass : ShieldAlert}
+                    label="Account status"
+                    value={status ? status.charAt(0).toUpperCase() + status.slice(1) : "Unknown"}
+                    tone={isApproved ? "ok" : isPending ? "warn" : "danger"}
+                />
+                <StatPill icon={isTemporary ? Clock : InfinityIcon} label="Access type" value={accessType} tone="default" />
+                <StatPill
+                    icon={isExpired ? AlertTriangle : Clock}
+                    label="Access expires"
+                    value={!isTemporary ? "Never" : expiryDays != null ? (expiryDays > 0 ? `${expiryDays}d left` : "Expired") : "—"}
+                    tone={isExpired ? "danger" : isTemporary && expiryDays != null && expiryDays <= 3 ? "warn" : "default"}
+                />
+            </div>
+
+            {/* ── Details grid — 2 columns on large screens, stacks on mobile ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <Card>
+                    <div className="px-5 sm:px-6 py-3.5 border-b border-white/10">
+                        <p className="text-[10px] sm:text-[11px] font-bold text-white/55 uppercase tracking-[0.1em]">Account Details</p>
+                    </div>
+                    <div className="px-5 sm:px-6 py-1">
+                        <InfoRow icon={Mail} label="Email" value={user?.email} />
+                        <InfoRow icon={Hash} label="Role" value={role} />
+                        <InfoRow icon={isTemporary ? Clock : InfinityIcon} label="Access Type" value={accessType} />
+                        <InfoRow icon={Clock} label="Access Expires" value={isTemporary ? fmtDate(user?.accessExpiresAt) : "Never (permanent access)"} last />
+                    </div>
+                </Card>
+
+                <Card>
+                    <div className="px-5 sm:px-6 py-3.5 border-b border-white/10 flex items-center justify-between gap-3">
+                        <p className="text-[10px] sm:text-[11px] font-bold text-white/55 uppercase tracking-[0.1em]">Permissions</p>
+                        {isAdmin && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-primary/80 font-semibold">
+                                <Sparkles size={11} /> Admin override
+                            </span>
+                        )}
+                    </div>
+
+                    {isAdmin ? (
+                        <div className="px-5 sm:px-6 py-4">
+                            <p className="text-[12.5px] text-white/60 leading-relaxed">Administrators bypass individual permission checks and have unrestricted access to all areas.</p>
+                        </div>
+                    ) : permEntries.length === 0 ? (
+                        <div className="px-5 sm:px-6 py-4">
+                            <p className="text-[12.5px] text-white/50">No specific permissions have been assigned to this account.</p>
+                        </div>
+                    ) : (
+                        <div className="px-5 sm:px-6 py-4 flex flex-wrap gap-1.5">
+                            {grantedPerms.map(([k]) => (
+                                <span key={k} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-success/10 border border-success/20 text-[11.5px] font-mono font-semibold text-success/90">
+                                    <Unlock size={10} className="shrink-0" />
+                                    {k}
+                                </span>
+                            ))}
+                            {deniedPerms.map(([k]) => (
+                                <span key={k} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/[0.1] text-[11.5px] font-mono font-medium text-white/45">
+                                    <Lock size={10} className="shrink-0" />
+                                    {k}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                </Card>
+            </div>
+
+            {/* ── Security ── */}
+            <Card>
+                <div className="flex items-center justify-between gap-6 px-5 sm:px-6 py-4 min-w-0">
+                    <div className="min-w-0">
+                        <p className="text-[13px] font-semibold text-white/90 leading-tight">Password</p>
+                        <p className="text-[12px] text-white/50 mt-0.5 leading-snug">Change your account password</p>
                     </div>
                     <button
-                        onClick={handleLogout}
-                        style={{ outline: "none", boxShadow: "none" }}
-                        className="flex items-center gap-2 px-4 py-2 rounded-xl border border-error/12 text-xs font-semibold text-error/50 hover:text-error hover:bg-error/8 hover:border-error/25 transition-all">
-                        <LogOut size={12} />
-                        Sign Out
+                        onClick={() => setEditOpen(true)}
+                        style={{ outline: "none" }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.12] text-[12px] font-semibold text-white/60 hover:text-white hover:border-white/25 hover:bg-white/[0.07] transition-all shrink-0 whitespace-nowrap">
+                        <KeyRound size={12} /> Change
                     </button>
                 </div>
-            </div>
+            </Card>
 
-            <EditProfileModal open={editOpen} onClose={() => setEditOpen(false)} user={user} onSave={handleSave} onAvatarUpload={handleAvatarUpload} />
+            <EditModal open={editOpen} onClose={() => setEditOpen(false)} user={user} onSave={onSave} onAvatarUpload={onAvatarUpload} />
         </div>
     );
 }
