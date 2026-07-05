@@ -192,6 +192,14 @@ function start() {
     _timers.push(setInterval(() => ingestAll().catch(console.error), INGEST_INTERVAL));
     _timers.push(setInterval(() => { refreshNowCache(); refreshEventCache(); }, NOW_INTERVAL));
 
+    // Boot sports scheduler alongside EPG — isolated, never breaks EPG on failure
+    try {
+        const sportsScheduler = require("./sportsScheduler");
+        sportsScheduler.start();
+    } catch (err) {
+        console.warn("[EPG] sportsScheduler not available:", err.message);
+    }
+
     console.log(`[EPG] Scheduler started — ingest every ${INGEST_INTERVAL / 60000}m, cache every ${NOW_INTERVAL / 1000}s`);
 }
 

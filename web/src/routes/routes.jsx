@@ -35,8 +35,10 @@ import DashUploads from "../dashboard/pages/DashUploads";
 import DashIPTV from "../dashboard/pages/DashIPTV";
 import ErrorPreview from "../Errors/ErrorPreview";
 import ErrorShowcase from "../Errors/ErrorShowcase";
-import Live from "../Pages/Media/Live/Live";
+// import Live from "../Pages/Media/Live/Live";
 import LivePlayerPage from "../Pages/Player/LivePlayerPage";
+import Live from "../Pages/Live/Live";
+import LiveCategory from "../Pages/Live/LiveCategory";
 
 export const router = createBrowserRouter([
     {
@@ -85,6 +87,7 @@ export const router = createBrowserRouter([
             { path: "category/:name", Component: CategoryPage },
             { path: "media/:id", Component: MediaDetails },
             { path: "live", Component: Live },
+            { path: "live/category/:slug", Component: LiveCategory },
             { path: "movies", Component: Movies },
             { path: "series", Component: Series },
             { path: "settings", Component: Settings },

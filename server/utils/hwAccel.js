@@ -73,6 +73,42 @@ const PROFILES = {
         hwDevice: null,
         supported: false,
     },
+    // AMD AMF — Windows-only encoder API for AMD GPUs/APUs (e.g. the Vega
+    // iGPU built into Ryzen "G"-series chips like the 5600G). Nothing in
+    // the previous QSV/VAAPI/NVENC trio covers AMD hardware on Windows —
+    // QSV is Intel-only, VAAPI is Linux-only, NVENC is Nvidia-only — so an
+    // AMD APU on Windows always fell through to CPU with no HW option ever
+    // attempted at all.
+    amf: {
+        type: "amf",
+        decodeFlag: null,
+        encodeCodecH264: "h264_amf",
+        encodeCodecH265: "hevc_amf",
+        hwDevice: null,
+        supported: false,
+    },
+    // Apple VideoToolbox — macOS, works on BOTH Apple Silicon and Intel Macs
+    // (the OS-level media framework, not tied to a specific chip vendor).
+    videotoolbox: {
+        type: "videotoolbox",
+        decodeFlag: "videotoolbox",
+        encodeCodecH264: "h264_videotoolbox",
+        encodeCodecH265: "hevc_videotoolbox",
+        hwDevice: null,
+        supported: false,
+    },
+    // V4L2 M2M — Linux kernel media API used by ARM SoCs without a real GPU
+    // driver stack (Raspberry Pi, most set-top-box-style ARM boards). No
+    // HEVC encode support on most of these chips, so hevc falls back to
+    // libx265 (software) rather than claiming a codec that doesn't exist.
+    v4l2m2m: {
+        type: "v4l2m2m",
+        decodeFlag: null,
+        encodeCodecH264: "h264_v4l2m2m",
+        encodeCodecH265: "libx265",
+        hwDevice: "/dev/video11",
+        supported: false,
+    },
     cpu: {
         type: "cpu",
         decodeFlag: null,
@@ -198,9 +234,73 @@ async function checkNVENC() {
     }
 }
 
+async function checkAMF() {
+    try {
+        // AMF is Windows-only (DirectX-based) — don't bother probing on
+        // Linux/macOS where it can't exist.
+        if (process.platform !== "win32") return false;
+        await runFFmpeg(["-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1", "-vframes", "1", "-c:v", "h264_amf", "-f", "null", "-"]);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function checkVideoToolbox() {
+    try {
+        if (process.platform !== "darwin") return false;
+        await runFFmpeg(["-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1", "-vframes", "1", "-c:v", "h264_videotoolbox", "-f", "null", "-"]);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function checkV4L2M2M() {
+    try {
+        if (process.platform !== "linux") return false;
+        // Real ARM SBC hardware encoders enumerate under /dev/videoN — if
+        // none exist there's no point spawning ffmpeg to find out further.
+        const hasVideoDevice = await runShell("ls /dev/video* 2>/dev/null").then((out) => Boolean(out && out.trim()));
+        if (!hasVideoDevice) return false;
+        await runFFmpeg(["-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1", "-vframes", "1", "-c:v", "h264_v4l2m2m", "-f", "null", "-"]);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * getCompiledEncoders() — one cheap `ffmpeg -encoders` call, cached for the
+ * lifetime of the process. Used as a pre-filter so detect() never spawns a
+ * doomed test-encode for a codec that isn't even built into this ffmpeg
+ * binary (some distro/Docker-image ffmpeg builds omit qsv/vaapi/amf/
+ * videotoolbox entirely) — cuts several seconds off a cold detect() run.
+ */
+let _encoderListCache = null;
+async function getCompiledEncoders() {
+    if (_encoderListCache) return _encoderListCache;
+    const out = await runSafe("ffmpeg", ["-encoders", "-hide_banner"]);
+    const lines = out.split("\n").filter((l) => /^\s+[A-Z.]+\s+/.test(l));
+    _encoderListCache = new Set(lines.map((l) => l.trim().split(/\s+/)[1]).filter(Boolean));
+    return _encoderListCache;
+}
+
 /**
  * detect() — returns best available HWProfile. Memory + disk cached.
- * Priority: QSV → VAAPI → NVENC → CPU
+ *
+ * Covers every mainstream GPU vendor across every OS ffmpeg runs on:
+ *   Windows : QSV (Intel) → NVENC (Nvidia) → AMF (AMD)
+ *   Linux   : QSV (Intel) → VAAPI (Intel/AMD unified) → NVENC (Nvidia) → V4L2M2M (ARM SBCs, e.g. Raspberry Pi)
+ *   macOS   : VideoToolbox (Apple Silicon AND Intel Macs — one API for both)
+ *   any OS  : CPU (libx264/libx265) — universal fallback, always works
+ *
+ * Each candidate is skipped immediately (no subprocess spawned) if either:
+ *   (a) it's structurally impossible on this OS (checked inside each
+ *       checkX() function already), or
+ *   (b) this ffmpeg build doesn't have that encoder compiled in at all
+ *       (getCompiledEncoders() pre-filter below).
+ * Only encoders that pass both get a real functional test-encode.
  */
 async function detect() {
     if (_hwCached) return _hwCached;
@@ -221,22 +321,47 @@ async function detect() {
         return _hwCached;
     }
 
-    console.log("[HWAccel] Detecting hardware acceleration (QSV → VAAPI → NVENC → CPU)...");
+    const plat = process.platform;
+    // Ordered per-OS — only candidates that are even theoretically possible
+    // on this platform are listed, so nothing wastes time being tried on an
+    // OS where it structurally cannot exist.
+    const candidatesByPlatform = {
+        win32: [
+            { profile: "qsv", check: checkQSV, encoderName: "h264_qsv", label: "Intel QuickSync (QSV)" },
+            { profile: "nvenc", check: checkNVENC, encoderName: "h264_nvenc", label: "NVIDIA NVENC" },
+            { profile: "amf", check: checkAMF, encoderName: "h264_amf", label: "AMD AMF" },
+        ],
+        linux: [
+            { profile: "qsv", check: checkQSV, encoderName: "h264_qsv", label: "Intel QuickSync (QSV)" },
+            { profile: "vaapi", check: checkVAAPI, encoderName: "h264_vaapi", label: "VAAPI (Intel/AMD)" },
+            { profile: "nvenc", check: checkNVENC, encoderName: "h264_nvenc", label: "NVIDIA NVENC" },
+            { profile: "v4l2m2m", check: checkV4L2M2M, encoderName: "h264_v4l2m2m", label: "V4L2 M2M (ARM SBC, e.g. Raspberry Pi)" },
+        ],
+        darwin: [{ profile: "videotoolbox", check: checkVideoToolbox, encoderName: "h264_videotoolbox", label: "Apple VideoToolbox" }],
+    };
+    const candidates = candidatesByPlatform[plat] || [];
 
-    if (await checkQSV()) {
-        _hwCached = { ...PROFILES.qsv, supported: true };
-        console.log("[HWAccel] ✓ Intel QuickSync (QSV)");
-    } else if (await checkVAAPI()) {
-        _hwCached = { ...PROFILES.vaapi, supported: true };
-        console.log("[HWAccel] ✓ VAAPI");
-    } else if (await checkNVENC()) {
-        _hwCached = { ...PROFILES.nvenc, supported: true };
-        console.log("[HWAccel] ✓ NVIDIA NVENC");
-    } else {
-        _hwCached = { ...PROFILES.cpu, supported: true };
-        console.log("[HWAccel] CPU fallback (no hardware acceleration found)");
+    console.log(`[HWAccel] Detecting hardware acceleration on ${plat} (${candidates.map((c) => c.label).join(" → ")}${candidates.length ? " → " : ""}CPU)...`);
+
+    const compiledEncoders = await getCompiledEncoders();
+
+    for (const candidate of candidates) {
+        if (!compiledEncoders.has(candidate.encoderName)) {
+            console.log(`[HWAccel] ✗ ${candidate.label} — not compiled into this ffmpeg build, skipping`);
+            continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        if (await candidate.check()) {
+            _hwCached = { ...PROFILES[candidate.profile], supported: true };
+            console.log(`[HWAccel] ✓ ${candidate.label}`);
+            saveDiskCache(CACHE_FILE, _hwCached);
+            return _hwCached;
+        }
+        console.log(`[HWAccel] ✗ ${candidate.label} — compiled in but test encode failed (driver/permissions?)`);
     }
 
+    _hwCached = { ...PROFILES.cpu, supported: true };
+    console.log("[HWAccel] CPU fallback (no working hardware acceleration found)");
     saveDiskCache(CACHE_FILE, _hwCached);
     return _hwCached;
 }
@@ -1044,4 +1169,6 @@ module.exports = {
     getLiveMetrics,
 };
 
-function getLiveMetrics() { return { cpuPercent: _sysInfoCached ? _sysInfoCached.cpu.usagePercent : null, memPercent: _sysInfoCached ? _sysInfoCached.memory.usagePercent : null }; }
+function getLiveMetrics() {
+    return { cpuPercent: _sysInfoCached ? _sysInfoCached.cpu.usagePercent : null, memPercent: _sysInfoCached ? _sysInfoCached.memory.usagePercent : null };
+}

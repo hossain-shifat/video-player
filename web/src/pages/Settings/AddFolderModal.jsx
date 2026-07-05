@@ -1,102 +1,78 @@
 import { useState, useRef } from "react";
 import { FolderPlus, FolderOpen } from "lucide-react";
-import { Modal } from "./shared";
+import { Modal, Input, GhostButton, PrimaryButton } from "./shared";
 
 export default function AddFolderModal({ open, onClose, onAdd }) {
     const [label, setLabel] = useState("");
     const [path, setPath] = useState("");
-    const fileInputRef = useRef(null);
+    const fileRef = useRef(null);
 
-    const handlePickerChange = (e) => {
+    function pickFolder(e) {
         const files = e.target.files;
-        if (!files || files.length === 0) return;
-        const firstPath = files[0].webkitRelativePath || "";
-        const folderName = firstPath.split("/")[0] || "";
-        if (folderName) setPath(folderName);
+        if (!files?.length) return;
+        const name = (files[0].webkitRelativePath || "").split("/")[0] || "";
+        if (name) setPath(name);
         e.target.value = "";
-    };
+    }
 
-    const submit = () => {
+    function submit() {
         if (!path.trim() || !label.trim()) return;
         onAdd(path.trim(), label.trim());
         setPath("");
         setLabel("");
         onClose();
-    };
+    }
 
     return (
-        <Modal open={open} onClose={onClose} title="Add Media Folder">
+        <Modal open={open} onClose={onClose} title="Add media folder" subtitle="Point Flux to a folder on your server">
             <div className="space-y-4">
-                {/* Label — required */}
-                <div>
-                    <label htmlFor="settings-folder-label" className="text-xs font-medium text-white/70 mb-1.5 block">
-                        Display Label <span className="text-error">*</span>
-                    </label>
-                    <input
-                        id="settings-folder-label"
-                        name="label"
-                        autoFocus
-                        value={label}
-                        onChange={(e) => setLabel(e.target.value)}
-                        placeholder="Movies, Anime, TV Shows…"
-                        className="input input-sm w-full bg-base-300 border-white/10 text-sm rounded"
-                        onKeyDown={(e) => e.key === "Enter" && submit()}
-                    />
-                </div>
+                {[{ id: "af-label", label: "Display label", val: label, set: setLabel, ph: "Movies, Anime, TV Shows…", autoFocus: true }].map(({ id, label: lbl, val, set, ph, autoFocus }) => (
+                    <div key={id} className="space-y-1.5">
+                        <label htmlFor={id} className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.1em] block">
+                            {lbl} <span className="text-error">*</span>
+                        </label>
+                        <Input id={id} name={id} value={val} onChange={(e) => set(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder={ph} autoFocus={autoFocus} />
+                    </div>
+                ))}
 
-                {/* Folder path — picker button fused to input end */}
-                <div>
-                    <label htmlFor="settings-folder-path" className="text-xs font-medium text-white/70 mb-1.5 block">
-                        Folder Path <span className="text-error">*</span>
+                <div className="space-y-1.5">
+                    <label htmlFor="af-path" className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.1em] block">
+                        Folder path <span className="text-error">*</span>
                     </label>
-
-                    <div className="flex items-center gap-0 rounded overflow-hidden border border-white/10 bg-base-300 focus-within:border-primary/40 transition-colors">
+                    <div className="flex items-center rounded-lg overflow-hidden border border-white/[0.12] bg-white/[0.06] focus-within:border-primary transition-colors">
                         <input
-                            id="settings-folder-path"
+                            id="af-path"
                             name="path"
                             value={path}
                             onChange={(e) => setPath(e.target.value)}
-                            placeholder="D:\Movies  or  /media/movies"
-                            className="input input-sm flex-1 bg-transparent border-0 rounded-none text-sm font-mono focus:outline-none min-w-0"
-                            style={{ boxShadow: "none" }}
                             onKeyDown={(e) => e.key === "Enter" && submit()}
+                            placeholder="D:\Movies  or  /media/movies"
+                            style={{ outline: "none", boxShadow: "none" }}
+                            className="flex-1 bg-transparent border-0 px-3 py-[7px] text-[13px] text-white font-mono placeholder:text-slate-500 min-w-0 focus:outline-none"
                         />
-                        {/* Picker button fused to right end of input */}
                         <button
                             type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Select folder"
-                            style={{ outline: "none", boxShadow: "none" }}
-                            className="flex items-center gap-1.5 px-3 h-8 shrink-0 border-l border-white/10 text-white/50 hover:text-white hover:bg-white/5 transition-colors text-xs font-medium focus:outline-none focus-visible:outline-none">
-                            <FolderOpen size={13} />
+                            onClick={() => fileRef.current?.click()}
+                            style={{ outline: "none" }}
+                            className="flex items-center gap-1 px-3 h-8 shrink-0 border-l border-white/[0.12] text-slate-300 hover:text-white hover:bg-white/[0.08] transition-colors text-[11px] font-semibold">
+                            <FolderOpen size={12} />
                             <span className="hidden sm:inline">Browse</span>
                         </button>
                     </div>
-
-                    {/* Hidden directory picker */}
-                    <label htmlFor="settings-folder-picker" className="sr-only">Directory picker</label>
-                    <input
-                        id="settings-folder-picker"
-                        name="folderPicker"
-                        ref={fileInputRef}
-                        type="file"
-                        /* @ts-ignore */
-                        webkitdirectory="true"
-                        multiple
-                        className="hidden"
-                        onChange={handlePickerChange}
-                    />
-                    <p className="text-xs text-white/30 mt-1.5">Full absolute path to your media folder on the server.</p>
+                    <p className="text-[10.5px] text-slate-500">Absolute path to the folder on your server.</p>
+                    <input ref={fileRef} type="file" /* @ts-ignore */ webkitdirectory="true" multiple className="hidden" onChange={pickFolder} />
                 </div>
             </div>
 
             <div className="flex gap-2 mt-5">
-                <button onClick={onClose} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-ghost flex-1 rounded focus:outline-none focus-visible:outline-none">
+                <GhostButton onClick={onClose} className="flex-1 justify-center">
                     Cancel
-                </button>
-                <button onClick={submit} disabled={!path.trim() || !label.trim()} style={{ outline: "none", boxShadow: "none" }} className="btn btn-sm btn-primary flex-1 rounded gap-1.5 border-none">
-                    <FolderPlus size={13} /> Add Folder
-                </button>
+                </GhostButton>
+                <PrimaryButton onClick={submit} disabled={!path.trim() || !label.trim()}>
+                    <span className="flex-1 flex items-center justify-center gap-1.5 w-full">
+                        <FolderPlus size={12} /> Add folder
+                    </span>
+                </PrimaryButton>
             </div>
         </Modal>
     );

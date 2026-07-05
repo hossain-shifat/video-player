@@ -1,19 +1,33 @@
 import { useRef } from "react";
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router";
-import { useHistory } from "../Hooks/useHistory";
+import { useHistory, useDeleteHistory } from "../Hooks/useHistory";
 import HistoryCard from "./HistoryCard";
 
 /**
- * ContinueWatchingRow — "Continue Watching" section, same scroll-row pattern
- * as MediaRow. Pulls live data via useHistory() (GET /api/history), renders
- * nothing if empty/loading/errored — drop it straight into Home.jsx.
+ * ContinueWatchingRow — "Continue Watching" section.
+ *
+ * - Pulls live data via useHistory() (GET /api/history)
+ * - Sorts descending by watchedAt on the frontend (spec §5) so the most
+ *   recently touched item is always first, independent of server sort order.
+ * - Wires useDeleteHistory() into each card's onRemove prop — optimistic
+ *   cache update via TanStack Query so the card vanishes instantly without
+ *   a refetch round-trip.
+ * - Renders nothing if empty / loading / errored — safe to drop into Home.jsx.
  */
 export default function ContinueWatchingRow() {
     const { data: history = [], isLoading } = useHistory();
+    const { mutate: deleteItem } = useDeleteHistory();
     const rowRef = useRef(null);
 
     if (isLoading || !history.length) return null;
+
+    // Sort descending by watchedAt — most recently watched always first (spec §5)
+    const sorted = [...history].sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt));
+
+    function handleRemove(item) {
+        deleteItem(item.id);
+    }
 
     return (
         <section className="relative">
@@ -24,8 +38,8 @@ export default function ContinueWatchingRow() {
             </Link>
 
             <div ref={rowRef} className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                {history.map((item) => (
-                    <HistoryCard key={item.id} item={item} />
+                {sorted.map((item) => (
+                    <HistoryCard key={item.id} item={item} onRemove={handleRemove} />
                 ))}
             </div>
         </section>

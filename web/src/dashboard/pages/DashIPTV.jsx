@@ -6,7 +6,7 @@
 //  4. Single search state across tabs → separate channelQ + sourceQ
 //  5. Missing .xml/.txt upload support → added to ACCEPTED_EXTENSIONS + backend
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, Component } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import {
@@ -36,6 +36,7 @@ import {
     Copy,
     RotateCw,
     AlertCircle,
+    Star,
 } from "lucide-react";
 import {
     getLiveSources,
@@ -47,6 +48,11 @@ import {
     getLiveChannelsFlat,
     getLiveCategories,
     checkLiveStreamStatus,
+    getActiveLiveChannels,
+    markLiveChannelActive,
+    unmarkLiveChannelActive,
+    updateLiveChannel,
+    deleteLiveChannel,
 } from "../../api/live";
 import { safeChannel, safeSource } from "../../utils/fallbacks";
 
@@ -287,6 +293,141 @@ function RowActions({ onInfo, onEdit, onRefresh, onDelete, refreshing }) {
     );
 }
 
+// ─── Channel table (shared by the Active tab and the Channels tab) ────────────
+function ChannelsTable({ list, loading, pageOffset, emptyTitle, emptySub, getStatus, recheckOne, activeIds, onToggleActive, onInfo, onEdit, onHide }) {
+    return (
+        <table className="table w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
+                <tr className="text-[10px] font-bold uppercase tracking-widest text-white/40">
+                    <th className="pl-4 pr-2 py-3 w-8">#</th>
+                    <th className="px-3 py-3">Channel</th>
+                    <th className="px-3 py-3">Country</th>
+                    <th className="px-3 py-3">Group</th>
+                    <th className="px-3 py-3">Category</th>
+                    <th className="px-3 py-3">Working Status</th>
+                    <th className="pl-3 pr-4 py-3 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {loading ? (
+                    [...Array(8)].map((_, i) => (
+                        <tr key={i} className="border-b border-white/4 last:border-0">
+                            {[...Array(7)].map((__, j) => (
+                                <td key={j} className="px-3 py-3.5">
+                                    <div className="h-3 w-24 rounded bg-white/5 animate-pulse" />
+                                </td>
+                            ))}
+                        </tr>
+                    ))
+                ) : list.length === 0 ? (
+                    <tr>
+                        <td colSpan={7} className="py-20 text-center">
+                            <div className="flex flex-col items-center gap-2">
+                                <Tv size={26} className="text-white/20" />
+                                <p className="text-sm text-white/50 font-semibold">{emptyTitle}</p>
+                                {emptySub && <p className="text-xs text-white/30">{emptySub}</p>}
+                            </div>
+                        </td>
+                    </tr>
+                ) : (
+                    list.map((ch, i) => {
+                        const isFav = activeIds.has(ch.id);
+                        return (
+                            <tr key={`${ch.url}-${i}`} className="group border-b border-white/4 last:border-0 hover:bg-white/[0.03] transition-colors duration-150">
+                                <td className="pl-4 pr-2 py-3 text-white/55 font-mono text-[10px] tabular-nums">{pageOffset + i + 1}</td>
+                                <td className="px-3 py-3 min-w-0">
+                                    <div className="flex items-center gap-2.5">
+                                        <div className="w-8 h-8 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/8">
+                                            <img
+                                                src={ch.logo}
+                                                alt=""
+                                                className="w-full h-full object-contain"
+                                                loading="lazy"
+                                                onError={(e) => {
+                                                    // Replace broken logo with initials avatar — never show broken img icon
+                                                    const initials =
+                                                        (ch.name || "?")
+                                                            .trim()
+                                                            .split(/\s+/)
+                                                            .slice(0, 2)
+                                                            .map((w) => w[0])
+                                                            .join("")
+                                                            .toUpperCase() || "?";
+                                                    e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=1e1e2e&color=a6e3a1&bold=true&size=64`;
+                                                    e.target.onerror = null;
+                                                }}
+                                            />
+                                        </div>
+                                        <span className="font-semibold text-white/90 text-sm truncate max-w-[12rem] sm:max-w-[18rem]" title={ch.name}>
+                                            {ch.name}
+                                        </span>
+                                    </div>
+                                </td>
+                                <td className="px-3 py-3">
+                                    <span className="text-xs text-white/70">{ch.country}</span>
+                                </td>
+                                <td className="px-3 py-3">
+                                    <span className="badge badge-sm badge-ghost text-[10px]">{ch.group}</span>
+                                </td>
+                                <td className="px-3 py-3">
+                                    <span className="badge badge-sm badge-ghost text-[10px]">{ch.category}</span>
+                                </td>
+                                <td className="px-3 py-3">
+                                    <WorkingStatusBadge status={getStatus(ch.url)} />
+                                </td>
+                                <td className="pl-3 pr-4 py-3 text-right">
+                                    <div className="flex items-center justify-end gap-0.5 flex-wrap">
+                                        <button
+                                            onClick={() => onToggleActive(ch)}
+                                            title={isFav ? "Remove from Active" : "Mark Active"}
+                                            className={`w-7 h-7 rounded-md flex items-center justify-center border-none transition-colors cursor-pointer ${
+                                                isFav ? "text-warning hover:bg-warning/10" : "text-white/70 hover:bg-white/8 hover:text-white"
+                                            }`}>
+                                            <Star size={12} fill={isFav ? "currentColor" : "none"} />
+                                        </button>
+                                        <a
+                                            href={ch.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            title="Play"
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 hover:bg-white/8 hover:text-white transition-colors">
+                                            <Play size={12} />
+                                        </a>
+                                        <button
+                                            onClick={() => recheckOne(ch.url)}
+                                            title="Recheck status"
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
+                                            <RotateCw size={12} className={getStatus(ch.url) === "checking" ? "animate-spin" : ""} />
+                                        </button>
+                                        <button
+                                            onClick={() => onInfo(ch)}
+                                            title="Info"
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
+                                            <Info size={12} />
+                                        </button>
+                                        <button
+                                            onClick={() => onEdit(ch)}
+                                            title="Edit"
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
+                                            <Pencil size={12} />
+                                        </button>
+                                        <button
+                                            onClick={() => onHide(ch)}
+                                            title="Delete"
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-error/80 border-none hover:bg-error/10 hover:text-error transition-colors cursor-pointer">
+                                            <Trash2 size={12} />
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        );
+                    })
+                )}
+            </tbody>
+        </table>
+    );
+}
+
 // ─── Stream status queue ───────────────────────────────────────────────────────
 const STATUS_CONCURRENCY = 5;
 
@@ -348,7 +489,7 @@ function useStreamStatusQueue() {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export default function DashIPTV() {
+function DashIPTVInner() {
     const queryClient = useQueryClient();
 
     const [toast, setToast] = useState(null);
@@ -380,6 +521,100 @@ export default function DashIPTV() {
     const [editName, setEditName] = useState("");
     const [editLocation, setEditLocation] = useState("");
     const [confirmDeleteSource, setConfirmDeleteSource] = useState(null);
+
+    // ── Channel-level state — now backed by real endpoints (channelStateStore.js) ──
+    const [activeQ, setActiveQ] = useState("");
+
+    const [infoChannel, setInfoChannel] = useState(null);
+    const [editChannel, setEditChannel] = useState(null);
+    const [editChName, setEditChName] = useState("");
+    const [editChCategory, setEditChCategory] = useState("");
+    const [editChCountry, setEditChCountry] = useState("");
+    const [confirmHideChannel, setConfirmHideChannel] = useState(null);
+
+    const {
+        data: activeChannelsData,
+        isLoading: activeChannelsLoading,
+        error: activeChannelsErrObj,
+    } = useQuery({
+        queryKey: ["admin", "iptv", "channels", "active"],
+        queryFn: getActiveLiveChannels,
+        staleTime: 15 * 1000,
+    });
+    const rawActiveChannels = activeChannelsData?.data?.channels ?? activeChannelsData?.channels ?? [];
+    const activeIds = useMemo(() => new Set(rawActiveChannels.map((c) => c.id)), [rawActiveChannels]);
+    const activeChannels = useMemo(() => {
+        if (!activeQ) return rawActiveChannels;
+        const q = activeQ.toLowerCase();
+        return rawActiveChannels.filter((c) => (c.name || "").toLowerCase().includes(q) || (c.country || "").toLowerCase().includes(q) || (c.category || "").toLowerCase().includes(q));
+    }, [rawActiveChannels, activeQ]);
+
+    const invalidateChannelState = () => {
+        queryClient.invalidateQueries({ queryKey: ["admin", "iptv", "channels"] }); // covers both the paginated list and ["…","active"]
+    };
+
+    const markActiveMutation = useMutation({
+        mutationFn: (ch) => markLiveChannelActive(ch.id, ch),
+        onSuccess: (_, ch) => {
+            invalidateChannelState();
+            showToast(`"${ch.name}" marked active`);
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Failed to mark active", "error"),
+    });
+    const unmarkActiveMutation = useMutation({
+        mutationFn: (id) => unmarkLiveChannelActive(id),
+        onSuccess: () => {
+            invalidateChannelState();
+            showToast("Removed from Active");
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Failed to remove from Active", "error"),
+    });
+    function toggleActiveChannel(ch) {
+        if (activeIds.has(ch.id)) unmarkActiveMutation.mutate(ch.id);
+        else markActiveMutation.mutate(ch);
+    }
+
+    function openEditChannelModal(ch) {
+        setEditChannel(ch);
+        setEditChName(ch.name || "");
+        setEditChCategory(ch.category || "");
+        setEditChCountry(ch.country || "");
+    }
+    function closeEditChannelModal() {
+        setEditChannel(null);
+        setEditChName("");
+        setEditChCategory("");
+        setEditChCountry("");
+        editChannelMutation.reset();
+    }
+    const editChannelMutation = useMutation({
+        mutationFn: ({ id, data }) => updateLiveChannel(id, data),
+        onSuccess: () => {
+            invalidateChannelState();
+            showToast("Channel updated");
+            closeEditChannelModal();
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Failed to update channel", "error"),
+    });
+    function saveChannelEdit() {
+        editChannelMutation.mutate({
+            id: editChannel.id,
+            data: { name: editChName.trim(), category: editChCategory.trim(), country: editChCountry.trim() },
+        });
+    }
+
+    const hideChannelMutation = useMutation({
+        mutationFn: (id) => deleteLiveChannel(id),
+        onSuccess: () => {
+            invalidateChannelState();
+            showToast("Channel deleted");
+            setConfirmHideChannel(null);
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Failed to delete channel", "error"),
+    });
+    function hideChannel(ch) {
+        hideChannelMutation.mutate(ch.id);
+    }
 
     const { queueCheck, getStatus, recheckOne } = useStreamStatusQueue();
 
@@ -419,8 +654,16 @@ export default function DashIPTV() {
     });
 
     // Backend response shape: { success, data: { channels, pagination } }
-    const sources = (sourcesData?.data?.sources ?? sourcesData?.sources ?? []).map(safeSource).filter(Boolean);
-    const channels = (channelsData?.data?.channels ?? []).map(safeChannel).filter(Boolean);
+    // Overrides + hidden filtering now happen server-side (channelStateStore.js
+    // applied inside getChannelsFlat) — what comes back here is already correct.
+    const sources = (sourcesData?.data?.sources ?? sourcesData?.sources ?? []).map((s) => (s ? { ...safeSource(s), id: s.id } : null)).filter(Boolean);
+    // IMPORTANT: safeChannel() is a display-fallback sanitizer (fills in null
+    // name/logo/etc for rendering) — it does NOT guarantee it passes `id`
+    // through untouched. Re-attach the real id explicitly here, or every
+    // Star/Edit/Delete click below silently targets `undefined` instead of
+    // the actual channel (backend still "succeeds" against a bogus id, so it
+    // looks like the button does nothing since nothing visibly changes).
+    const channels = (channelsData?.data?.channels ?? []).map((c) => (c ? { ...safeChannel(c), id: c.id } : null)).filter(Boolean);
     const pagination = channelsData?.data?.pagination ?? null;
 
     // Sources: client-side filter fine, typically < 100 rows
@@ -430,11 +673,11 @@ export default function DashIPTV() {
         return sources.filter((s) => s.name.toLowerCase().includes(q) || s.location.toLowerCase().includes(q));
     }, [sources, sourceQ]);
 
-    // Auto-check stream status for visible channel page
+    // Auto-check stream status for visible channel page (Channels tab) or the active list (Active tab)
     useEffect(() => {
-        if (activeTab !== "channel" || !channels.length) return;
-        queueCheck(channels.map((c) => c.url));
-    }, [activeTab, channels, queueCheck]);
+        if (activeTab === "channel" && channels.length) queueCheck(channels.map((c) => c.url));
+        if (activeTab === "active" && activeChannels.length) queueCheck(activeChannels.map((c) => c.url));
+    }, [activeTab, channels, activeChannels, queueCheck]);
 
     // Category pills — real list from /api/live/categories
     const { data: categoriesData } = useQuery({
@@ -555,16 +798,17 @@ export default function DashIPTV() {
             errorSources: sources.filter((s) => s.status === "error").length,
             totalChannels: pagination?.totalItems ?? 0,
             countries: new Set(channels.map((c) => c.country).filter((c) => c && c !== "Unknown")).size,
+            activeChannels: rawActiveChannels.length,
         }),
-        [sources, channels, pagination],
+        [sources, channels, pagination, rawActiveChannels],
     );
 
-    const isLoading = activeTab === "channel" ? channelsLoading : sourcesLoading;
-    const isFetching = activeTab === "channel" ? channelsFetching : sourcesFetching;
-    const isError = activeTab === "channel" ? channelsError : sourcesError;
-    const errorObj = activeTab === "channel" ? channelsErrObj : sourcesErrObj;
-    const activeSearch = activeTab === "channel" ? channelQ : sourceQ;
-    const setActiveSearch = activeTab === "channel" ? (v) => setChannelQ(v) : (v) => setSourceQ(v);
+    const isLoading = activeTab === "channel" ? channelsLoading : activeTab === "sources" ? sourcesLoading : false;
+    const isFetching = activeTab === "channel" ? channelsFetching : activeTab === "sources" ? sourcesFetching : false;
+    const isError = activeTab === "channel" ? channelsError : activeTab === "sources" ? sourcesError : false;
+    const errorObj = activeTab === "channel" ? channelsErrObj : activeTab === "sources" ? sourcesErrObj : null;
+    const activeSearch = activeTab === "channel" ? channelQ : activeTab === "sources" ? sourceQ : activeQ;
+    const setActiveSearch = activeTab === "channel" ? (v) => setChannelQ(v) : activeTab === "sources" ? (v) => setSourceQ(v) : (v) => setActiveQ(v);
 
     return (
         <div className="space-y-5 max-w-full">
@@ -584,8 +828,8 @@ export default function DashIPTV() {
                 </div>
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => (activeTab === "channel" ? refetchChannels() : refetchSources())}
-                        disabled={isFetching}
+                        onClick={() => (activeTab === "channel" ? refetchChannels() : activeTab === "sources" ? refetchSources() : null)}
+                        disabled={isFetching || activeTab === "active"}
                         title="Refresh"
                         className="w-9 h-9 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer disabled:opacity-40">
                         <RefreshCw size={15} className={isFetching ? "animate-spin" : ""} />
@@ -636,7 +880,8 @@ export default function DashIPTV() {
                 {/* Tabs */}
                 <div className="flex bg-base-300 rounded-md p-0.5 gap-0.5 border border-white/5 overflow-x-auto w-full sm:w-auto" style={{ scrollbarWidth: "none" }}>
                     {[
-                        { key: "channel", label: "Channel", count: metrics.totalChannels, icon: Tv },
+                        { key: "active", label: "Active", count: metrics.activeChannels, icon: Star },
+                        { key: "channel", label: "Channels", count: metrics.totalChannels, icon: Tv },
                         { key: "sources", label: "Sources", count: metrics.totalSources, icon: ListVideo },
                     ].map(({ key, label, count, icon: Icon }) => {
                         const active = activeTab === key;
@@ -662,7 +907,7 @@ export default function DashIPTV() {
                     <Search size={15} className="text-white/35 shrink-0" />
                     <input
                         type="text"
-                        placeholder={activeTab === "channel" ? "Search channels, country, group…" : "Search source name, location…"}
+                        placeholder={activeTab === "channel" ? "Search channels, country, group…" : activeTab === "active" ? "Search active channels…" : "Search source name, location…"}
                         value={activeSearch}
                         onChange={(e) => setActiveSearch(e.target.value)}
                         className="flex-1 w-full bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
@@ -706,112 +951,36 @@ export default function DashIPTV() {
             )}
             <div className="bg-base-200 rounded-xl overflow-hidden border border-white/6 shadow-sm">
                 <div className="overflow-x-auto">
-                    {activeTab === "channel" ? (
-                        <table className="table w-full text-sm">
-                            <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
-                                <tr className="text-[10px] font-bold uppercase tracking-widest text-white/40">
-                                    <th className="pl-4 pr-2 py-3 w-8">#</th>
-                                    <th className="px-3 py-3">Channel</th>
-                                    <th className="px-3 py-3">Country</th>
-                                    <th className="px-3 py-3">Group</th>
-                                    <th className="px-3 py-3">Category</th>
-                                    <th className="px-3 py-3">Working Status</th>
-                                    <th className="pl-3 pr-4 py-3 text-right">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {channelsLoading ? (
-                                    [...Array(8)].map((_, i) => (
-                                        <tr key={i} className="border-b border-white/4 last:border-0">
-                                            {[...Array(7)].map((__, j) => (
-                                                <td key={j} className="px-3 py-3.5">
-                                                    <div className="h-3 w-24 rounded bg-white/5 animate-pulse" />
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))
-                                ) : channels.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={7} className="py-20 text-center">
-                                            <div className="flex flex-col items-center gap-2">
-                                                <Tv size={26} className="text-white/20" />
-                                                <p className="text-sm text-white/50 font-semibold">{channelQ ? "No channels match your search" : "No channels yet"}</p>
-                                                <p className="text-xs text-white/30">{channelQ ? "" : "Add a playlist source to populate channels."}</p>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    channels.map((ch, i) => {
-                                        const index = (channelPage - 1) * PAGE_SIZE + i + 1;
-                                        return (
-                                            <tr key={`${ch.name}-${ch.url}-${i}`} className="group border-b border-white/4 last:border-0 hover:bg-white/[0.03] transition-colors duration-150">
-                                                <td className="pl-4 pr-2 py-3 text-white/55 font-mono text-[10px] tabular-nums">{index}</td>
-                                                <td className="px-3 py-3 min-w-0">
-                                                    <div className="flex items-center gap-2.5">
-                                                        <div className="w-8 h-8 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/8">
-                                                            <img
-                                                                src={ch.logo}
-                                                                alt=""
-                                                                className="w-full h-full object-contain"
-                                                                loading="lazy"
-                                                                onError={(e) => {
-                                                                    // Replace broken logo with initials avatar — never show broken img icon
-                                                                    const initials =
-                                                                        (ch.name || "?")
-                                                                            .trim()
-                                                                            .split(/\s+/)
-                                                                            .slice(0, 2)
-                                                                            .map((w) => w[0])
-                                                                            .join("")
-                                                                            .toUpperCase() || "?";
-                                                                    e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=1e1e2e&color=a6e3a1&bold=true&size=64`;
-                                                                    e.target.onerror = null;
-                                                                }}
-                                                            />
-                                                        </div>
-                                                        <span className="font-semibold text-white/90 text-sm truncate max-w-[12rem] sm:max-w-[18rem]" title={ch.name}>
-                                                            {ch.name}
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <span className="text-xs text-white/70">{ch.country}</span>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <span className="badge badge-sm badge-ghost text-[10px]">{ch.group}</span>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <span className="badge badge-sm badge-ghost text-[10px]">{ch.category}</span>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <WorkingStatusBadge status={getStatus(ch.url)} />
-                                                </td>
-                                                <td className="pl-3 pr-4 py-3 text-right">
-                                                    <div className="flex items-center justify-end gap-0.5">
-                                                        <a
-                                                            href={ch.url}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            title="Play"
-                                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 hover:bg-white/8 hover:text-white transition-colors">
-                                                            <Play size={12} />
-                                                        </a>
-                                                        <CopyIconBtn text={ch.url} title="Copy stream URL" />
-                                                        <CopyIconBtn text={ch.name} title="Copy channel name" />
-                                                        <button
-                                                            onClick={() => recheckOne(ch.url)}
-                                                            title="Recheck status"
-                                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
-                                                            <RotateCw size={12} className={getStatus(ch.url) === "checking" ? "animate-spin" : ""} />
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })
-                                )}
-                            </tbody>
-                        </table>
+                    {activeTab === "active" ? (
+                        <ChannelsTable
+                            list={activeChannels}
+                            loading={activeChannelsLoading}
+                            pageOffset={0}
+                            emptyTitle={activeQ ? "No active channels match your search" : "No channels marked active yet"}
+                            emptySub={activeQ ? "" : "Tap the star on a channel in the Channels tab to pin it here."}
+                            getStatus={getStatus}
+                            recheckOne={recheckOne}
+                            activeIds={activeIds}
+                            onToggleActive={toggleActiveChannel}
+                            onInfo={setInfoChannel}
+                            onEdit={openEditChannelModal}
+                            onHide={setConfirmHideChannel}
+                        />
+                    ) : activeTab === "channel" ? (
+                        <ChannelsTable
+                            list={channels}
+                            loading={channelsLoading}
+                            pageOffset={(channelPage - 1) * PAGE_SIZE}
+                            emptyTitle={channelQ ? "No channels match your search" : "No channels yet"}
+                            emptySub={channelQ ? "" : "Add a playlist source to populate channels."}
+                            getStatus={getStatus}
+                            recheckOne={recheckOne}
+                            activeIds={activeIds}
+                            onToggleActive={toggleActiveChannel}
+                            onInfo={setInfoChannel}
+                            onEdit={openEditChannelModal}
+                            onHide={setConfirmHideChannel}
+                        />
                     ) : (
                         <table className="table w-full text-sm">
                             <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
@@ -1079,28 +1248,158 @@ export default function DashIPTV() {
                 </Modal>
             )}
 
-            {/* Confirm Delete Modal */}
-            {confirmDeleteSource && (
-                <Modal onClose={() => setConfirmDeleteSource(null)} title="Delete Source" icon={Trash2}>
-                    <p className="text-sm text-white/75">
-                        Delete <span className="font-bold text-white">{confirmDeleteSource.name}</span>? This removes the source and all its channels. This action cannot be undone.
-                    </p>
+            {/* Channel Info Modal */}
+            {infoChannel && (
+                <Modal onClose={() => setInfoChannel(null)} title="Channel Info" icon={Info}>
+                    <div className="space-y-3 text-sm">
+                        {[
+                            ["Name", infoChannel.name],
+                            ["Country", infoChannel.country],
+                            ["Group", infoChannel.group],
+                            ["Category", infoChannel.category],
+                            ["Working Status", getStatus(infoChannel.url)],
+                            ["Stream URL", infoChannel.url],
+                        ].map(([label, value]) => (
+                            <div key={label} className="space-y-0.5">
+                                <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">{label}</p>
+                                    {label === "Stream URL" && <CopyIconBtn text={value} title="Copy stream URL" />}
+                                </div>
+                                <p className="text-sm text-white/85 break-all">{value ?? "—"}</p>
+                            </div>
+                        ))}
+                    </div>
+                </Modal>
+            )}
+
+            {/* Edit Channel Modal — saved to backend (channel-state.json) */}
+            {editChannel && (
+                <Modal onClose={closeEditChannelModal} title="Edit Channel" icon={Pencil}>
+                    {editChannelMutation.error && (
+                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                            <AlertTriangle size={13} className="shrink-0" />
+                            <span>{editChannelMutation.error?.response?.data?.message || editChannelMutation.error?.message}</span>
+                        </div>
+                    )}
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Channel Name</label>
+                        <input
+                            type="text"
+                            value={editChName}
+                            onChange={(e) => setEditChName(e.target.value)}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                        />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Category</label>
+                        <input
+                            type="text"
+                            value={editChCategory}
+                            onChange={(e) => setEditChCategory(e.target.value)}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                        />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Country</label>
+                        <input
+                            type="text"
+                            value={editChCountry}
+                            onChange={(e) => setEditChCountry(e.target.value)}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                        />
+                    </div>
                     <div className="flex justify-end gap-2 pt-1">
                         <button
-                            onClick={() => setConfirmDeleteSource(null)}
+                            onClick={closeEditChannelModal}
                             className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
                             Cancel
                         </button>
                         <button
-                            onClick={() => deleteMutation.mutate(confirmDeleteSource.id)}
-                            disabled={deleteMutation.isPending}
+                            onClick={saveChannelEdit}
+                            disabled={!editChName.trim() || editChannelMutation.isPending}
+                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
+                            {editChannelMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                            {editChannelMutation.isPending ? "Saving…" : "Save Changes"}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Confirm Delete Channel Modal */}
+            {confirmHideChannel && (
+                <Modal onClose={() => setConfirmHideChannel(null)} title="Delete Channel" icon={Trash2}>
+                    <p className="text-sm text-white/75">
+                        Remove <span className="font-bold text-white">{confirmHideChannel.name}</span>? This hides it everywhere (player and dashboard) — the source playlist file itself is unchanged,
+                        so it comes back only if you restore it or the source is deleted and re-added.
+                    </p>
+                    {hideChannelMutation.error && (
+                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                            <AlertTriangle size={13} className="shrink-0" />
+                            <span>{hideChannelMutation.error?.response?.data?.message || hideChannelMutation.error?.message}</span>
+                        </div>
+                    )}
+                    <div className="flex justify-end gap-2 pt-1">
+                        <button
+                            onClick={() => setConfirmHideChannel(null)}
+                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
+                            Cancel
+                        </button>
+                        <button
+                            onClick={() => hideChannel(confirmHideChannel)}
+                            disabled={hideChannelMutation.isPending}
                             className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {deleteMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                            {deleteMutation.isPending ? "Deleting…" : "Delete"}
+                            {hideChannelMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                            {hideChannelMutation.isPending ? "Deleting…" : "Delete"}
                         </button>
                     </div>
                 </Modal>
             )}
         </div>
+    );
+}
+
+// ─── Error boundary — forces any silent render crash onto the screen ──────────
+// If Star/Edit/Delete "do nothing" and nothing shows in console, a crash
+// during render is the other likely cause (a bad prop, undefined.something,
+// etc). This makes that impossible to miss: instead of a blank/silent page,
+// the actual error + component stack render right here, in the UI, no
+// DevTools required.
+class DashIPTVErrorBoundary extends Component {
+    constructor(props) {
+        super(props);
+        this.state = { error: null, info: null };
+    }
+    static getDerivedStateFromError(error) {
+        return { error };
+    }
+    componentDidCatch(error, info) {
+        this.setState({ info });
+        console.error("[DashIPTV] Render crash:", error, info);
+    }
+    render() {
+        if (this.state.error) {
+            return (
+                <div className="p-6 space-y-3 bg-error/10 border border-error/30 rounded-2xl m-4 font-mono text-sm">
+                    <p className="text-error font-bold text-base">DashIPTV crashed — copy everything below and send it back:</p>
+                    <pre className="whitespace-pre-wrap break-all text-error/90 bg-black/30 rounded-lg p-3">{this.state.error.message}</pre>
+                    <pre className="whitespace-pre-wrap break-all text-white/50 text-xs bg-black/30 rounded-lg p-3 max-h-64 overflow-auto">
+                        {this.state.error.stack}
+                        {this.state.info?.componentStack}
+                    </pre>
+                    <button onClick={() => this.setState({ error: null, info: null })} className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content border-none cursor-pointer">
+                        Try again
+                    </button>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+export default function DashIPTV() {
+    return (
+        <DashIPTVErrorBoundary>
+            <DashIPTVInner />
+        </DashIPTVErrorBoundary>
     );
 }

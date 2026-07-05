@@ -18,6 +18,7 @@ const {
 } = require("../utils/iptvStore");
 const { parsePlaylist, detectFormat } = require("../utils/iptvParser");
 const iptvOrgDb = require("../utils/iptvOrgDb");
+const channelStateStore = require("../utils/channelStateStore");
 
 // Browser UA → many CDN/raw hosts drop no-UA requests → surfaces as AbortError
 const BROWSER_HEADERS = {
@@ -306,7 +307,7 @@ function getChannels(req, res) {
         const q = (req.query.q || "").toLowerCase().trim();
         const category = (req.query.category || "").toLowerCase().trim();
 
-        let rows = buildFlatRows();
+        let rows = channelStateStore.applyChannelState(buildFlatRows());
 
         if (q) {
             rows = rows.filter((c) => (c.name || "").toLowerCase().includes(q) || (c.group || "").toLowerCase().includes(q) || (c.category || "").toLowerCase().includes(q));
@@ -339,7 +340,7 @@ function getChannels(req, res) {
 // anything real to show.
 function getCategoriesList(req, res) {
     try {
-        const rows = buildFlatRows();
+        const rows = channelStateStore.applyChannelState(buildFlatRows());
         const counts = new Map();
         for (const c of rows) {
             const name = c.category || "Uncategorized";
@@ -365,7 +366,7 @@ function getChannelsFlat(req, res) {
         const sort = ["index", "name", "country", "category", "group"].includes(req.query.sort) ? req.query.sort : "index";
         const order = req.query.order === "desc" ? -1 : 1;
 
-        let flat = buildFlatRows().slice();
+        let flat = channelStateStore.applyChannelState(buildFlatRows());
 
         if (q) {
             flat = flat.filter(
@@ -610,6 +611,106 @@ async function refreshIptvOrgDb(req, res) {
     }
 }
 
+// ─── Channel state — Active / Edit / Delete (DashIPTV.jsx) ───────────────────
+// Backed by channelStateStore.js (server/data/channel-state.json). Channel
+// rows themselves are still derived from parsed playlists — this only stores
+// the small admin overlay (active pin, name/category/country override, hidden).
+
+// GET /api/live/channel-state — raw state, mostly for debugging/admin UI init
+function getChannelState(req, res) {
+    try {
+        return ok(res, channelStateStore.getState());
+    } catch (err) {
+        return fail(res, err.message);
+    }
+}
+
+// GET /api/live/channels/active — full channel objects currently pinned active
+function getActiveChannels(req, res) {
+    try {
+        const { active, overrides } = channelStateStore.getState();
+        const channels = Object.values(active).map((ch) => (overrides[ch.id] ? { ...ch, ...overrides[ch.id] } : ch));
+        return ok(res, { channels });
+    } catch (err) {
+        console.error("[IPTV] getActiveChannels error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// POST /api/live/channels/:id/active — body is the channel object snapshot to pin
+function markChannelActive(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        const snapshot = req.body && typeof req.body === "object" ? req.body : {};
+        const saved = channelStateStore.setActive(id, snapshot);
+        return ok(res, { channel: saved }, 201);
+    } catch (err) {
+        console.error("[IPTV] markChannelActive error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// DELETE /api/live/channels/:id/active — unpin from Active tab
+function unmarkChannelActive(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        const removed = channelStateStore.unsetActive(id);
+        if (!removed) return fail(res, "Channel was not marked active", 404);
+        return ok(res, { id, message: "Removed from Active" });
+    } catch (err) {
+        console.error("[IPTV] unmarkChannelActive error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// PATCH /api/live/channels/:id — body: { name?, category?, country? }
+function updateChannel(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        const { name, category, country } = req.body || {};
+        const patch = {};
+        if (name !== undefined && name.trim()) patch.name = name.trim();
+        if (category !== undefined) patch.category = category.trim();
+        if (country !== undefined) patch.country = country.trim();
+        if (Object.keys(patch).length === 0) return fail(res, "Nothing to update", 400);
+        const saved = channelStateStore.setOverride(id, patch);
+        return ok(res, { override: saved });
+    } catch (err) {
+        console.error("[IPTV] updateChannel error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// DELETE /api/live/channels/:id — hide channel everywhere (player + dashboard)
+function deleteChannel(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        channelStateStore.setHidden(id);
+        return ok(res, { id, message: "Channel hidden" });
+    } catch (err) {
+        console.error("[IPTV] deleteChannel error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// POST /api/live/channels/:id/restore — undo a hide
+function restoreChannel(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        const restored = channelStateStore.unsetHidden(id);
+        if (!restored) return fail(res, "Channel was not hidden", 404);
+        return ok(res, { id, message: "Channel restored" });
+    } catch (err) {
+        console.error("[IPTV] restoreChannel error:", err);
+        return fail(res, err.message);
+    }
+}
+
 module.exports = {
     listSources,
     addUrlSource,
@@ -624,4 +725,12 @@ module.exports = {
     startBulkCheck,
     getBulkCheckStatus,
     refreshIptvOrgDb,
+    // Channel state — Active/Edit/Delete
+    getChannelState,
+    getActiveChannels,
+    markChannelActive,
+    unmarkChannelActive,
+    updateChannel,
+    deleteChannel,
+    restoreChannel,
 };

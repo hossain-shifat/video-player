@@ -69,6 +69,78 @@ export const BUILTIN_THEMES = [
             accent: "oklch(58% 0.2 20)",
         },
     },
+    {
+        id: "noir",
+        label: "Noir",
+        description: "Near-black with warm gold accent",
+        colorScheme: "dark",
+        custom: false,
+        preview: {
+            base: "oklch(10% 0 0)",
+            primary: "oklch(72% 0.18 75)",
+            accent: "oklch(78% 0.15 90)",
+        },
+    },
+    {
+        id: "ocean-dark",
+        label: "Ocean Dark",
+        description: "Deep teal and blue tones",
+        colorScheme: "dark",
+        custom: false,
+        preview: {
+            base: "oklch(13% 0.03 220)",
+            primary: "oklch(62% 0.22 195)",
+            accent: "oklch(72% 0.2 160)",
+        },
+    },
+    {
+        id: "forest-dark",
+        label: "Forest Dark",
+        description: "Deep greens, earthy feel",
+        colorScheme: "dark",
+        custom: false,
+        preview: {
+            base: "oklch(11% 0.02 145)",
+            primary: "oklch(62% 0.22 145)",
+            accent: "oklch(72% 0.2 80)",
+        },
+    },
+    {
+        id: "parchment",
+        label: "Parchment",
+        description: "Warm cream and amber tones",
+        colorScheme: "light",
+        custom: false,
+        preview: {
+            base: "oklch(97% 0.025 85)",
+            primary: "oklch(48% 0.18 35)",
+            accent: "oklch(55% 0.2 145)",
+        },
+    },
+    {
+        id: "arctic",
+        label: "Arctic",
+        description: "Crisp cool white-blue, icy feel",
+        colorScheme: "light",
+        custom: false,
+        preview: {
+            base: "oklch(99% 0.005 210)",
+            primary: "oklch(52% 0.2 220)",
+            accent: "oklch(60% 0.18 160)",
+        },
+    },
+    {
+        id: "rose-light",
+        label: "Rose Light",
+        description: "Soft pink-tinted, warm and gentle",
+        colorScheme: "light",
+        custom: false,
+        preview: {
+            base: "oklch(99% 0.01 10)",
+            primary: "oklch(52% 0.22 10)",
+            accent: "oklch(62% 0.2 280)",
+        },
+    },
 ];
 
 // ─── Font families ────────────────────────────────────────────────────────────
@@ -199,15 +271,15 @@ function applyTypography(fontFamily, fontScale, uiScale, density, lineHeight) {
 
 function applyLayout(contentWidth, sidebarWidth) {
     const root = document.documentElement;
-    
+
     // Map contentWidth to max-width value
     const widthMap = {
         narrow: "800px",
         default: "1200px",
         wide: "1600px",
-        full: "100%"
+        full: "100%",
     };
-    
+
     root.style.setProperty("--flux-content-width", widthMap[contentWidth] || "1200px");
     root.style.setProperty("--flux-sidebar-width", `${sidebarWidth}px`);
 }

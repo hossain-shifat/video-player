@@ -284,6 +284,29 @@ function LibraryMediaCard({ item, onClose }) {
     );
 }
 
+// ─── Fact row — small icon + label pair used in Overview tab ─────────────────
+function FactRow({ icon: Icon, children }) {
+    return (
+        <div className="flex items-start gap-2.5 py-1.5">
+            <Icon size={13} style={{ color: "var(--color-primary)" }} className="shrink-0 mt-0.5" />
+            <div className="text-[12.5px] text-white/75 leading-snug min-w-0">{children}</div>
+        </div>
+    );
+}
+
+// ─── Tab button ────────────────────────────────────────────────────────────────
+function TabButton({ active, onClick, children }) {
+    return (
+        <button
+            onClick={onClick}
+            className={`relative px-3.5 sm:px-4 py-2.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors cursor-pointer
+                        ${active ? "text-white" : "text-white/45 hover:text-white/75"}`}>
+            {children}
+            {active && <span className="absolute left-3 right-3 -bottom-px h-[2px] rounded-full" style={{ background: "var(--color-primary)" }} />}
+        </button>
+    );
+}
+
 // ─── Person Detail Modal ──────────────────────────────────────────────────────
 function PersonModal({ member, currentMediaId, movies, series, anime, onClose }) {
     const [bio, setBio] = useState(null);
@@ -294,7 +317,7 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
 
     const libraryItems = findInLibrary(member, movies, series, anime, currentMediaId);
 
-    // Lock body scroll
+    // Lock body scroll while modal is open
     useEffect(() => {
         document.body.style.overflow = "hidden";
         return () => {
@@ -302,7 +325,7 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
         };
     }, []);
 
-    // Fetch bio
+    // Fetch full TMDB bio
     useEffect(() => {
         let cancelled = false;
         setLoadingBio(true);
@@ -323,7 +346,7 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
         };
     }, [member.tmdbPersonId, member.name]);
 
-    // Escape close
+    // Escape to close
     useEffect(() => {
         const h = (e) => {
             if (e.key === "Escape") onClose();
@@ -336,207 +359,197 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
         if (e.target === overlayRef.current) onClose();
     };
 
-    const photo = member.photo || (bio?.profile_path ? `${IMG_BASE}/w300${bio.profile_path}` : null);
+    const photo = member.photo || (bio?.profile_path ? `${IMG_BASE}/w400${bio.profile_path}` : null);
+    const backdropPhoto = member.photo || (bio?.profile_path ? `${IMG_BASE}/w780${bio.profile_path}` : null);
     const age = bio ? calcAge(bio.birthday, bio.deathday) : null;
     const biographyText = bio?.biography || "";
+    const noScrollbar = { scrollbarWidth: "none", msOverflowStyle: "none" };
+
+    // Single quick-fact line — icon + value, used in the sidebar
+    const FactRow = ({ icon: Icon, muted, children }) => (
+        <div className="flex items-start gap-2.5 py-1.5">
+            <Icon size={13} className="shrink-0 mt-0.5" style={{ color: muted ? "rgba(255,255,255,0.3)" : "var(--color-primary)" }} />
+            <span className={`text-[12px] leading-snug ${muted ? "text-white/45" : "text-white/75"}`}>{children}</span>
+        </div>
+    );
 
     const modal = (
-        <>
+        <div
+            ref={overlayRef}
+            onClick={handleOverlayClick}
+            className="fixed inset-0 flex items-center justify-center p-3 sm:p-4"
+            style={{ zIndex: 99998, backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
             <div
-                ref={overlayRef}
-                onClick={handleOverlayClick}
-                className="fixed inset-0 flex items-center justify-center p-3 sm:p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-label={member.name}
+                className="relative w-full max-w-lg sm:max-w-2xl lg:max-w-4xl rounded-2xl shadow-2xl flex flex-col overflow-hidden"
                 style={{
-                    zIndex: 99998,
-                    background: "rgba(0,0,0,0.80)",
-                    backdropFilter: "blur(20px)",
-                    WebkitBackdropFilter: "blur(20px)",
+                    background: "oklch(14% 0.01 260 / 0.97)",
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    height: "min(88dvh, 720px)",
+                    maxHeight: "92dvh",
+                    zIndex: 99999,
                 }}>
-                <div
-                    className="relative w-full max-w-3xl rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-                    style={{
-                        background: "oklch(14% 0.01 260 / 0.97)",
-                        border: "1px solid rgba(255,255,255,0.10)",
-                        height: "min(88vh, 820px)",
-                        maxHeight: "90svh",
-                        zIndex: 99999,
-                    }}>
-                    {/* Close btn — cursor-pointer added */}
-                    <button
-                        onClick={onClose}
-                        className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-white/15 cursor-pointer"
-                        style={{ background: "rgba(255,255,255,0.08)" }}>
-                        <X size={15} className="text-white/90" />
-                    </button>
+                {/* Close */}
+                <button
+                    onClick={onClose}
+                    className="absolute top-3 right-3 z-30 w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-white/15 cursor-pointer"
+                    style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)" }}
+                    aria-label="Close">
+                    <X size={15} className="text-white/90" />
+                </button>
 
-                    {/* Inner scroll */}
-                    <div className="flex-1 overflow-y-auto overflow-x-hidden" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                        {/* HEADER */}
-                        <div className="relative">
-                            {photo && !imgErr && (
-                                <div className="absolute inset-0 overflow-hidden rounded-t-2xl">
-                                    <img src={photo} alt="" className="w-full h-full object-cover scale-110" style={{ filter: "blur(24px) brightness(0.3)", transform: "scale(1.15)" }} />
-                                </div>
+                {/*
+                 * Body layout:
+                 *  - mobile/tablet (<lg): one column, whole panel scrolls together
+                 *  - desktop (lg+): fixed-height split view — identity sidebar and
+                 *    biography/filmography each scroll independently, so the modal
+                 *    itself never has to grow past its clamped height.
+                 */}
+                <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden lg:grid lg:grid-cols-[280px_1fr]" style={noScrollbar}>
+                    {/* ── Sidebar: photo, name, quick facts ── */}
+                    <aside className="relative shrink-0 border-b lg:border-b-0 lg:border-r border-white/10 lg:h-full lg:overflow-y-auto" style={noScrollbar}>
+                        {/* Banner */}
+                        {/* <div className="relative h-24 sm:h-28">
+                            {backdropPhoto && !imgErr ? (
+                                <img src={backdropPhoto} alt="" className="w-full h-full object-cover" style={{ filter: "blur(20px) brightness(0.35)", transform: "scale(1.15)" }} />
+                            ) : (
+                                <div className="w-full h-full" style={{ background: "linear-gradient(135deg, oklch(22% 0.05 260), oklch(12% 0.02 260))" }} />
                             )}
-                            {(!photo || imgErr) && <div className="absolute inset-0 rounded-t-2xl" style={{ background: "linear-gradient(135deg, oklch(20% 0.04 260), oklch(12% 0.02 260))" }} />}
+                            <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom, transparent, oklch(14% 0.01 260 / 0.92))" }} />
+                        </div> */}
 
-                            <div className="relative flex gap-5 sm:gap-6 p-5 pb-5 pt-6">
-                                {/* Photo */}
-                                <div className="shrink-0 w-28 sm:w-36 rounded-xl overflow-hidden ring-2 ring-white/20 shadow-2xl" style={{ aspectRatio: "2/3" }}>
-                                    {photo && !imgErr ? (
-                                        <img src={photo} alt={member.name} className="w-full h-full object-cover" onError={() => setImgErr(true)} />
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center" style={{ background: "oklch(20% 0.02 260)" }}>
-                                            <Users size={36} className="text-white/20" />
-                                        </div>
-                                    )}
-                                </div>
+                        <div className="px-5 mt-12 sm:mt-14 pb-5 flex flex-col items-center text-center">
+                            {/* Photo */}
+                            <div
+                                className="w-50 md:w-60 h-70 sm:w-28 rounded-2xl overflow-hidden shadow-2xl"
+                                style={{ aspectRatio: "2/3", boxShadow: "0 0 0 4px oklch(14% 0.01 260), 0 12px 28px rgba(0,0,0,0.55)" }}>
+                                {photo && !imgErr ? (
+                                    <img src={photo} alt={member.name} className="w-full h-full object-cover" onError={() => setImgErr(true)} />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center" style={{ background: "oklch(20% 0.02 260)" }}>
+                                        <Users size={28} className="text-white/20" />
+                                    </div>
+                                )}
+                            </div>
 
-                                {/* Info */}
-                                <div className="flex-1 min-w-0 pt-1">
-                                    <h3 className="text-lg sm:text-2xl font-bold text-white leading-tight mb-1.5 pr-10">{member.name}</h3>
+                            {/* Name */}
+                            <h3 className="text-base sm:text-lg font-bold text-white leading-tight mt-3">{member.name}</h3>
 
-                                    {/* Role badges */}
-                                    <div className="flex flex-wrap gap-1.5 mb-3">
-                                        {member.character && (
-                                            <span
-                                                className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full"
-                                                style={{
-                                                    background: "color-mix(in oklch, var(--color-primary) 20%, transparent)",
-                                                    color: "var(--color-primary)",
-                                                    border: "1px solid color-mix(in oklch, var(--color-primary) 35%, transparent)",
-                                                }}>
-                                                as {member.character}
-                                            </span>
+                            {/* Role badges */}
+                            <div className="flex flex-wrap justify-center gap-1.5 mt-2">
+                                {member.character && (
+                                    <span
+                                        className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full"
+                                        style={{
+                                            background: "color-mix(in oklch, var(--color-primary) 20%, transparent)",
+                                            color: "var(--color-primary)",
+                                            border: "1px solid color-mix(in oklch, var(--color-primary) 35%, transparent)",
+                                        }}>
+                                        as {member.character}
+                                    </span>
+                                )}
+                                {member.job && (
+                                    <span
+                                        className="text-[10px] font-medium px-2.5 py-0.5 rounded-full text-white/70"
+                                        style={{ background: "rgba(255,255,255,0.10)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                                        {member.job}
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Quick facts */}
+                            <div className="w-full mt-4 pt-4 text-left" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                                {loadingBio && (
+                                    <div className="space-y-2.5">
+                                        {[0.8, 0.6, 0.7].map((w, i) => (
+                                            <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
+                                        ))}
+                                    </div>
+                                )}
+
+                                {!loadingBio && bio && (
+                                    <div>
+                                        {bio.known_for_department && <FactRow icon={Star}>{bio.known_for_department}</FactRow>}
+                                        {bio.gender > 0 && <FactRow icon={Users}>{genderLabel(bio.gender)}</FactRow>}
+                                        {bio.birthday && (
+                                            <FactRow icon={Calendar}>
+                                                {formatDate(bio.birthday)}
+                                                {age !== null && <span className="text-white/45"> · {bio.deathday ? `died at ${age}` : `${age} yrs old`}</span>}
+                                            </FactRow>
                                         )}
-                                        {member.job && (
-                                            <span
-                                                className="text-[11px] font-medium px-2.5 py-0.5 rounded-full text-white/70"
-                                                style={{ background: "rgba(255,255,255,0.10)", border: "1px solid rgba(255,255,255,0.12)" }}>
-                                                {member.job}
-                                            </span>
+                                        {bio.deathday && (
+                                            <FactRow icon={Calendar} muted>
+                                                Died {formatDate(bio.deathday)}
+                                            </FactRow>
+                                        )}
+                                        {bio.place_of_birth && <FactRow icon={MapPin}>{bio.place_of_birth}</FactRow>}
+                                        {bio.popularity != null && (
+                                            <FactRow icon={TrendingUp}>
+                                                Popularity <span className="text-white/90 font-medium">{bio.popularity.toFixed(1)}</span>
+                                            </FactRow>
+                                        )}
+                                        {bio.homepage && (
+                                            <FactRow icon={Globe}>
+                                                <a
+                                                    href={bio.homepage}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-white/90 transition-colors">
+                                                    Official site <ExternalLink size={9} />
+                                                </a>
+                                            </FactRow>
                                         )}
                                     </div>
+                                )}
 
-                                    {/* Loading shimmer */}
-                                    {loadingBio && (
-                                        <div className="space-y-2">
-                                            <div className="h-3 w-2/3 rounded-md animate-pulse" style={{ background: "rgba(255,255,255,0.10)" }} />
-                                            <div className="h-3 w-1/2 rounded-md animate-pulse" style={{ background: "rgba(255,255,255,0.08)" }} />
-                                            <div className="h-3 w-3/4 rounded-md animate-pulse" style={{ background: "rgba(255,255,255,0.06)" }} />
-                                        </div>
-                                    )}
+                                {!loadingBio && bio?.also_known_as?.length > 0 && (
+                                    <div className="mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-white/30 mb-1">Also known as</p>
+                                        <p className="text-[11px] text-white/50 leading-relaxed line-clamp-3">{bio.also_known_as.slice(0, 5).join(" · ")}</p>
+                                    </div>
+                                )}
 
-                                    {/* Person meta */}
-                                    {!loadingBio && bio && (
-                                        <div className="grid grid-cols-1 gap-1.5 text-[12px] text-white/70">
-                                            {bio.known_for_department && (
-                                                <div className="flex items-center gap-2">
-                                                    <Star size={11} style={{ color: "var(--color-primary)" }} className="shrink-0" />
-                                                    <span className="text-white/90 font-medium">{bio.known_for_department}</span>
-                                                </div>
-                                            )}
-                                            {bio.gender > 0 && (
-                                                <div className="flex items-center gap-2">
-                                                    <Users size={11} style={{ color: "var(--color-primary)" }} className="shrink-0" />
-                                                    <span>{genderLabel(bio.gender)}</span>
-                                                </div>
-                                            )}
-                                            {bio.birthday && (
-                                                <div className="flex items-center gap-2">
-                                                    <Calendar size={11} style={{ color: "var(--color-primary)" }} className="shrink-0" />
-                                                    <span>
-                                                        {formatDate(bio.birthday)}
-                                                        {age !== null && <span className="text-white/45 ml-1">{bio.deathday ? `· died age ${age}` : `· ${age} yrs`}</span>}
-                                                    </span>
-                                                </div>
-                                            )}
-                                            {bio.deathday && (
-                                                <div className="flex items-center gap-2">
-                                                    <Calendar size={11} className="shrink-0 text-white/30" />
-                                                    <span className="text-white/45">Died {formatDate(bio.deathday)}</span>
-                                                </div>
-                                            )}
-                                            {bio.place_of_birth && (
-                                                <div className="flex items-start gap-2">
-                                                    <MapPin size={11} style={{ color: "var(--color-primary)" }} className="shrink-0 mt-0.5" />
-                                                    <span className="line-clamp-2">{bio.place_of_birth}</span>
-                                                </div>
-                                            )}
-                                            {bio.popularity != null && (
-                                                <div className="flex items-center gap-2">
-                                                    <TrendingUp size={11} style={{ color: "var(--color-primary)" }} className="shrink-0" />
-                                                    <span>
-                                                        Popularity <span className="text-white/90 font-medium">{bio.popularity.toFixed(1)}</span>
-                                                    </span>
-                                                </div>
-                                            )}
-                                            {bio.homepage && (
-                                                <div className="flex items-center gap-2">
-                                                    <Globe size={11} style={{ color: "var(--color-primary)" }} className="shrink-0" />
-                                                    <a
-                                                        href={bio.homepage}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        className="flex items-center gap-1 underline underline-offset-2 hover:text-white/90 transition-colors">
-                                                        Official site <ExternalLink size={9} />
-                                                    </a>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* Also known as */}
-                                    {!loadingBio && bio?.also_known_as?.length > 0 && (
-                                        <div className="mt-2">
-                                            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-1">Also known as</p>
-                                            <p className="text-[11px] text-white/55 leading-relaxed line-clamp-2">{bio.also_known_as.slice(0, 5).join(" · ")}</p>
-                                        </div>
-                                    )}
-
-                                    {!loadingBio && !bio && <p className="text-[12px] text-white/35 italic">No details available</p>}
-                                </div>
+                                {!loadingBio && !bio && <p className="text-[12px] text-white/35 italic">No details available</p>}
                             </div>
                         </div>
+                    </aside>
 
-                        {/* ── Biography — always scrollable, no Read More button ── */}
+                    {/* ── Main: biography + filmography ── */}
+                    <main className="lg:h-full lg:overflow-y-auto" style={noScrollbar}>
+                        {/* Biography */}
                         {(loadingBio || biographyText) && (
-                            <>
-                                <div className="mx-5 h-px" style={{ background: "rgba(255,255,255,0.07)" }} />
-                                <div className="px-5 py-4">
-                                    <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-2">Biography</p>
-
-                                    {loadingBio ? (
-                                        <div className="space-y-2">
-                                            {[1, 0.9, 1, 0.7, 0.85].map((w, i) => (
-                                                <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="relative">
-                                            <div
-                                                className={`text-[12px] sm:text-[13px] text-white/75 leading-relaxed ${!bioExpanded ? "line-clamp-4 overflow-hidden" : "overflow-y-auto"}`}
-                                                style={bioExpanded ? { maxHeight: "200px", scrollbarWidth: "none", msOverflowStyle: "none" } : {}}>
-                                                {biographyText}
-                                            </div>
-                                            {biographyText.length > 200 && (
-                                                <button onClick={() => setBioExpanded(!bioExpanded)} className="text-[11px] font-semibold text-primary hover:text-primary/80 mt-1 cursor-pointer">
-                                                    {bioExpanded ? "Show less" : "Read more"}
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            </>
+                            <div className="px-5 py-5">
+                                <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-2">Biography</p>
+                                {loadingBio ? (
+                                    <div className="space-y-2">
+                                        {[1, 0.9, 1, 0.7, 0.85].map((w, i) => (
+                                            <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="relative">
+                                        <div className={`text-[12.5px] sm:text-[13px] text-white/75 leading-relaxed ${!bioExpanded ? "line-clamp-5 overflow-hidden" : ""}`}>{biographyText}</div>
+                                        {biographyText.length > 260 && (
+                                            <button onClick={() => setBioExpanded(!bioExpanded)} className="text-[11px] font-semibold text-primary hover:text-primary/80 mt-1.5 cursor-pointer">
+                                                {bioExpanded ? "Show less" : "Read more"}
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         )}
 
-                        {/* ── Also in your library ── */}
+                        {/* Filmography — everything else this person appears in, from the local library */}
                         {libraryItems.length > 0 && (
                             <>
                                 <div className="mx-5 h-px" style={{ background: "rgba(255,255,255,0.07)" }} />
-                                <div className="px-5 py-4 pb-6">
-                                    <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-3">Also in your library</p>
+                                <div className="px-5 py-5">
+                                    <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-3">
+                                        In your library <span className="text-white/20">· {libraryItems.length}</span>
+                                    </p>
                                     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))" }}>
                                         {libraryItems.map((libItem) => (
                                             <LibraryMediaCard key={libItem.id} item={libItem} onClose={onClose} />
@@ -546,11 +559,15 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
                             </>
                         )}
 
-                        {libraryItems.length === 0 && <div className="pb-5" />}
-                    </div>
+                        {!loadingBio && libraryItems.length === 0 && (
+                            <div className="px-5 pb-5">
+                                <p className="text-[12px] text-white/30 italic">Nothing else by {member.name.split(" ")[0]} in your library yet.</p>
+                            </div>
+                        )}
+                    </main>
                 </div>
             </div>
-        </>
+        </div>
     );
 
     return createPortal(modal, document.body);

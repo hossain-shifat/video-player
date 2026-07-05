@@ -674,8 +674,6 @@ function DecoderLockedNotice({ onSwitch }) {
     );
 }
 
-const MOCK_AUDIO_TRACKS = ["HDHub4u.Ms - Hindi", "HDHub4u.Ms - English"];
-
 function RadioRow({ label, checked, onClick }) {
     return (
         <button
@@ -751,10 +749,25 @@ function AudioTrackPanel({ open, onClose, isMobile, controlsPhase }) {
     const { state, actions } = usePlayerState();
     return (
         <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Audio Track">
-            {MOCK_AUDIO_TRACKS.map((track) => (
-                <RadioRow key={track} label={track} checked={state.mockAudioTrack === track} onClick={() => actions.setMockAudioTrack(track)} />
-            ))}
-            <RadioRow label="Disable" checked={state.mockAudioTrack === "disable"} onClick={() => actions.setMockAudioTrack("disable")} />
+            {state.audioTracks.length === 0 ? (
+                <DisabledRow label="No alternate audio tracks for this file" />
+            ) : (
+                state.audioTracks.map((track) => (
+                    <RadioRow
+                        key={track.index}
+                        label={track.name}
+                        checked={!state.muted && state.activeAudioTrack === track.index}
+                        onClick={() => {
+                            actions.setMuted(false);
+                            actions.setActiveAudioTrack(track.index);
+                        }}
+                    />
+                ))
+            )}
+            {/* "Disable" is the closest real equivalent to muting — HLS.js
+                has no concept of "no audio track", only switching between
+                whatever tracks the manifest provides. */}
+            <RadioRow label="Disable" checked={state.muted} onClick={() => actions.setMuted(true)} />
             <CheckboxRow label="Use SW audio decoder" checked={state.useSwAudioDecoder} onClick={() => actions.toggleSwAudioDecoder()} />
             <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "8px 0" }} />
             {/* Backend doesn't support these yet — shown disabled, matching
@@ -1341,29 +1354,9 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
         speed: {
             onClick: () => toggleMenu("speedSlider"),
             active: state.playbackSpeed !== 1,
-            // Plain "×" character instead of a separate Lucide <X> icon —
-            // a standalone icon next to the number had a different visual
-            // weight than the text (icon strokeWidth vs font-weight don't
-            // match up), and the fixed icon size didn't shrink for longer
-            // values like "0.25×"/"1.75×", causing them to overflow the
-            // 40px circular icon background. Single text run + fontSize
-            // scaled down for longer values fixes both at once.
             iconOverride: (
-                <span
-                    style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        // Shrink for longer numbers (e.g. "0.25", "1.75")
-                        // so the whole "<value>×" string always fits
-                        // inside the 40px circle without clipping.
-                        fontSize: String(state.playbackSpeed).length > 1 ? 11 : 14,
-                        fontWeight: 700,
-                        color: "#fff",
-                        lineHeight: 1,
-                        whiteSpace: "nowrap",
-                    }}>
-                    {state.playbackSpeed}×
+                <span style={{ display: "flex", alignItems: "center", fontSize: 15, fontWeight: 600, color: "#fff" }}>
+                    {state.playbackSpeed} <X size={14} strokeWidth={2.9} />{" "}
                 </span>
             ),
         },
@@ -1692,9 +1685,11 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         )}
 
                         {/* ── 2. AUDIO TRACK button (music-note icon) ──────────────────
-                            Opens <AudioTrackPanel> — currently a MOCK UI (backend
-                            doesn't support real multi-track audio yet). Swap
-                            MOCK_AUDIO_TRACKS for state.audioTracks once it does. */}
+                            Opens <AudioTrackPanel> — reads real audio tracks from
+                            state.audioTracks (populated by VideoCore.jsx from
+                            hls.audioTracks on MANIFEST_PARSED). Switching tracks
+                            is instant — HLS.js handles it via hls.audioTrack,
+                            no new request to the server, no session restart. */}
                         <div style={{ position: "relative" }}>
                             <button onClick={() => toggleMenu("audioTrack")} className="flux-icon-btn p-2" aria-label="Audio track">
                                 <MdMusicNote size={iconTiny} />

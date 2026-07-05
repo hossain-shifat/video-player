@@ -16,9 +16,14 @@ const {
     getCategoriesList,
     getChannelsFlat,
     checkStreamStatus,
-    startBulkCheck,
-    getBulkCheckStatus,
     refreshIptvOrgDb,
+    getChannelState,
+    getActiveChannels,
+    markChannelActive,
+    unmarkChannelActive,
+    updateChannel,
+    deleteChannel,
+    restoreChannel,
 } = require("../controllers/liveController");
 
 const { authenticateJWT } = require("../auth/middleware/authenticateJWT");
@@ -74,12 +79,20 @@ router.get("/channels/flat", ...adminOnly, getChannelsFlat); // GET /api/live/ch
 // Single stream health check — admin dashboard "Working Status" column
 router.get("/check", ...adminOnly, checkStreamStatus); // GET /api/live/check?url=...
 
-// Bulk stream health check — fires background probe of all channels in live.json
-router.post("/check/bulk", ...adminOnly, startBulkCheck); // POST /api/live/check/bulk
-router.get("/check/bulk/status", ...adminOnly, getBulkCheckStatus); // GET /api/live/check/bulk/status
-
 // Force-refresh the iptv-org channels/logos/categories database
 router.post("/iptvorg/refresh", ...adminOnly, refreshIptvOrgDb); // POST /api/live/iptvorg/refresh
+
+// ─── Channel state — Active / Edit / Delete (DashIPTV.jsx) ────────────────────
+// Admin-only, same as source management. Order matters: /channels/active must
+// be registered before any /channels/:id-style route to avoid "active" being
+// swallowed as an :id param.
+router.get("/channel-state", ...adminOnly, getChannelState); // GET    /api/live/channel-state
+router.get("/channels/active", ...adminOnly, getActiveChannels); // GET    /api/live/channels/active
+router.post("/channels/:id/active", ...adminOnly, markChannelActive); // POST   /api/live/channels/:id/active   { ...channel }
+router.delete("/channels/:id/active", ...adminOnly, unmarkChannelActive); // DELETE /api/live/channels/:id/active
+router.post("/channels/:id/restore", ...adminOnly, restoreChannel); // POST   /api/live/channels/:id/restore
+router.patch("/channels/:id", ...adminOnly, updateChannel); // PATCH  /api/live/channels/:id          { name?, category?, country? }
+router.delete("/channels/:id", ...adminOnly, deleteChannel); // DELETE /api/live/channels/:id
 
 // Multer (and other upload) errors must return JSON, never the default HTML page.
 // Without this, a fileFilter rejection or oversized file returns Express's
@@ -92,3 +105,30 @@ router.use((err, req, res, next) => {
 });
 
 module.exports = router;
+
+// ─── Sports Event Routes ───────────────────────────────────────────────────────
+// Appended — no existing routes modified.
+// Consumed by: epgController.js (sports handler section)
+
+const {
+    getSportsLive,
+    getSportsToday,
+    getSportsUpcoming,
+    getSportsEventById,
+    getSportsEventChannels,
+    getFeaturedEvents,
+    getSportsStatus,
+    triggerSportsRefresh,
+} = require("../controllers/epgController");
+
+// Any approved user can see events (same auth as /channels)
+const approvedUser = [authenticateJWT, requireApprovedUser];
+
+router.get("/featured-events", ...approvedUser, getFeaturedEvents); // GET /api/live/featured-events
+router.get("/events/live", ...approvedUser, getSportsLive); // GET /api/live/events/live
+router.get("/events/today", ...approvedUser, getSportsToday); // GET /api/live/events/today
+router.get("/events/upcoming", ...approvedUser, getSportsUpcoming); // GET /api/live/events/upcoming
+router.get("/events/:id/channels", ...approvedUser, getSportsEventChannels); // GET /api/live/events/:id/channels
+router.get("/events/:id", ...approvedUser, getSportsEventById); // GET /api/live/events/:id
+router.get("/sports/status", ...adminOnly, getSportsStatus); // GET /api/live/sports/status
+router.post("/sports/refresh", ...adminOnly, triggerSportsRefresh); // POST /api/live/sports/refresh?bucket=all|live|today|upcoming

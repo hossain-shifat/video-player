@@ -1,153 +1,192 @@
-/**
- * AppearanceSection.jsx
- * ─────────────────────────────────────────────────────────────────────────────
- * Full appearance / personalization settings page for Flux media player.
- *
- * Sections:
- *   1. Themes           — built-in + custom, recent, active indicator
- *   2. Custom Builder   — create / edit / delete custom themes with color pickers
- *   3. Typography       — font family, font scale, density
- *   4. Layout           — border radius, content width
- *   5. Player           — subtitle size/color/bg, controls opacity
- *   6. Accessibility    — reduced motion, high contrast, focus visible
- *
- * Architecture:
- *   • All state lives in ThemeContext (no local state duplication)
- *   • Each sub-section is a small pure component receiving slice of context
- *   • Persistence handled by context (localStorage)
- *   • CSS variables updated immediately on change (no page reload needed)
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
-import { useState, useRef, useCallback } from "react";
-import { Palette, Plus, Trash2, Edit3, Check, Moon, Sun, Type, Layout, Play, Accessibility, ChevronDown, ChevronRight, Sparkles, RotateCcw, X, Eye, Copy, Download, Upload } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { Palette, Plus, Trash2, Edit3, Check, Moon, Sun, ChevronDown, RotateCcw, Type, Layout, Accessibility } from "lucide-react";
 import { useTheme } from "../../Context/themeContext";
-import { Card, SectionTitle, Row, Toggle, Modal, ThemeSwatch } from "./shared";
+import { Card, Row, Toggle, Modal, ThemeSwatch, SectionLabel, Select } from "./shared";
 
-// ─── Small primitives ─────────────────────────────────────────────────────────
-
-function SubSection({ title, icon: Icon, children }) {
+// ─── Segmented control ────────────────────────────────────────────────────────
+function Seg({ opts, value, onChange }) {
     return (
-        <div className="space-y-3">
-            <div className="flex items-center gap-2.5 w-full text-left">
-                <span className="w-7 h-7 rounded flex items-center justify-center bg-base-300 text-primary">
-                    <Icon size={14} />
-                </span>
-                <span className="text-sm font-semibold text-base-content flex-1">{title}</span>
-            </div>
-            <div className="pl-0">{children}</div>
-        </div>
-    );
-}
-
-function SegmentedControl({ options, value, onChange }) {
-    return (
-        <div className="flex bg-base-300 rounded p-0.5 gap-0.5">
-            {options.map((opt) => (
+        <div className="flex bg-white/[0.04] rounded-lg p-0.5 gap-0.5 border border-white/[0.06] w-full">
+            {opts.map((o) => (
                 <button
-                    key={opt.id}
-                    onClick={() => onChange(opt.id)}
+                    key={o.id}
+                    onClick={() => onChange(o.id)}
                     style={{ outline: "none" }}
-                    className={`flex-1 text-xs px-2.5 py-1.5 rounded transition-all duration-150 font-medium ${
-                        value === opt.id ? "bg-base-100 text-base-content shadow-sm" : "text-base-content/45 hover:text-base-content/70"
-                    }`}>
-                    {opt.label}
+                    className={`flex-1 text-[11px] px-1.5 py-1.5 rounded-md transition-all font-medium whitespace-nowrap ${value === o.id ? "bg-white/12 text-white" : "text-white/35 hover:text-white/60"}`}>
+                    {o.label}
                 </button>
             ))}
         </div>
     );
 }
 
-function ColorInput({ value, onChange, label }) {
-    const inputRef = useRef(null);
+// ─── Stack row — label + control stacked on mobile, inline on sm+ ─────────────
+// Use this instead of <Row> when the right-side control is wide (Seg with 3+ options)
+function StackRow({ label, desc, children }) {
     return (
-        <div className="flex items-center gap-2">
-            <button
-                onClick={() => inputRef.current?.click()}
-                style={{
-                    background: value,
-                    outline: "none",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                }}
-                className="w-8 h-8 rounded shrink-0 cursor-pointer"
-                aria-label={`Pick ${label}`}
-            />
-            <label htmlFor={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} className="sr-only">Pick {label}</label>
-            <input ref={inputRef} id={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} name={`color-picker-${label.toLowerCase().replace(/\\s+/g, '-')}`} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
-            <label htmlFor={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`} className="sr-only">{label} Hex</label>
-            <input
-                id={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`}
-                name={`color-hex-${label.toLowerCase().replace(/\\s+/g, '-')}`}
-                type="text"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                className="flex-1 bg-base-300 border border-white/5 rounded px-2.5 py-1.5 text-xs text-base-content font-mono focus:outline-none focus:border-primary/40"
-                placeholder="#ffffff"
-            />
+        <div className="px-5 py-4 border-b border-white/[0.045] last:border-0 hover:bg-white/[0.015] transition-colors">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-6">
+                <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-white/90 leading-tight">{label}</p>
+                    {desc && <p className="text-[11px] text-white/35 mt-0.5 leading-snug">{desc}</p>}
+                </div>
+                <div className="w-full sm:w-auto sm:shrink-0 sm:min-w-[12rem]">{children}</div>
+            </div>
         </div>
     );
 }
 
-function SliderInput({ value, onChange, min = 0, max = 1, step = 0.05, label, displayFn }) {
-    const slug = label ? label.toLowerCase().replace(/\s+/g, "-") : "slider";
+// ─── Slider ───────────────────────────────────────────────────────────────────
+function Slider({ value, onChange, min, max, step, fmt }) {
     return (
         <div className="flex items-center gap-3">
             <input
-                id={`appearance-${slug}`}
-                name={`appearance-${slug}`}
-                autoComplete="off"
                 type="range"
                 min={min}
                 max={max}
                 step={step}
                 value={value}
                 onChange={(e) => onChange(parseFloat(e.target.value))}
-                className="flex-1 accent-primary h-1.5 cursor-pointer"
+                style={{ outline: "none", border: "none", boxShadow: "none" }}
+                className="flex-1 h-[3px] rounded-full cursor-pointer appearance-none accent-primary bg-white/10"
             />
-            <span className="text-xs text-base-content/50 w-10 text-right shrink-0 font-mono">{displayFn ? displayFn(value) : value}</span>
+            <span className="text-[11px] text-white/40 w-10 text-right shrink-0 font-mono tabular-nums">{fmt ? fmt(value) : value}</span>
         </div>
     );
 }
 
-// ─── 1. Theme Grid ────────────────────────────────────────────────────────────
-
-function ThemeGrid({ themes, activeId, onSelect }) {
+// ─── Color swatch input ───────────────────────────────────────────────────────
+function ColorPick({ value, onChange, label }) {
+    const ref = useRef(null);
     return (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {themes.map((t) => {
-                const active = activeId === t.id;
-                return (
-                    <button
-                        key={t.id}
-                        onClick={() => onSelect(t.id)}
-                        style={{ outline: "none" }}
-                        className={`relative flex items-center gap-2.5 p-3 rounded-lg text-left transition-all duration-150 border cursor-pointer ${
-                            active ? "border-primary/50 bg-primary/8" : "border-white/5 hover:border-white/15 hover:bg-white/[0.03]"
-                        }`}>
-                        <ThemeSwatch preview={t.preview} />
-                        <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1">
-                                <p className={`text-xs font-semibold leading-none truncate ${active ? "text-primary" : "text-base-content"}`}>{t.label}</p>
-                                {t.colorScheme === "dark" ? <Moon size={9} className="text-base-content/25 shrink-0" /> : <Sun size={9} className="text-base-content/25 shrink-0" />}
-                            </div>
-                            <p className="text-[10px] text-base-content/35 mt-0.5 leading-tight line-clamp-1">{t.description}</p>
-                        </div>
-                        {active && (
-                            <span className="absolute top-1.5 right-1.5">
-                                <Check size={11} className="text-primary" strokeWidth={3} />
-                            </span>
-                        )}
-                        {t.custom && !active && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-accent/60" />}
-                    </button>
-                );
-            })}
+        <div className="flex items-center gap-2">
+            <button
+                onClick={() => ref.current?.click()}
+                style={{ background: value, outline: "none", border: "1px solid rgba(255,255,255,0.12)" }}
+                className="w-7 h-7 rounded-lg shrink-0 cursor-pointer"
+            />
+            <input ref={ref} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
+            <input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                style={{ outline: "none" }}
+                className="flex-1 bg-white/[0.05] border border-white/[0.07] rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono focus:border-primary/40 transition-colors min-w-0"
+            />
         </div>
     );
 }
 
-// ─── 2. Custom Theme Builder ──────────────────────────────────────────────────
+// ─── Portal dropdown for theme picker ─────────────────────────────────────────
+// FIX: self-contained `dropIn` keyframe injected inside the portal so it
+// works even when no <Modal> is rendered (modalIn keyframe would be missing).
+function ThemeDropdown({ themes, activeId, onSelect }) {
+    const [open, setOpen] = useState(false);
+    const trigRef = useRef(null);
+    const [rect, setRect] = useState(null);
+    const active = themes.find((t) => t.id === activeId) || themes[0];
+    const dark = themes.filter((t) => t.colorScheme === "dark");
+    const light = themes.filter((t) => t.colorScheme !== "dark");
 
-const DEFAULT_CUSTOM_VARS = {
+    function openMenu() {
+        if (trigRef.current) setRect(trigRef.current.getBoundingClientRect());
+        setOpen(true);
+    }
+
+    useEffect(() => {
+        if (!open) return;
+        const upd = () => {
+            if (trigRef.current) setRect(trigRef.current.getBoundingClientRect());
+        };
+        window.addEventListener("scroll", upd, true);
+        window.addEventListener("resize", upd);
+        return () => {
+            window.removeEventListener("scroll", upd, true);
+            window.removeEventListener("resize", upd);
+        };
+    }, [open]);
+
+    function TRow({ t }) {
+        const on = t.id === activeId;
+        return (
+            <button
+                onClick={() => { onSelect(t.id); setOpen(false); }}
+                style={{ outline: "none" }}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left ${on ? "bg-primary/12" : "hover:bg-white/[0.05]"}`}>
+                <ThemeSwatch preview={t.preview} size="sm" />
+                <div className="flex-1 min-w-0">
+                    <p className={`text-[12px] font-semibold truncate ${on ? "text-primary" : "text-white/75"}`}>{t.label}</p>
+                    {t.description && <p className="text-[10px] text-white/25 truncate">{t.description}</p>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                    {t.colorScheme === "dark" ? <Moon size={9} className="text-white/20" /> : <Sun size={9} className="text-white/20" />}
+                    {on && <Check size={11} className="text-primary" strokeWidth={3} />}
+                </div>
+            </button>
+        );
+    }
+
+    function Group({ label, items }) {
+        if (!items.length) return null;
+        return (
+            <div>
+                <p className="text-[9px] font-bold text-white/20 uppercase tracking-[0.12em] px-2.5 py-1.5">{label}</p>
+                {items.map((t) => <TRow key={t.id} t={t} />)}
+            </div>
+        );
+    }
+
+    const panel =
+        open &&
+        rect &&
+        createPortal(
+            <>
+                {/* Self-contained keyframe — no dependency on Modal being mounted */}
+                <style>{`@keyframes dropIn{from{opacity:0;transform:translateY(-4px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
+                <div
+                    style={{
+                        position: "fixed",
+                        top: rect.bottom + 4,
+                        left: rect.left,
+                        width: rect.width,
+                        zIndex: 9999,
+                        background: "oklch(13% 0.01 260)",
+                        maxHeight: 280,
+                        overflowY: "auto",
+                        borderRadius: "0.75rem",
+                        border: "1px solid rgba(255,255,255,0.09)",
+                        boxShadow: "0 24px 64px rgba(0,0,0,0.75)",
+                        animation: "dropIn .12s ease-out both",
+                    }}>
+                    <div className="p-1.5 space-y-0.5">
+                        <Group label="Dark" items={dark} />
+                        {dark.length > 0 && light.length > 0 && <div className="border-t border-white/[0.05] my-1" />}
+                        <Group label="Light" items={light} />
+                    </div>
+                </div>
+            </>,
+            document.body,
+        );
+
+    return (
+        <div ref={trigRef} className="relative">
+            <button
+                onClick={openMenu}
+                style={{ outline: "none", boxShadow: "none" }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] hover:border-white/[0.14] transition-all cursor-pointer">
+                {active && <ThemeSwatch preview={active.preview} size="sm" />}
+                <span className="flex-1 text-left text-[13px] font-medium text-white truncate">{active?.label || "Select"}</span>
+                <ChevronDown size={13} className={`text-white/30 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+            </button>
+            {panel}
+        </div>
+    );
+}
+
+// ─── Custom theme builder ─────────────────────────────────────────────────────
+const DEFAULT_VARS = {
     "--color-base-100": "oklch(12% 0.01 260)",
     "--color-base-200": "oklch(16% 0.01 260)",
     "--color-base-300": "oklch(20% 0.02 260)",
@@ -157,11 +196,6 @@ const DEFAULT_CUSTOM_VARS = {
     "--color-accent": "oklch(65% 0.2 150)",
     "--color-accent-content": "oklch(98% 0.01 150)",
 };
-
-// Simplified hex ↔ oklch bridge: just store raw CSS color strings
-// Real apps would use a color library; here we store what the picker gives us
-// and let the browser render it
-
 const VAR_LABELS = {
     "--color-base-100": "Background",
     "--color-base-200": "Surface",
@@ -173,142 +207,78 @@ const VAR_LABELS = {
     "--color-accent-content": "Accent Text",
 };
 
-function CustomThemeEditor({ initial, onSave, onClose }) {
+function ThemeBuilder({ initial, onSave, onClose }) {
     const [name, setName] = useState(initial?.label || "My Theme");
-    const [desc, setDesc] = useState(initial?.description || "Custom theme");
-    const [colorScheme, setColorScheme] = useState(initial?.colorScheme || "dark");
-    const [vars, setVars] = useState(initial?.cssVars || { ...DEFAULT_CUSTOM_VARS });
-
-    const setVar = (key, val) => setVars((v) => ({ ...v, [key]: val }));
-
-    const preview = {
-        base: vars["--color-base-100"],
-        primary: vars["--color-primary"],
-        accent: vars["--color-accent"],
-    };
-
-    const handleSave = () => {
-        onSave({
-            label: name.trim() || "Custom Theme",
-            description: desc.trim(),
-            colorScheme,
-            preview,
-            cssVars: vars,
-        });
-        onClose();
-    };
+    const [desc, setDesc] = useState(initial?.description || "");
+    const [scheme, setScheme] = useState(initial?.colorScheme || "dark");
+    const [vars, setVars] = useState(initial?.cssVars || { ...DEFAULT_VARS });
+    const sv = (k, v) => setVars((x) => ({ ...x, [k]: v }));
+    const prev = { base: vars["--color-base-100"], primary: vars["--color-primary"], accent: vars["--color-accent"] };
 
     return (
-        <div className="flex flex-col gap-5 max-h-[70vh] overflow-y-auto pr-1">
-            {/* Name & scheme */}
-            <div className="space-y-3">
-                <div>
-                    <label htmlFor="theme-name" className="text-xs text-base-content/50 font-medium block mb-1.5">Theme Name</label>
+        <div className="space-y-5 max-h-[60vh] overflow-y-auto pr-0.5">
+            <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 space-y-1.5">
+                    <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Name</label>
                     <input
-                        id="theme-name"
-                        name="themeName"
-                        type="text"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         maxLength={30}
-                        className="w-full bg-base-300 border border-white/5 rounded px-3 py-2 text-sm text-base-content focus:outline-none focus:border-primary/40"
                         placeholder="My Theme"
+                        style={{ outline: "none" }}
+                        className="input input-sm w-full bg-white/[0.05] border border-white/[0.08] rounded-lg text-[13px] text-white"
                     />
                 </div>
-                <div>
-                    <label htmlFor="theme-desc" className="text-xs text-base-content/50 font-medium block mb-1.5">Description</label>
+                <div className="col-span-2 space-y-1.5">
+                    <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Description</label>
                     <input
-                        id="theme-desc"
-                        name="themeDesc"
-                        type="text"
                         value={desc}
                         onChange={(e) => setDesc(e.target.value)}
                         maxLength={60}
-                        className="w-full bg-base-300 border border-white/5 rounded px-3 py-2 text-sm text-base-content focus:outline-none focus:border-primary/40"
                         placeholder="Short description"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs text-base-content/50 font-medium block mb-1.5">Color Scheme</label>
-                    <SegmentedControl
-                        options={[
-                            { id: "dark", label: "Dark" },
-                            { id: "light", label: "Light" },
-                        ]}
-                        value={colorScheme}
-                        onChange={setColorScheme}
+                        style={{ outline: "none" }}
+                        className="input input-sm w-full bg-white/[0.05] border border-white/[0.08] rounded-lg text-[13px] text-white"
                     />
                 </div>
             </div>
 
-            {/* Preview swatch */}
-            <div className="flex items-center gap-3 p-3 bg-base-300 rounded-lg">
-                <ThemeSwatch preview={preview} />
+            <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Scheme</label>
+                <Seg opts={[{ id: "dark", label: "Dark" }, { id: "light", label: "Light" }]} value={scheme} onChange={setScheme} />
+            </div>
+
+            <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+                <ThemeSwatch preview={prev} />
                 <div>
-                    <p className="text-xs font-semibold text-base-content">{name || "Preview"}</p>
-                    <p className="text-[10px] text-base-content/40">{colorScheme} theme</p>
+                    <p className="text-[12px] font-semibold text-white">{name || "Preview"}</p>
+                    <p className="text-[10px] text-white/30">{scheme} theme</p>
                 </div>
             </div>
 
-            {/* Color pickers */}
             <div className="space-y-3">
-                <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wider">Colors</p>
-                {Object.entries(VAR_LABELS).map(([key, label]) => (
-                    <div key={key}>
-                        <label className="text-xs text-base-content/40 block mb-1">{label}</label>
-                        <ColorInput value={vars[key] || "#888888"} onChange={(v) => setVar(key, v)} label={label} />
+                <p className="text-[9px] font-bold text-white/20 uppercase tracking-[0.12em]">Colors</p>
+                {Object.entries(VAR_LABELS).map(([k, lbl]) => (
+                    <div key={k}>
+                        <label className="text-[10px] text-white/30 block mb-1">{lbl}</label>
+                        <ColorPick value={vars[k] || "#888"} onChange={(v) => sv(k, v)} label={lbl} />
                     </div>
                 ))}
             </div>
 
-            {/* Import DaisyUI Theme */}
-            <div className="space-y-3">
-                <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wider flex items-center justify-between">
-                    Import
-                </p>
-                <div>
-                    <label htmlFor="theme-import" className="text-xs text-base-content/40 block mb-1">Paste DaisyUI v5 Theme Block</label>
-                    <textarea 
-                        id="theme-import"
-                        name="themeImport"
-                        className="w-full h-24 bg-base-300 border border-white/5 rounded px-3 py-2 text-[10px] font-mono text-base-content/70 focus:outline-none focus:border-primary/40 resize-none"
-                        placeholder={'@plugin "daisyui/theme" {\n  name: "mytheme";\n  color-scheme: "dark";\n  --color-base-100: oklch(0% 0 0);\n  ...\n}'}
-                        onChange={(e) => {
-                            const val = e.target.value;
-                            if(!val) return;
-                            
-                            try {
-                                const nameMatch = val.match(/name:\s*"([^"]+)"/);
-                                const schemeMatch = val.match(/color-scheme:\s*"?([^";\s]+)"?/);
-                                
-                                if(nameMatch) setName(nameMatch[1]);
-                                if(schemeMatch) setColorScheme(schemeMatch[1].replace(/['"]/g, ''));
-                                
-                                const newVars = { ...vars };
-                                Object.keys(VAR_LABELS).forEach(k => {
-                                    // Match --var-name: value; 
-                                    // Handle cases with or without trailing semicolon
-                                    const regex = new RegExp(`${k}\\s*:\\s*([^;]+)`);
-                                    const match = val.match(regex);
-                                    if(match) {
-                                        newVars[k] = match[1].trim();
-                                    }
-                                });
-                                setVars(newVars);
-                            } catch(err) {
-                                console.error("Failed to parse theme", err);
-                            }
-                        }}
-                    />
-                </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex gap-2 pt-2 border-t border-white/5">
-                <button onClick={onClose} style={{ outline: "none" }} className="flex-1 px-4 py-2 rounded text-sm text-base-content/60 bg-base-300 hover:bg-base-300/80 transition-colors">
+            <div className="flex gap-2 pt-1 border-t border-white/[0.06] sticky bottom-0 pb-0.5" style={{ background: "oklch(13% 0.01 260)" }}>
+                <button
+                    onClick={onClose}
+                    style={{ outline: "none" }}
+                    className="flex-1 py-2 rounded-lg text-[12px] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-colors border border-white/[0.07]">
                     Cancel
                 </button>
-                <button onClick={handleSave} style={{ outline: "none" }} className="flex-1 px-4 py-2 rounded text-sm font-semibold bg-primary text-primary-content hover:opacity-90 transition-opacity">
+                <button
+                    onClick={() => {
+                        onSave({ label: name.trim() || "Custom", description: desc.trim(), colorScheme: scheme, preview: prev, cssVars: vars });
+                        onClose();
+                    }}
+                    style={{ outline: "none" }}
+                    className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none">
                     Save Theme
                 </button>
             </div>
@@ -316,30 +286,28 @@ function CustomThemeEditor({ initial, onSave, onClose }) {
     );
 }
 
-// ─── Custom Theme List item ───────────────────────────────────────────────────
-
-function CustomThemeItem({ t, isActive, onSelect, onEdit, onDelete }) {
+function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
     return (
-        <div className={`flex items-center gap-2.5 p-2.5 rounded-lg border transition-all ${isActive ? "border-primary/40 bg-primary/8" : "border-white/5 hover:border-white/10"}`}>
+        <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border transition-all ${active ? "border-primary/30 bg-primary/6" : "border-white/[0.06] hover:border-white/[0.10]"}`}>
             <button onClick={() => onSelect(t.id)} style={{ outline: "none" }} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
-                <ThemeSwatch preview={t.preview} />
+                <ThemeSwatch preview={t.preview} size="sm" />
                 <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-semibold truncate ${isActive ? "text-primary" : "text-base-content"}`}>{t.label}</p>
-                    <p className="text-[10px] text-base-content/35 truncate">{t.description}</p>
+                    <p className={`text-[12px] font-semibold truncate ${active ? "text-primary" : "text-white/70"}`}>{t.label}</p>
+                    {t.description && <p className="text-[10px] text-white/25 truncate">{t.description}</p>}
                 </div>
-                {isActive && <Check size={12} className="text-primary shrink-0" strokeWidth={3} />}
+                {active && <Check size={11} className="text-primary shrink-0" strokeWidth={3} />}
             </button>
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-0.5 shrink-0">
                 <button
                     onClick={() => onEdit(t)}
                     style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/30 hover:text-base-content hover:bg-white/10 transition-colors">
+                    className="w-6 h-6 rounded flex items-center justify-center text-white/20 hover:text-white hover:bg-white/10 transition-colors">
                     <Edit3 size={11} />
                 </button>
                 <button
                     onClick={() => onDelete(t.id)}
                     style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/30 hover:text-error hover:bg-error/10 transition-colors">
+                    className="w-6 h-6 rounded flex items-center justify-center text-white/20 hover:text-error hover:bg-error/10 transition-colors">
                     <Trash2 size={11} />
                 </button>
             </div>
@@ -347,266 +315,143 @@ function CustomThemeItem({ t, isActive, onSelect, onEdit, onDelete }) {
     );
 }
 
-// ─── Main AppearanceSection ───────────────────────────────────────────────────
-
+// ─── Main ─────────────────────────────────────────────────────────────────────
 export default function AppearanceSection() {
-    const {
-        theme,
-        setTheme,
-        builtinThemes,
-        customThemes,
-        addCustomTheme,
-        updateCustomTheme,
-        deleteCustomTheme,
-        appearance,
-        setAppearance,
-        fontFamilies,
-        densityPresets,
-        radiusPresets,
-        subtitleSizePresets,
-    } = useTheme();
+    const { theme, setTheme, allThemes, customThemes, addCustomTheme, updateCustomTheme, deleteCustomTheme, appearance, setAppearance, fontFamilies, densityPresets, radiusPresets } = useTheme();
 
-    // Modal states
     const [builderOpen, setBuilderOpen] = useState(false);
-    const [editTarget, setEditTarget] = useState(null); // theme obj being edited
-    const [resetModalOpen, setResetModalOpen] = useState(false);
-    const [deleteTargetId, setDeleteTargetId] = useState(null);
+    const [editTarget, setEditTarget] = useState(null);
+    const [deleteTarget, setDeleteTarget] = useState(null);
+    const [resetOpen, setResetOpen] = useState(false);
 
-    const openCreate = () => {
-        setEditTarget(null);
-        setBuilderOpen(true);
-    };
-    const openEdit = (t) => {
-        setEditTarget(t);
-        setBuilderOpen(true);
-    };
-    const closeBuilder = () => {
-        setBuilderOpen(false);
-        setEditTarget(null);
-    };
+    const openCreate = () => { setEditTarget(null); setBuilderOpen(true); };
+    const openEdit = (t) => { setEditTarget(t); setBuilderOpen(true); };
 
-    const handleSave = (data) => {
-        if (editTarget) {
-            updateCustomTheme(editTarget.id, data);
-        } else {
-            const id = addCustomTheme(data);
-            setTheme(id);
-        }
-    };
+    function handleSave(data) {
+        if (editTarget) updateCustomTheme(editTarget.id, data);
+        else { const id = addCustomTheme(data); setTheme(id); }
+    }
 
-    const handleDelete = (id) => {
-        setDeleteTargetId(id);
-    };
-
-    const confirmDelete = () => {
-        if (deleteTargetId) {
-            deleteCustomTheme(deleteTargetId);
-            setDeleteTargetId(null);
-        }
-    };
-
-    const set = (key) => (val) => setAppearance({ [key]: val });
+    const set = (k) => (v) => setAppearance({ [k]: v });
 
     return (
-        <div className="space-y-8">
-
-
-            {/* ── 1. Themes ─────────────────────────────────────────────────── */}
-            <SubSection title="Theme" icon={Palette} defaultOpen>
+        // FIX: removed max-w-2xl — full outlet width on PC
+        <div className="space-y-6 w-full">
+            {/* ── Theme ── */}
+            <div>
+                <SectionLabel>Theme</SectionLabel>
                 <Card>
-                    <div className="p-4 space-y-4">
-                        {/* Built-in themes */}
-                        <div>
-                            <p className="text-[10px] text-base-content/35 font-semibold uppercase tracking-wider mb-2">Built-in</p>
-                            <ThemeGrid themes={builtinThemes} activeId={theme} onSelect={setTheme} />
-                        </div>
-
-                        {/* Custom themes */}
-                        <div>
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="text-[10px] text-base-content/35 font-semibold uppercase tracking-wider">
-                                    Custom
-                                    {customThemes.length > 0 && <span className="ml-1.5 text-accent">{customThemes.length}</span>}
-                                </p>
-                            </div>
-
-                            {customThemes.length === 0 ? (
-                                <button
-                                    onClick={openCreate}
-                                    style={{ outline: "none" }}
-                                    className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-white/20 hover:border-white/40 hover:bg-white/5 transition-all text-sm font-medium text-base-content">
-                                    <Plus size={16} />
-                                    Add Custom Theme
-                                </button>
-                            ) : (
-                                <div className="space-y-3">
-                                    <div className="space-y-1.5">
-                                        {customThemes.map((t) => (
-                                            <CustomThemeItem key={t.id} t={t} isActive={theme === t.id} onSelect={setTheme} onEdit={openEdit} onDelete={handleDelete} />
-                                        ))}
-                                    </div>
-                                    <button
-                                        onClick={openCreate}
-                                        style={{ outline: "none" }}
-                                        className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-white/20 hover:border-white/40 hover:bg-white/5 transition-all text-sm font-medium text-base-content">
-                                        <Plus size={16} />
-                                        Add Custom Theme
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="px-4 py-2.5 border-t border-white/5">
-                        <p className="text-xs text-base-content/25">Theme saved automatically · Custom themes stored in browser</p>
-                    </div>
-                </Card>
-            </SubSection>
-
-            {/* ── 2. Typography ─────────────────────────────────────────────── */}
-            <SubSection title="Typography" icon={Type}>
-                <Card>
-                    <Row label="Font Family" desc="UI font used throughout the app">
-                        <label htmlFor="font-family" className="sr-only">Font Family</label>
-                        <select
-                            id="font-family"
-                            name="fontFamily"
-                            value={appearance.fontFamily}
-                            onChange={(e) => set("fontFamily")(e.target.value)}
-                            className="bg-base-300 border border-white/5 rounded px-2.5 py-1.5 text-xs text-base-content focus:outline-none focus:border-primary/40">
-                            {fontFamilies.map((f) => (
-                                <option key={f.id} value={f.id}>
-                                    {f.label}
-                                </option>
-                            ))}
-                        </select>
-                    </Row>
-
-                    <Row label="Global Font Size" desc="Scales text sizes up or down">
-                        <div className="w-44">
-                            <SliderInput value={appearance.fontScale} onChange={set("fontScale")} min={0.8} max={1.3} step={0.05} displayFn={(v) => `${Math.round(v * 100)}%`} />
-                        </div>
-                    </Row>
-                    
-                    <Row label="UI Scaling" desc="Scales all UI elements and spacing">
-                        <div className="w-44">
-                            <SliderInput value={appearance.uiScale} onChange={set("uiScale")} min={0.8} max={1.3} step={0.05} displayFn={(v) => `${Math.round(v * 100)}%`} />
-                        </div>
-                    </Row>
-
-                    <Row label="Text Density" desc="Controls spacing within components">
+                    <Row label="Theme" desc="Active color scheme">
                         <div className="w-48">
-                            <SegmentedControl options={densityPresets.map((d) => ({ id: d.id, label: d.label }))} value={appearance.density} onChange={set("density")} />
+                            <ThemeDropdown themes={allThemes} activeId={theme} onSelect={setTheme} />
                         </div>
                     </Row>
-                    
-                    <Row label="Line Height" desc="Vertical spacing between text lines">
-                        <div className="w-44">
-                            <SliderInput value={appearance.lineHeight} onChange={set("lineHeight")} min={1.1} max={2.0} step={0.1} displayFn={(v) => v.toFixed(1)} />
-                        </div>
+                    <Row label="Add custom" desc={customThemes?.length ? `${customThemes.length} custom theme${customThemes.length > 1 ? "s" : ""} saved` : "Create a personalized color scheme"}>
+                        <button
+                            onClick={openCreate}
+                            style={{ outline: "none" }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.09] text-white/45 hover:text-white hover:border-white/20 hover:bg-white/[0.05] transition-all text-[11px] font-medium">
+                            <Plus size={12} /> New Theme
+                        </button>
                     </Row>
+                    {customThemes?.length > 0 && (
+                        <div className="px-4 pb-4 pt-2 border-t border-white/[0.04] space-y-1.5">
+                            {customThemes.map((t) => (
+                                <CustomThemeItem key={t.id} t={t} active={theme === t.id} onSelect={setTheme} onEdit={openEdit} onDelete={setDeleteTarget} />
+                            ))}
+                        </div>
+                    )}
                 </Card>
-            </SubSection>
+            </div>
 
-            {/* ── 3. Layout ─────────────────────────────────────────────────── */}
-            <SubSection title="Layout" icon={Layout}>
+            {/* ── Typography ── */}
+            <div>
+                <SectionLabel>Typography</SectionLabel>
                 <Card>
-                    <Row label="Border Radius" desc="Controls roundness of UI elements">
-                        <div className="w-56">
-                            <SegmentedControl options={radiusPresets.map((r) => ({ id: r.id, label: r.label }))} value={appearance.radius} onChange={set("radius")} />
-                        </div>
+                    <Row label="Font family" desc="UI font used throughout the app">
+                        <Select id="ff" name="fontFamily" value={appearance?.fontFamily || "inter"} onChange={(e) => set("fontFamily")(e.target.value)} className="min-w-[9rem]">
+                            {(fontFamilies || []).map((f) => (
+                                <option key={f.id} value={f.id}>{f.label}</option>
+                            ))}
+                        </Select>
                     </Row>
-
-                    <Row label="Content Width" desc="Maximum width of main content area">
-                        <label htmlFor="content-width" className="sr-only">Content Width</label>
-                        <select
-                            id="content-width"
-                            name="contentWidth"
-                            value={appearance.contentWidth}
-                            onChange={(e) => set("contentWidth")(e.target.value)}
-                            className="bg-base-300 border border-white/5 rounded px-2.5 py-1.5 text-xs text-base-content focus:outline-none focus:border-primary/40">
-                            <option value="narrow">Narrow (800px)</option>
-                            <option value="default">Default (1200px)</option>
-                            <option value="wide">Wide (1600px)</option>
-                            <option value="full">Full Width</option>
-                        </select>
-                    </Row>
-                    
-                    <Row label="Sidebar Width" desc="Desktop sidebar width in pixels">
-                        <div className="w-44">
-                            <SliderInput value={appearance.sidebarWidth} onChange={set("sidebarWidth")} min={180} max={320} step={10} displayFn={(v) => `${v}px`} />
-                        </div>
-                    </Row>
+                    <StackRow label="Font scale" desc="Scales all text sizes">
+                        <Slider value={appearance?.fontScale ?? 1} onChange={set("fontScale")} min={0.8} max={1.3} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} />
+                    </StackRow>
+                    <StackRow label="Line height" desc="Vertical spacing between lines">
+                        <Slider value={appearance?.lineHeight ?? 1.5} onChange={set("lineHeight")} min={1.1} max={2.0} step={0.1} fmt={(v) => v.toFixed(1)} />
+                    </StackRow>
+                    {/* FIX: StackRow — stacks on mobile so Seg never overflows */}
+                    <StackRow label="Density" desc="Spacing within components">
+                        <Seg opts={(densityPresets || []).map((d) => ({ id: d.id, label: d.label }))} value={appearance?.density || "comfortable"} onChange={set("density")} />
+                    </StackRow>
                 </Card>
-            </SubSection>
+            </div>
 
-            {/* ── 5. Accessibility ──────────────────────────────────────────── */}
-            <SubSection title="Accessibility" icon={Accessibility}>
+            {/* ── Layout ── */}
+            <div>
+                <SectionLabel>Layout</SectionLabel>
                 <Card>
-                    <Row label="Reduced Motion" desc="Disables non-essential animations">
-                        <Toggle value={appearance.reducedMotion} onChange={set("reducedMotion")} />
+                    {/* FIX: StackRow — stacks on mobile so Seg never overflows */}
+                    <StackRow label="Border radius" desc="Roundness of UI elements">
+                        <Seg opts={(radiusPresets || []).map((r) => ({ id: r.id, label: r.label }))} value={appearance?.radius || "moderate"} onChange={set("radius")} />
+                    </StackRow>
+                    <StackRow label="Sidebar width" desc="Desktop sidebar width">
+                        <Slider value={appearance?.sidebarWidth ?? 224} onChange={set("sidebarWidth")} min={180} max={320} step={10} fmt={(v) => `${v}px`} />
+                    </StackRow>
+                </Card>
+            </div>
+
+            {/* ── Accessibility ── */}
+            <div>
+                <SectionLabel>Accessibility</SectionLabel>
+                <Card>
+                    <Row label="Reduced motion" desc="Disable non-essential animations">
+                        <Toggle value={appearance?.reducedMotion ?? false} onChange={set("reducedMotion")} />
                     </Row>
-                    <Row label="High Contrast" desc="Increases text and border contrast">
-                        <Toggle value={appearance.highContrast} onChange={set("highContrast")} />
+                    <Row label="High contrast" desc="Increase text and border contrast">
+                        <Toggle value={appearance?.highContrast ?? false} onChange={set("highContrast")} />
                     </Row>
-                    <Row label="Focus Indicators" desc="Always-visible keyboard focus rings">
-                        <Toggle value={appearance.focusVisible} onChange={set("focusVisible")} />
-                    </Row>
-                    <Row label="Dyslexia-Friendly Font" desc="Uses OpenDyslexic font for easier reading">
-                        <Toggle value={appearance.dyslexiaFont} onChange={set("dyslexiaFont")} />
+                    <Row label="Focus indicators" desc="Always-visible keyboard focus rings">
+                        <Toggle value={appearance?.focusVisible ?? true} onChange={set("focusVisible")} />
                     </Row>
                 </Card>
-            </SubSection>
+            </div>
 
-            {/* ── Reset button ──────────────────────────────────────────────── */}
+            {/* Reset */}
             <div className="flex justify-end">
                 <button
-                    onClick={() => setResetModalOpen(true)}
+                    onClick={() => setResetOpen(true)}
                     style={{ outline: "none" }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-base-content/35 hover:text-base-content/70 hover:bg-white/5 rounded transition-all">
-                    <RotateCcw size={12} />
-                    Reset to defaults
+                    className="flex items-center gap-1.5 text-[11px] text-white/20 hover:text-white/45 transition-colors px-2 py-1 rounded-lg hover:bg-white/[0.04] border-none">
+                    <RotateCcw size={10} /> Reset appearance
                 </button>
             </div>
 
-            {/* ── Custom Theme Builder Modal ─────────────────────────────────── */}
-            <Modal
-                open={builderOpen}
-                onClose={closeBuilder}
-                title={editTarget ? `Edit: ${editTarget.label}` : "Create Custom Theme"}
-                subtitle={editTarget ? "Update your theme colors and settings" : "Design a unique theme with custom colors"}>
-                <CustomThemeEditor initial={editTarget} onSave={handleSave} onClose={closeBuilder} />
+            {/* Modals */}
+            <Modal open={builderOpen} onClose={() => { setBuilderOpen(false); setEditTarget(null); }} title={editTarget ? `Edit: ${editTarget.label}` : "New Custom Theme"}>
+                <ThemeBuilder initial={editTarget} onSave={handleSave} onClose={() => { setBuilderOpen(false); setEditTarget(null); }} />
             </Modal>
-            
-            {/* ── Reset Confirm Modal ────────────────────────────────────────── */}
-            <Modal open={resetModalOpen} onClose={() => setResetModalOpen(false)} title="Reset Appearance Settings?" subtitle="This will restore all default layout and typography settings.">
-                <div className="flex gap-3 justify-end mt-6">
-                    <button onClick={() => setResetModalOpen(false)} className="px-4 py-2 rounded text-sm text-base-content/60 bg-base-300 hover:bg-base-300/80 transition-colors cursor-pointer border-none" style={{ outline: "none" }}>Cancel</button>
-                    <button onClick={() => {
-                        setAppearance({
-                            fontFamily: "inter",
-                            fontScale: 1,
-                            uiScale: 1,
-                            lineHeight: 1.5,
-                            density: "comfortable",
-                            radius: "moderate",
-                            contentWidth: "default",
-                            sidebarWidth: 224,
-                            reducedMotion: false,
-                            highContrast: false,
-                            focusVisible: true,
-                            dyslexiaFont: false,
-                        });
-                        setResetModalOpen(false);
-                    }} className="px-4 py-2 rounded text-sm font-semibold bg-error text-error-content hover:bg-error/90 transition-colors cursor-pointer border-none" style={{ outline: "none" }}>Reset Settings</button>
+
+            <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete theme?" subtitle="This custom theme will be permanently removed.">
+                <div className="flex gap-2 mt-2">
+                    <button onClick={() => setDeleteTarget(null)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-white/40 border border-white/[0.07] hover:bg-white/[0.05] transition-colors">Cancel</button>
+                    <button onClick={() => { deleteCustomTheme(deleteTarget); setDeleteTarget(null); }} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-error text-error-content hover:opacity-90 transition-opacity border-none">Delete</button>
                 </div>
             </Modal>
 
-            {/* ── Delete Confirm Modal ───────────────────────────────────────── */}
-            <Modal open={!!deleteTargetId} onClose={() => setDeleteTargetId(null)} title="Delete Custom Theme?" subtitle="This theme will be permanently removed.">
-                <div className="flex gap-3 justify-end mt-6">
-                    <button onClick={() => setDeleteTargetId(null)} className="px-4 py-2 rounded text-sm text-base-content/60 bg-base-300 hover:bg-base-300/80 transition-colors cursor-pointer border-none" style={{ outline: "none" }}>Cancel</button>
-                    <button onClick={confirmDelete} className="px-4 py-2 rounded text-sm font-semibold bg-error text-error-content hover:bg-error/90 transition-colors cursor-pointer border-none" style={{ outline: "none" }}>Delete Theme</button>
+            <Modal open={resetOpen} onClose={() => setResetOpen(false)} title="Reset appearance?" subtitle="Restores all layout and typography settings to defaults.">
+                <div className="flex gap-2 mt-2">
+                    <button onClick={() => setResetOpen(false)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-white/40 border border-white/[0.07] hover:bg-white/[0.05] transition-colors">Cancel</button>
+                    <button
+                        onClick={() => {
+                            setAppearance({ fontFamily: "inter", fontScale: 1, uiScale: 1, lineHeight: 1.5, density: "comfortable", radius: "moderate", sidebarWidth: 224, reducedMotion: false, highContrast: false, focusVisible: true });
+                            setResetOpen(false);
+                        }}
+                        style={{ outline: "none" }}
+                        className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-error text-error-content hover:opacity-90 transition-opacity border-none">
+                        Reset
+                    </button>
                 </div>
             </Modal>
         </div>

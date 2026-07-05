@@ -160,7 +160,7 @@ export function AuthProvider({ children }) {
         async (email, password, name) => {
             setError(null);
             const data = await authApi.register(email, password, name);
-            
+
             // Log in immediately if tokens were provided
             if (data.accessToken && data.refreshToken) {
                 const session = { refreshToken: data.refreshToken, sessionId: data.sessionId };
@@ -170,10 +170,10 @@ export function AuthProvider({ children }) {
                 saveToStorage({ ...session, user: data.user });
                 scheduleRefresh(7 * 24 * 60 * 60 * 1000);
             }
-            
+
             return data; // { userId, requiresVerification }
         },
-        [scheduleRefresh, setAccessTokenBoth]
+        [scheduleRefresh, setAccessTokenBoth],
     );
 
     const verifyEmail = useCallback(async (userId, code) => {

@@ -72,29 +72,38 @@ function writeJson(file, data) {
     fs.renameSync(tmp, file);
 }
 
+// ─── Part number detection ───────────────────────────────────────────────────
+// Matches: "Part 2", "CD2", "Disc 2", "Disk2", "Pt.2", "pt 2"
+const PART_RE = /(?:part|cd|disc|disk|pt)[\s._-]*(\d+)/i;
+
+function detectPartNumber(...fields) {
+    const haystack = fields.filter(Boolean).join(" ");
+    const match = haystack.match(PART_RE);
+    return match ? parseInt(match[1], 10) : null;
+}
+
 // ─── History ─────────────────────────────────────────────────────────────────
-// Schema (multi-client namespaced — clientId is the "unique user" key, so
-// req #1's compound-unique-constraint is just "object key per clientId+mediaId",
-// already structurally enforced — every save is an upsert onto that one slot,
-// never a new record):
+// Schema (multi-client namespaced) — MERGED old + new:
 // {
 //   "<clientId>": {
 //     "<mediaId>": {
-//       id, mediaType,           // "movie" | "series" | "anime"
-//       title,                   // parent/show title (movie: same as the title)
-//       episodeTitle,            // e.g. "S1E3 · To You, in 2000 Years" — null for movies
-//       name,                    // legacy display field, kept for old clients
+//       id, mediaType, type,
+//       title,          // movie title -OR- series/anime show name
+//       name,           // ← OLD legacy field, kept — some older client builds
+//                       //   (HistoryCard, etc.) read `name` instead of `title`.
+//                       //   Always kept in sync with title so neither breaks.
+//       seriesTitle,    // NEW — episode display title (series/anime only)
+//       episodeTitle,   // legacy alias of seriesTitle — ALWAYS present (even
+//                       //   null on movies) to match the old shape exactly.
+//       seasonNumber,   // NEW — integer | null
+//       episodeNumber,  // NEW — integer | null
+//       partNumber,     // NEW — integer | null (multi-part movies: Part 2, CD2, etc.)
 //       poster, streamUrl,
-//       watchedAt,
-//       position,                // resume point — never moves backward except on reset
-//       maxPositionReached,      // milestone-lock high-water mark
-//       duration, completed,
-//       watchCount, lastSessionStart,
-//       subtitlePref,
-//       // NOTE: no thumbnail/image fields here at all — per spec #3, history
-//       // only ever stores the numeric resume_time. Preview frames are
-//       // generated on demand by GET /api/media/:id/thumbnail (ffmpeg),
-//       // never written into history.json.
+//       watchedAt,      // refreshed on every progress save → drives chronological sort
+//       position, maxPositionReached, duration, completed,
+//       watchCount, lastSessionStart, subtitlePref,
+//       // NOTE: no thumbnail field — frames generated on demand by
+//       // GET /api/media/:id/thumbnail (ffmpeg), never stored here.
 //     }
 //   }
 // }
@@ -124,10 +133,19 @@ function getHistoryEntry(id, clientId) {
  *
  * Milestone lock: if `data.position` is at or behind the previously saved
  * high-water mark (`maxPositionReached`), the write is SKIPPED entirely and
- * the existing entry is returned unchanged — this is what stops transcoding
- * jitter / rewatching an already-completed segment from stomping the resume
- * point backward. Pass `data.isResetAction: true` ("Start Over" button) to
- * bypass the lock and force position back to 0.
+ * the existing entry is returned unchanged — stops transcoding jitter /
+ * rewatching an already-completed segment from stomping the resume point
+ * backward. Pass `data.isResetAction: true` to bypass and force position → 0.
+ *
+ * `watchedAt` is always refreshed on every real write (non-skipped) so the
+ * frontend chronological sort always reflects the latest activity.
+ *
+ * Accepted fields from callers (new + legacy, both honored):
+ *   data.title / data.name     — either works, kept in sync both ways
+ *   data.seriesTitle / data.episodeTitle — either works (seriesTitle wins if both sent)
+ *   data.seasonNumber, data.episodeNumber
+ *   data.partNumber            — explicit multi-part movie part number (optional;
+ *                                 auto-detected from title/name/streamUrl if omitted)
  */
 function saveProgress(id, data, clientId) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
@@ -152,40 +170,92 @@ function saveProgress(id, data, clientId) {
     const duration = typeof data.duration === "number" ? data.duration : (existing.duration ?? 0);
     const maxReached = existing.maxPositionReached || 0;
 
-    // ── Milestone lock ────────────────────────────────────────────────────
-    // Not a reset, entry already exists, and incoming position hasn't
-    // strictly surpassed the high-water mark → no-op, return as-is.
+    // ── Milestone lock ─────────────────────────────────────────────────────
     if (!isReset && existing.id && incomingPosition <= maxReached) {
         return existing;
     }
 
     const position = isReset ? 0 : incomingPosition;
+
+    // maxPositionReached is NEVER zeroed on completion — only on explicit isResetAction.
+    // Why: if completion zeroed maxPositionReached, replaying a movie from 0:00 would
+    // let incomingPosition (5s) > maxReached (0) pass the milestone lock → stored
+    // position overwrites to ~0:00. Keeping maxPositionReached intact means the lock
+    // holds until the user genuinely surpasses their previous furthest point.
     const maxPositionReached = isReset ? 0 : Math.max(maxReached, incomingPosition);
+
     const completed = !isReset && duration > 0 ? position / duration >= 0.9 : false;
 
     const prevPosition = existing.position ?? 0;
     const isNewSession = !existing.id || (prevPosition === 0 && position > 3);
     const watchCount = (existing.watchCount || 0) + (isNewSession ? 1 : 0);
 
-    clientStore[id] = {
+    const mediaType = data.mediaType || data.type || existing.mediaType || existing.type || "movie";
+    const isSeries = mediaType === "series" || mediaType === "anime";
+
+    // ── title / name — dual-field back-compat ───────────────────────────────
+    // Old clients send/read `name`; newer ones send/read `title`. Resolve
+    // from whichever is present and keep BOTH fields populated with the
+    // same value so neither an old nor a new frontend build breaks.
+    const title = data.title ?? existing.title ?? data.name ?? existing.name ?? "";
+    const nameField = data.name || existing.name || title;
+
+    // ── seriesTitle: episode name (series/anime only) ──────────────────────
+    // Accept new `seriesTitle` key; fall back to legacy `episodeTitle` so old
+    // clients that haven't been updated yet don't lose their episode names.
+    const seriesTitle = isSeries ? (Object.prototype.hasOwnProperty.call(data, "seriesTitle") ? data.seriesTitle : (data.episodeTitle ?? existing.seriesTitle ?? existing.episodeTitle ?? null)) : null;
+
+    // ── Season / episode numbers ───────────────────────────────────────────
+    const seasonNumber = isSeries ? (data.seasonNumber ?? existing.seasonNumber ?? null) : null;
+    const episodeNumber = isSeries ? (data.episodeNumber ?? existing.episodeNumber ?? null) : null;
+
+    // ── partNumber: multi-part movie detection ─────────────────────────────
+    // Caller may supply it explicitly; otherwise auto-detect from title/name/URL.
+    const streamUrl = data.streamUrl || existing.streamUrl || "";
+
+    const partNumber = !isSeries
+        ? Object.prototype.hasOwnProperty.call(data, "partNumber")
+            ? (data.partNumber ?? null)
+            : (existing.partNumber ?? detectPartNumber(title, nameField, streamUrl))
+        : null;
+
+    // Shared base fields — common to both movies and series
+    const base = {
         id,
-        mediaType: data.mediaType || data.type || existing.mediaType || existing.type || "movie",
-        // Back-compat: some callers still send `type` instead of `mediaType`
-        type: data.mediaType || data.type || existing.mediaType || existing.type || "movie",
-        title: data.title ?? existing.title ?? data.name ?? existing.name ?? "",
-        episodeTitle: Object.prototype.hasOwnProperty.call(data, "episodeTitle") ? data.episodeTitle : (existing.episodeTitle ?? null),
-        name: data.name || existing.name || data.title || existing.title || "",
+        mediaType,
+        type: mediaType, // back-compat alias
+
+        title,
+        name: nameField, // legacy field — kept in sync with title, never dropped
+
         poster: data.poster || existing.poster || null,
         streamUrl: data.streamUrl || existing.streamUrl || null,
         watchedAt: new Date().toISOString(),
         position: completed ? 0 : position,
-        maxPositionReached: completed ? 0 : maxPositionReached,
+        maxPositionReached, // never zeroed on completion — milestone lock integrity
         duration,
         completed,
         watchCount,
         lastSessionStart: isNewSession ? position : existing.lastSessionStart,
         subtitlePref: Object.prototype.hasOwnProperty.call(data, "subtitlePref") ? data.subtitlePref : (existing.subtitlePref ?? null),
     };
+
+    // Movie-specific: only include partNumber when the movie actually has parts
+    const movieExtra = partNumber != null ? { partNumber } : {};
+
+    // Series/anime-specific: episode metadata. episodeTitle is ALWAYS present
+    // (even as null on movies) to match the old shape exactly — some older
+    // client code may read `entry.episodeTitle` unconditionally.
+    const seriesExtra = isSeries
+        ? {
+              seriesTitle,
+              seasonNumber,
+              episodeNumber,
+              episodeTitle: seriesTitle, // legacy alias — remove once all clients updated
+          }
+        : { episodeTitle: null };
+
+    clientStore[id] = { ...base, ...movieExtra, ...seriesExtra };
 
     writeJson(HISTORY_FILE, store);
     return clientStore[id];
