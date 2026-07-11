@@ -34,6 +34,7 @@ import {
     Shield,
     ShieldOff,
     SortAsc,
+    User,
 } from "lucide-react";
 import { api } from "../../api/client";
 
@@ -63,6 +64,8 @@ function fmtDuration(seconds) {
     return `${m}m`;
 }
 
+// ffprobe reports frame rate as a fraction string like "24000/1001" or "24/1" —
+// parse it safely (no eval) into a rounded whole number for display.
 function extractTags(filename) {
     if (!filename) return { res: null, vcodec: null, acodec: null };
     const str = filename.toLowerCase();
@@ -149,8 +152,8 @@ function Badge({ label, variant = "default", size = "sm" }) {
             movie: "bg-primary/15 text-primary border border-primary/20",
             series: "bg-info/15 text-info border border-info/20",
             anime: "bg-accent/15 text-accent border border-accent/20",
-            default: "bg-base-content/8 text-base-content/55 border border-base-content/10",
-        }[variant] || "bg-base-content/8 text-base-content/55 border border-base-content/10";
+            default: "bg-white/8 text-white/70 border border-white/12",
+        }[variant] || "bg-white/8 text-white/70 border border-white/12";
 
     const sizeClass = size === "xs" ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]";
 
@@ -160,17 +163,31 @@ function Badge({ label, variant = "default", size = "sm" }) {
 function QualityChip({ label }) {
     const color =
         label === "4K"
-            ? "bg-warning/15 text-warning border-warning/20"
+            ? "bg-warning/15 text-warning border-warning/25"
             : label === "1080p"
-              ? "bg-success/15 text-success border-success/20"
+              ? "bg-success/15 text-success border-success/25"
               : label === "720p"
-                ? "bg-info/15 text-info border-info/20"
-                : "bg-base-content/8 text-base-content/50 border-base-content/12";
+                ? "bg-info/15 text-info border-info/25"
+                : "bg-white/8 text-white/60 border-white/12";
     return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-bold tracking-wider ${color}`}>{label}</span>;
 }
 
+// Color-codes by codec family so video/audio codecs are visually distinct at
+// a glance, instead of every codec looking identical in flat gray.
 function CodecChip({ label }) {
-    return <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-base-content/6 border border-base-content/8 text-[9px] font-mono text-base-content/90">{label}</span>;
+    const l = (label || "").toUpperCase();
+    const cls = /HEVC|H\.?265|X265/.test(l)
+        ? "bg-accent/15 text-accent border-accent/25"
+        : /H\.?264|AVC|X264/.test(l)
+          ? "bg-info/15 text-info border-info/25"
+          : /AV1/.test(l)
+            ? "bg-success/15 text-success border-success/25"
+            : /VP9|VP8/.test(l)
+              ? "bg-warning/15 text-warning border-warning/25"
+              : /AAC|AC3|EAC3|DTS|TRUEHD|FLAC|MP3|OPUS/.test(l)
+                ? "bg-secondary/15 text-secondary border-secondary/25"
+                : "bg-white/8 text-white/70 border-white/12";
+    return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-mono font-bold ${cls}`}>{label}</span>;
 }
 
 // ─── Modal Shell ──────────────────────────────────────────────────────────────
@@ -179,8 +196,8 @@ function Modal({ onClose, children }) {
     return createPortal(
         <div className="fixed inset-0 z-9999 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
             <div
-                className="relative w-[min(32rem,90vw)] h-[min(32rem,90vh)] bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
-                style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)" }}
+                className="relative w-[min(32rem,90vw)] max-h-[min(32rem,90vh)] bg-base-200 rounded-2xl shadow-2xl border border-white/10 overflow-hidden flex flex-col"
+                style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06)" }}
                 onClick={(e) => e.stopPropagation()}>
                 {children}
             </div>
@@ -192,19 +209,19 @@ function Modal({ onClose, children }) {
 function ModalHeader({ title, subtitle, onClose, poster, typeBadge }) {
     const config = typeBadge ? TYPE_CONFIG[typeBadge.type] : null;
     return (
-        <div className="flex items-start justify-between px-5 pt-4 pb-3.5 border-b border-base-content/8 shrink-0">
+        <div className="flex items-start justify-between px-5 pt-4 pb-3.5 border-b border-white/8 shrink-0">
             <div className="flex items-center gap-3.5 min-w-0">
                 {poster !== undefined && (
-                    <div className="w-10 h-14 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/10">
-                        {poster ? <img src={poster} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={14} className="text-base-content/40" />}
+                    <div className="w-10 h-14 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-white/10">
+                        {poster ? <img src={poster} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={14} className="text-white/40" />}
                     </div>
                 )}
                 <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h2 className="font-bold text-sm text-base-content leading-tight">{title}</h2>
+                        <h2 className="font-bold text-sm text-white leading-tight">{title}</h2>
                         {typeBadge && <Badge label={typeBadge.label} variant={typeBadge.type} />}
                     </div>
-                    {subtitle && <p className="text-[11px] text-base-content/85 truncate font-mono">{subtitle}</p>}
+                    {subtitle && <p className="text-[11px] text-white/70 truncate font-mono">{subtitle}</p>}
                 </div>
             </div>
             <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors shrink-0 ml-2 cursor-pointer">
@@ -215,7 +232,7 @@ function ModalHeader({ title, subtitle, onClose, poster, typeBadge }) {
 }
 
 function ModalFooter({ children }) {
-    return <div className="px-5 py-3.5 flex items-center justify-end gap-2 border-t border-base-content/8 shrink-0 bg-base-300/40">{children}</div>;
+    return <div className="px-5 py-3.5 flex items-center justify-end gap-2 border-t border-white/8 shrink-0 bg-black/20">{children}</div>;
 }
 
 // ─── Section divider for modals ───────────────────────────────────────────────
@@ -224,7 +241,7 @@ function SectionLabel({ label }) {
     return (
         <div className="flex items-center gap-2 mb-3">
             <span className="text-[10px] font-bold uppercase tracking-widest text-white/85">{label}</span>
-            <div className="flex-1 h-px bg-base-content/8" />
+            <div className="flex-1 h-px bg-white/8" />
         </div>
     );
 }
@@ -235,7 +252,7 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
     const [title, setTitle] = useState(media._title || "");
     const [year, setYear] = useState(media._year || "");
     const [type, setType] = useState(media._type || "movie");
-    const [permission, setPermission] = useState(media.permission !== false);
+    const [permission, setPermission] = useState(media._permission !== false);
 
     const handleSubmit = () => {
         onSave({ id: media._id, payload: { title, year: Number(year), type, permission } });
@@ -254,35 +271,35 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                 )}
 
                 <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/85">Title</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Title</label>
                     <input
                         type="text"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        className="input input-sm w-full bg-base-300 border border-base-content/20 rounded-xl text-sm text-white placeholder:text-base-content/40 focus:outline-none focus:border-primary/50 focus:bg-base-100 transition-colors"
+                        className="input input-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-primary/50 focus:bg-base-100 transition-colors"
                         placeholder="Media title..."
                     />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/85">Year</label>
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Year</label>
                         <input
                             type="number"
                             value={year}
                             onChange={(e) => setYear(e.target.value)}
-                            className="input input-sm w-full bg-base-300 border border-base-content/20 rounded-xl text-sm text-white placeholder:text-base-content/40 focus:outline-none focus:border-primary/50 transition-colors"
+                            className="input input-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-primary/50 transition-colors"
                             placeholder="2024"
                             min={1900}
                             max={2099}
                         />
                     </div>
                     <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-base-content/85">Type</label>
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Type</label>
                         <select
                             value={type}
                             onChange={(e) => setType(e.target.value)}
-                            className="select select-sm w-full bg-base-300 border border-base-content/20 rounded-xl text-sm text-white focus:outline-none focus:border-primary/50 transition-colors">
+                            className="select select-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white focus:outline-none focus:border-primary/50 transition-colors">
                             <option value="movie" className="text-black">
                                 Movie
                             </option>
@@ -300,7 +317,7 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                     permission=true  → Normal (allowed)
                     permission=false → Restricted
                     Toggle is "Restrict access" — checked means RESTRICTED (permission=false) */}
-                <div className={`border rounded-xl p-4 transition-colors ${permission ? "bg-base-300 border-base-content/8" : "bg-error/5 border-error/20"}`}>
+                <div className={`border rounded-xl p-4 transition-colors ${permission ? "bg-base-300 border-white/8" : "bg-error/10 border-error/25"}`}>
                     <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5 min-w-0">
                             {permission ? (
@@ -314,7 +331,7 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                             )}
                             <div>
                                 <p className={`text-xs font-bold ${permission ? "text-success" : "text-error"}`}>{permission ? "Normal Access" : "Restricted"}</p>
-                                <p className="text-[10px] text-base-content/80 mt-0.5">{permission ? "Media is accessible — click to restrict" : "Access is restricted — click to allow"}</p>
+                                <p className="text-[10px] text-white/70 mt-0.5">{permission ? "Media is accessible — click to restrict" : "Access is restricted — click to allow"}</p>
                             </div>
                         </div>
                         {/* checkbox checked = restricted = !permission */}
@@ -323,7 +340,7 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
                             role="switch"
                             aria-checked={!permission}
                             onClick={() => setPermission((prev) => !prev)}
-                            className={`relative inline-flex items-center w-11 h-6 rounded-full border shrink-0 transition-colors duration-200 focus:outline-none cursor-pointer ${!permission ? "bg-error/70 border-error/40" : "bg-base-content/15 border-base-content/20"}`}>
+                            className={`relative inline-flex items-center w-11 h-6 rounded-full border shrink-0 transition-colors duration-200 focus:outline-none cursor-pointer ${!permission ? "bg-error/70 border-error/40" : "bg-white/15 border-white/25"}`}>
                             <span className={`absolute left-0.5 w-4.5 h-4.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${!permission ? "translate-x-5" : "translate-x-0"}`} />
                         </button>
                     </div>
@@ -331,9 +348,9 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
 
                 {/* Media ID */}
                 <div className="space-y-1.5">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/85">Media ID</p>
-                    <div className="flex items-center gap-2 bg-base-300 border border-base-content/8 rounded-xl px-3 py-2">
-                        <span className="text-[10px] font-mono text-base-content/85 truncate flex-1">{media._id}</span>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-white/85">Media ID</p>
+                    <div className="flex items-center gap-2 bg-base-300 border border-white/8 rounded-xl px-3 py-2">
+                        <span className="text-[10px] font-mono text-white/85 truncate flex-1">{media._id}</span>
                         <CopyBtn text={media._id} title="Copy ID" />
                     </div>
                 </div>
@@ -365,9 +382,9 @@ function InfoRow({ label, value, mono = false, full = false, copyText }) {
                 {copyText && <CopyBtn text={copyText} title={`Copy ${label}`} />}
             </div>
             {mono ? (
-                <p className="text-[10px] font-mono text-base-content/95 break-all bg-base-300 border border-base-content/8 rounded-lg px-2.5 py-1.5 leading-relaxed">{value || "—"}</p>
+                <p className="text-[10px] font-mono text-white/90 break-all bg-base-300 border border-white/8 rounded-lg px-2.5 py-1.5 leading-relaxed">{value || "—"}</p>
             ) : (
-                <p className="text-sm font-semibold text-base-content">{value || "—"}</p>
+                <p className="text-sm font-semibold text-white">{value || "—"}</p>
             )}
         </div>
     );
@@ -378,6 +395,43 @@ function DetailsModal({ media, onClose }) {
     const config = TYPE_CONFIG[media._type] || TYPE_CONFIG.movie;
     const TypeIcon = config.Icon;
 
+    // Fetches ffprobe-backed mediaInfo lazily on modal open — ONLY for movies.
+    // Series/anime media._id is a synthetic group id (e.g. "series:series:wednesday"),
+    // not a real scanned-file id, so GET /api/metadata/:id would always 404 for
+    // them — findById() only matches real file ids. For series/anime we already
+    // have everything we need on `media` itself (res/vcodec/acodec/_size/_duration
+    // were merged in from the bulk /api/mediainfo fetch back in the table's
+    // processItem, aggregated across all episodes there).
+    const { data: fullData } = useQuery({
+        queryKey: ["media-detail", media._id],
+        queryFn: () => api.get(`/api/metadata/${media._id}`),
+        staleTime: 1000 * 60 * 10,
+        enabled: media._type === "movie",
+    });
+
+    // mediaInfoStore now returns an organized shape: { container, video, audioTracks, subtitleTracks }.
+    // Cover-art "video" streams (embedded poster images) are already filtered
+    // out server-side when video is picked, so no client-side filtering needed here.
+    const mediaInfo = media._type === "movie" ? fullData?.mediaInfo : null;
+    const video = mediaInfo?.video || null;
+    const primaryAudio = mediaInfo?.audioTracks?.[0] || null;
+
+    // Movies: prefer freshly-fetched single-file data, fall back to row data.
+    // Series/anime: row data IS the data (already aggregated across episodes
+    // back in the table's processItem — see _resolution/_fps/_bitrate/etc).
+    const realRes = video?.height ? (video.height >= 2000 ? "4K" : video.height >= 1000 ? "1080p" : video.height >= 700 ? "720p" : "480p") : media.res;
+
+    const realDuration = mediaInfo?.container?.durationSeconds || (media.metadata?.runtime ? media.metadata.runtime * 60 : media._duration);
+    const realSize = mediaInfo?.container?.sizeBytes || media._size;
+    const realAdded = media.metadata?.date || media._added;
+    const realResolution = video?.resolution || media._resolution;
+    const realFps = video?.frameRate || media._fps; // already a formatted string like "23.976 fps" — no parsing needed
+    const realBitrate = mediaInfo?.container?.bitrateBps || media._bitrate;
+    const realChannels = primaryAudio?.channels || media._audioChannels;
+    const realAudioLang = primaryAudio?.language || media._audioLang;
+
+    const linkUrl = typeof window !== "undefined" ? `${window.location.origin}${linkDest}` : linkDest;
+
     return (
         <Modal onClose={onClose}>
             {/* Hero section with poster */}
@@ -386,15 +440,15 @@ function DetailsModal({ media, onClose }) {
                     <img src={media._poster} alt="" className="w-full h-full object-cover scale-110 blur-sm opacity-30" />
                     <div className="absolute inset-0 bg-linear-to-b from-transparent to-base-200" />
                     <div className="absolute bottom-3 left-5 flex items-end gap-3">
-                        <div className="w-12 h-17 sm:w-14 sm:h-20 rounded-xl overflow-hidden ring-2 ring-base-content/20 shadow-xl shrink-0">
+                        <div className="w-12 h-17 sm:w-14 sm:h-20 rounded-xl overflow-hidden ring-2 ring-white/20 shadow-xl shrink-0">
                             <img src={media._poster} alt="" className="w-full h-full object-cover" />
                         </div>
                         <div className="pb-1">
                             <div className="flex items-center gap-2 mb-1">
                                 <Badge label={media._typeLabel} variant={media._type} />
-                                {media._year && <span className="text-[10px] text-base-content/80 font-medium">{media._year}</span>}
+                                {media._year && <span className="text-[10px] text-white/75 font-medium">{media._year}</span>}
                             </div>
-                            <h2 className="font-bold text-sm sm:text-base text-base-content leading-tight max-w-56 sm:max-w-65 truncate">{media._title}</h2>
+                            <h2 className="font-bold text-sm sm:text-base text-white leading-tight max-w-56 sm:max-w-65 truncate">{media._title}</h2>
                         </div>
                     </div>
                     <button
@@ -412,14 +466,14 @@ function DetailsModal({ media, onClose }) {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
                         { label: "Year", value: media._year || "—", icon: Calendar },
-                        { label: "Quality", value: media.res || "—", icon: Star },
-                        { label: "Duration", value: fmtDuration(media._duration), icon: Layers },
-                        { label: "Size", value: fmtBytes(media._size), icon: HardDrive },
+                        { label: "Quality", value: realRes ? `${realRes}${video ? ` · ${video.width}×${video.height}` : ""}` : "—", icon: Star },
+                        { label: "Duration", value: fmtDuration(realDuration), icon: Layers },
+                        { label: "Size", value: fmtBytes(realSize), icon: HardDrive },
                     ].map(({ label, value, icon: Icon }) => (
-                        <div key={label} className="bg-base-300 border border-base-content/8 rounded-xl p-3 text-center">
-                            <Icon size={13} className="mx-auto mb-1 text-base-content/85" strokeWidth={2} />
-                            <p className="text-[9px] font-semibold uppercase tracking-widest text-base-content/85 mb-1">{label}</p>
-                            <p className="text-xs font-bold text-base-content tabular-nums leading-tight">{value}</p>
+                        <div key={label} className="bg-base-300 border border-white/8 rounded-xl p-3 text-center">
+                            <Icon size={13} className="mx-auto mb-1 text-white/85" strokeWidth={2} />
+                            <p className="text-[9px] font-semibold uppercase tracking-widest text-white/85 mb-1">{label}</p>
+                            <p className="text-xs font-bold text-white tabular-nums leading-tight">{value}</p>
                         </div>
                     ))}
                 </div>
@@ -428,7 +482,8 @@ function DetailsModal({ media, onClose }) {
                 {media.metadata?.overview && (
                     <div>
                         <SectionLabel label="Overview" />
-                        <p className="text-xs text-base-content/95 leading-relaxed line-clamp-4">{media.metadata.overview}</p>
+                        {media.metadata?.tagline && <p className="text-xs italic text-white/70 mb-1.5">"{media.metadata.tagline}"</p>}
+                        <p className="text-xs text-white/90 leading-relaxed line-clamp-4">{media.metadata.overview}</p>
                     </div>
                 )}
 
@@ -446,13 +501,47 @@ function DetailsModal({ media, onClose }) {
                     </div>
                 )}
 
-                {/* Technical */}
-                {(media.vcodec || media.acodec) && (
+                {/* Cast */}
+                {media.metadata?.cast?.length > 0 && (
+                    <div>
+                        <SectionLabel label="Cast" />
+                        <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
+                            {media.metadata.cast.slice(0, 8).map((c) => (
+                                <div key={c.name} className="flex flex-col items-center gap-1 shrink-0 w-14 text-center">
+                                    <div className="w-12 h-12 rounded-full overflow-hidden bg-base-300 ring-1 ring-white/10 shrink-0">
+                                        {c.photo ? <img src={c.photo} alt="" className="w-full h-full object-cover" /> : <User size={16} className="text-white/40 m-auto mt-3" />}
+                                    </div>
+                                    <p className="text-[9px] font-semibold text-white leading-tight truncate w-full">{c.name}</p>
+                                    {c.character && <p className="text-[8px] text-white/60 leading-tight truncate w-full">{c.character}</p>}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Technical — real ffprobe-backed spec sheet, not just filename guesses */}
+                {(media.vcodec || media.acodec || realResolution) && (
                     <div>
                         <SectionLabel label="Technical" />
-                        <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap mb-2.5">
                             {media.vcodec && <CodecChip label={media.vcodec} />}
                             {media.acodec && <CodecChip label={media.acodec} />}
+                            {realRes && <QualityChip label={realRes} />}
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            {[
+                                { label: "Resolution", value: realResolution },
+                                { label: "Frame Rate", value: realFps || null },
+                                { label: "Bitrate", value: realBitrate ? `${(realBitrate / 1_000_000).toFixed(1)} Mbps` : null },
+                                { label: "Audio", value: realChannels ? `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` : null },
+                            ]
+                                .filter((s) => s.value)
+                                .map((s) => (
+                                    <div key={s.label} className="bg-base-300 border border-white/8 rounded-lg px-2.5 py-2">
+                                        <p className="text-[8px] font-semibold uppercase tracking-widest text-white/70 mb-0.5">{s.label}</p>
+                                        <p className="text-[11px] font-bold text-white tabular-nums">{s.value}</p>
+                                    </div>
+                                ))}
                         </div>
                     </div>
                 )}
@@ -465,13 +554,13 @@ function DetailsModal({ media, onClose }) {
                             label="Library"
                             value={
                                 <span className="flex items-center gap-1.5 text-sm">
-                                    <FolderOpen size={12} className="text-base-content/90 shrink-0" strokeWidth={2} />
+                                    <FolderOpen size={12} className="text-white/85 shrink-0" strokeWidth={2} />
                                     {media._library}
                                 </span>
                             }
                             full
                         />
-                        <InfoRow label="Added" value={fmtDate(media._added)} />
+                        <InfoRow label="Added" value={fmtDate(realAdded)} />
                         {media.metadata?.rating && (
                             <InfoRow
                                 label="TMDB Rating"
@@ -483,6 +572,23 @@ function DetailsModal({ media, onClose }) {
                                 }
                             />
                         )}
+                        {media.metadata?.status && <InfoRow label="Status" value={media.metadata.status} />}
+                        {media.metadata?.language && <InfoRow label="Language" value={media.metadata.language.toUpperCase()} />}
+                        <InfoRow
+                            label="Access"
+                            value={
+                                media._permission ? (
+                                    <span className="inline-flex items-center gap-1 text-success">
+                                        <Shield size={12} strokeWidth={2} /> Normal
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 text-error">
+                                        <ShieldOff size={12} strokeWidth={2} /> Restricted
+                                    </span>
+                                )
+                            }
+                        />
+                        <InfoRow label="Player Link" value={linkUrl} mono full copyText={linkUrl} />
                         <InfoRow label="File Path" value={media._path} mono full copyText={media._path} />
                         <InfoRow label="Media ID" value={media._id} mono full copyText={media._id} />
                     </div>
@@ -521,21 +627,21 @@ function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
                     </div>
                 )}
 
-                <div className="flex items-start gap-3 bg-error/8 border border-error/15 rounded-xl p-4">
+                <div className="flex items-start gap-3 bg-error/10 border border-error/20 rounded-xl p-4">
                     <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center shrink-0">
                         <Trash2 size={15} className="text-error" strokeWidth={2} />
                     </div>
                     <div className="min-w-0">
-                        <p className="text-sm font-bold text-base-content truncate">{media._title}</p>
-                        <p className="text-[10px] font-mono text-base-content/85 truncate mt-0.5">{media._filename}</p>
+                        <p className="text-sm font-bold text-white truncate">{media._title}</p>
+                        <p className="text-[10px] font-mono text-white/85 truncate mt-0.5">{media._filename}</p>
                     </div>
                 </div>
 
-                <p className="text-xs text-base-content/90 leading-relaxed">Deletes this entry from the database. Depending on server settings, the physical file may also be removed.</p>
+                <p className="text-xs text-white/90 leading-relaxed">Deletes this entry from the database. Depending on server settings, the physical file may also be removed.</p>
             </div>
 
             <ModalFooter>
-                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-base-content/55 hover:text-base-content hover:bg-base-content/8 focus:outline-none">
+                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-white/60 hover:text-white hover:bg-white/8 focus:outline-none">
                     Cancel
                 </button>
                 <button
@@ -726,22 +832,71 @@ export default function DashMedia() {
         staleTime: 1000 * 60 * 5,
     });
 
+    // Bulk ffprobe-backed media info — fetched ONCE, merged into rows locally.
+    // Backend auto-scans this in the background on server boot (mediaInfoScanner),
+    // so this is usually already populated by the time the dashboard loads.
+    const { data: mediaInfoData } = useQuery({
+        queryKey: ["admin", "mediainfo"],
+        queryFn: () => api.get("/api/mediainfo"),
+        staleTime: 1000 * 60 * 5,
+    });
+    const mediaInfoMap = mediaInfoData?.mediaInfo || {};
+
+    // Real permission state — bulk-fetched once, same pattern as mediaInfo.
+    // Previously there was NO route exposing permissionsStore.js at all, so
+    // the toggle only ever patched React Query's in-memory cache and reverted
+    // on every refresh. This is the actual persisted state now.
+    const { data: permissionsData } = useQuery({
+        queryKey: ["admin", "permissions"],
+        queryFn: () => api.get("/api/permissions"),
+        staleTime: 1000 * 60 * 5,
+    });
+    const permissionsMap = permissionsData?.permissions || {};
+
+    // Real per-file added dates — bulk-fetched, keyed by real file id, works
+    // for every individual episode (grouper.js strips addedAt off episodes
+    // before they ever reach this component, so this bypasses that entirely
+    // by reading straight from the flat pre-grouping scan).
+    const { data: addedDatesData } = useQuery({
+        queryKey: ["admin", "added-dates"],
+        queryFn: () => api.get("/api/mediainfo/added-dates"),
+        staleTime: 1000 * 60 * 5,
+    });
+    const addedDatesMap = addedDatesData?.dates || {};
+
     const updateMutation = useMutation({
-        // Your server has no generic PATCH /api/media/:id — all edits are optimistic
-        // cache-only (session-level). Optionally trigger a metadata refresh from TMDB.
+        // REAL persist: permission goes to the new /api/permissions endpoint
+        // (permissionsStore.js on the backend — this is what was missing
+        // entirely before, hence the toggle never actually sticking).
+        //
+        // TMDB refresh is best-effort and ONLY attempted for movies — series/
+        // anime use a synthetic group id (e.g. "series:fatal seduction") that
+        // is never a real scanned-file id, so /api/metadata/refresh/:id always
+        // 404s for them. Skipping avoids that error entirely instead of just
+        // swallowing it.
         mutationFn: async (data) => {
-            // Non-fatal: try to refresh TMDB metadata; ignore if endpoint fails.
-            try {
-                await api.post(`/api/metadata/refresh/${data.id}`);
-            } catch {
-                /* ok */
+            const { id, payload } = data;
+
+            await api.post(`/api/permissions/${id}`, { permission: payload.permission });
+
+            if (payload.type === "movie") {
+                try {
+                    await api.post(`/api/metadata/refresh/${id}`);
+                } catch {
+                    /* non-fatal — permission save above already succeeded */
+                }
             }
+
             return data;
         },
         onMutate: async (data) => {
-            // Prevent outgoing refetches clobbering our update
+            // Cosmetic, session-level: title/year edits patch the media list
+            // cache immediately so the table updates without a refetch.
             await queryClient.cancelQueries({ queryKey: ["admin", "media"] });
-            const previous = queryClient.getQueryData(["admin", "media"]);
+            await queryClient.cancelQueries({ queryKey: ["admin", "permissions"] });
+
+            const previousMedia = queryClient.getQueryData(["admin", "media"]);
+            const previousPermissions = queryClient.getQueryData(["admin", "permissions"]);
 
             queryClient.setQueryData(["admin", "media"], (old) => {
                 if (!old) return old;
@@ -752,8 +907,6 @@ export default function DashMedia() {
                         if (item.id !== id) return item;
                         return {
                             ...item,
-                            // Persist permission flag on the item directly
-                            permission: payload.permission,
                             name: payload.title || item.name,
                             metadata: item.metadata
                                 ? {
@@ -770,15 +923,22 @@ export default function DashMedia() {
                 return copy;
             });
 
-            return { previous };
+            // Real, persisted state: permission goes on its own cache entry.
+            queryClient.setQueryData(["admin", "permissions"], (old) => ({
+                ...old,
+                permissions: { ...(old?.permissions || {}), [data.id]: data.payload.permission },
+            }));
+
+            return { previousMedia, previousPermissions };
         },
         onSuccess: () => {
             showToast("Media updated");
             setEditMedia(null);
         },
         onError: (err, _data, context) => {
-            // Roll back optimistic update on real failure
-            if (context?.previous) queryClient.setQueryData(["admin", "media"], context.previous);
+            // Roll back both optimistic updates on real failure
+            if (context?.previousMedia) queryClient.setQueryData(["admin", "media"], context.previousMedia);
+            if (context?.previousPermissions) queryClient.setQueryData(["admin", "permissions"], context.previousPermissions);
             showToast(err?.message || "Update failed", "error");
         },
     });
@@ -826,7 +986,6 @@ export default function DashMedia() {
             const originalTitle = item.metadata?.original_title || item.metadata?.original_name || "";
             const year = item.metadata?.year || item.year || null;
             const size = item.sizeBytes || 0;
-            const added = item.addedAt || 0;
             const duration = item.metadata?.duration || item.duration || null;
 
             totalSize += size;
@@ -842,6 +1001,82 @@ export default function DashMedia() {
             }
             const tags = extractTags(sourceFilename || item.title || "");
 
+            // ── Real ffprobe data override ────────────────────────────────────
+            // Movies: item.id IS the file id, matches mediaInfoMap directly.
+            //
+            // Series/anime: mediaInfoStore is keyed per EPISODE (each episode is
+            // its own scanned file), so:
+            //   - Quality/codec: scan every episode across every season and use
+            //     the FIRST one that already has data — not just episode 1, since
+            //     the background probe may not have reached that specific episode
+            //     yet even if others further along are already done.
+            //   - Size: SUM every episode's real probed bytes — a series' total
+            //     size is the sum of all its episode files, never just one.
+            //   - Added date: use the MOST RECENTLY added episode's real
+            //     filesystem date (same convention Plex/Jellyfin use for a
+            //     show's "date added" — whenever you most recently added new
+            //     episodes to it), sourced from addedDatesMap which is keyed
+            //     by real episode file id (works regardless of what
+            //     grouper.js trims off the episode objects themselves).
+            //
+            // mediaInfoStore now returns { container, video, audioTracks,
+            // subtitleTracks } per file — cover-art "video" streams (embedded
+            // poster images) are already excluded server-side when video is
+            // picked, no client-side filtering needed anymore.
+            let repInfo = null;
+            let seriesTotalSize = 0;
+            let seriesLatestAdded = 0;
+            if (type === "movie") {
+                repInfo = mediaInfoMap[item.id] || null;
+            } else if (item.seasons) {
+                for (const season of Object.values(item.seasons)) {
+                    for (const ep of season.episodes || []) {
+                        const epInfo = mediaInfoMap[ep.id];
+                        if (epInfo) {
+                            seriesTotalSize += epInfo.container?.sizeBytes || 0;
+                            if (!repInfo) repInfo = epInfo; // first one found = representative for quality/codec
+                        }
+                        const epAdded = addedDatesMap[ep.id];
+                        if (epAdded) {
+                            const t = new Date(epAdded).getTime();
+                            if (t > seriesLatestAdded) seriesLatestAdded = t;
+                        }
+                    }
+                }
+            }
+
+            const video = repInfo?.video || null;
+            const primaryAudio = repInfo?.audioTracks?.[0] || null;
+
+            const realRes = video?.height ? (video.height >= 2000 ? "4K" : video.height >= 1000 ? "1080p" : video.height >= 700 ? "720p" : "480p") : null;
+
+            // Real data wins when present; filename-guess (tags) is the fallback
+            // for files ffprobe hasn't reached yet (scan still running in background).
+            const finalTags = {
+                res: realRes || tags.res,
+                vcodec: video?.codec || tags.vcodec, // already uppercase from mediaInfoStore
+                acodec: primaryAudio?.codec || tags.acodec,
+            };
+
+            // Movies: single probed file size. Series/anime: summed across episodes.
+            const realSize = type === "movie" ? repInfo?.container?.sizeBytes : seriesTotalSize;
+
+            // Extra technical detail for the Details modal — captured once here
+            // so the modal doesn't need a second probe fetch for series/anime
+            // (which can't re-fetch per-file anyway, see DetailsModal notes).
+            const resolution = video?.resolution || null;
+            const fps = video?.frameRate || null; // already a formatted string, e.g. "23.976 fps"
+            const bitrate = repInfo?.container?.bitrateBps || null;
+            const audioChannels = primaryAudio?.channels || null;
+            const audioLang = primaryAudio?.language || null;
+
+            // Movies: use the real filesystem date attached by scanner.js.
+            // Series/anime: use the most recently added episode's real date
+            // (seriesLatestAdded, computed above from addedDatesMap). Only
+            // fall back to metadata.date (TMDB-fetch-time, not a real file
+            // date) if neither real source is available yet.
+            const added = type === "movie" ? item.addedAt || item.metadata?.date || 0 : seriesLatestAdded || item.metadata?.date || 0;
+
             let poster = item.metadata?.poster;
             if (poster && poster.startsWith("/")) poster = `https://image.tmdb.org/t/p/w200${poster}`;
 
@@ -854,15 +1089,21 @@ export default function DashMedia() {
                 _title: title,
                 _originalTitle: originalTitle,
                 _year: year,
-                _size: size,
+                _size: realSize || size, // real probed bytes when available, else scanner bytes (movies only have scanner fallback — series never had one)
                 _added: new Date(added),
-                _duration: duration,
+                _duration: repInfo?.container?.durationSeconds || duration,
                 _library: item.folderLabel || libs.get(item.folderId) || "Unknown",
                 _libraryId: item.folderId,
                 _poster: poster,
                 _filename: sourceFilename || item.name || item.path || "",
                 _path: item.path || "",
-                ...tags,
+                _permission: permissionsMap[item.id] !== false, // real persisted value — defaults true (allowed) same as backend
+                _resolution: resolution,
+                _fps: fps,
+                _bitrate: bitrate,
+                _audioChannels: audioChannels,
+                _audioLang: audioLang,
+                ...finalTags,
             });
         };
 
@@ -880,7 +1121,7 @@ export default function DashMedia() {
                 size: totalSize,
             },
         };
-    }, [mediaData]);
+    }, [mediaData, mediaInfoMap, permissionsMap, addedDatesMap]);
 
     const filteredMedia = useMemo(() => {
         let filtered = allMedia;
@@ -895,7 +1136,7 @@ export default function DashMedia() {
     }, [allMedia, search, activeTab]);
 
     const sortedMedia = useMemo(() => {
-        return [...filteredMedia].sort((a, b) => a._title.localeCompare(b._title));
+        return [...filteredMedia].sort((a, b) => b._added - a._added);
     }, [filteredMedia]);
 
     const totalPages = Math.ceil(sortedMedia.length / pageSize) || 1;
@@ -1174,28 +1415,22 @@ export default function DashMedia() {
 
                                             {/* Permission */}
                                             <td className="px-3 py-3.5 text-center">
-                                                {!item.permission ? (
-                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-error/10 border-error/30 text-error text-xs font-bold">
+                                                {!item._permission ? (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-error/15 border-error/30 text-error text-xs font-bold">
                                                         <ShieldOff size={8} />
                                                         Restricted
                                                     </span>
                                                 ) : (
-                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-white/5 border-white/10 text-white/75 text-xs font-bold">
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-success/15 border-success/30 text-success text-xs font-bold">
                                                         <Shield size={8} />
                                                         Normal
                                                     </span>
                                                 )}
                                             </td>
 
-                                            {/* Actions */}
+                                            {/* Actions — Details, Edit, Delete (delete always shown in error color) */}
                                             <td className="pl-2 pr-4 py-3.5">
                                                 <div className="flex items-center justify-end gap-0.5">
-                                                    <button
-                                                        onClick={() => setEditMedia(item)}
-                                                        title="Edit"
-                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/75 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
-                                                        <SquarePen size={15} strokeWidth={1.8} />
-                                                    </button>
                                                     <button
                                                         onClick={() => setDetailsMedia(item)}
                                                         title="Details"
@@ -1203,9 +1438,15 @@ export default function DashMedia() {
                                                         <Info size={15} strokeWidth={1.8} />
                                                     </button>
                                                     <button
+                                                        onClick={() => setEditMedia(item)}
+                                                        title="Edit"
+                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/75 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
+                                                        <SquarePen size={15} strokeWidth={1.8} />
+                                                    </button>
+                                                    <button
                                                         onClick={() => setDeleteMedia(item)}
                                                         title="Delete"
-                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/75 border-none hover:bg-error/10 hover:text-error transition-all duration-150 cursor-pointer">
+                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-error/85 border-none hover:bg-error/15 hover:text-error transition-all duration-150 cursor-pointer">
                                                         <Trash2 size={15} strokeWidth={1.8} />
                                                     </button>
                                                 </div>

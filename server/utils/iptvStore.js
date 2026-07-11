@@ -81,9 +81,18 @@ async function deleteSource(id) {
     if (!target) return null;
     await writeSources(sources.filter((s) => s.id !== id));
 
-    // Clean up uploaded file on disk, if any
+    // Clean up uploaded file on disk, if any. Deliberately never lets a
+    // filesystem error here (locked file on Windows, already-deleted file,
+    // permissions) propagate — the source record is already removed above,
+    // so a cleanup failure should just be logged, never crash the request.
     if (target.type === "file" && target.filePath) {
-        fs.promises.unlink(target.filePath).catch(() => {});
+        try {
+            await fs.promises.unlink(target.filePath);
+        } catch (err) {
+            if (err.code !== "ENOENT") {
+                console.warn(`[IPTV] Could not delete uploaded file ${target.filePath}: ${err.message}`);
+            }
+        }
     }
     return target;
 }

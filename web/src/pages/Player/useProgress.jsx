@@ -426,6 +426,14 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         autoResume,
         handleStartOver,
         onReadyToSeek,
+        // Exposed so other callers (e.g. PlayerPage's on-demand quality
+        // switch) can seek to an ARBITRARY target position using the exact
+        // same robust "poll video.seekable + hls.startLoad(target)" logic
+        // already proven here — instead of a naive one-shot currentTime
+        // assignment, which fails silently when the target isn't in the
+        // seekable range yet (which it usually isn't immediately after a
+        // fresh session/manifest swap).
+        deferredSeek,
     };
 }
 

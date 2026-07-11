@@ -20,6 +20,8 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //   9   — expanded schema: ratings{tmdb,imdb,rt,metascore}, reviews, keywords,
 //          watchProviders, crew, cast.tmdbPersonId, videos[], tmdbEpisodeId,
 //          guestStars, networks, collection, contentRating, imdbId
+//   10  — "date" field added: ISO timestamp of when the file was FIRST added
+//          to the server (first ever cache write). Preserved across refreshes.
 const PARSER_VERSION = 10;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
@@ -124,6 +126,15 @@ function isCacheValid(entry) {
     return true;
 }
 
+// Returns the "added" date to persist — reuses an existing entry's date if
+// one is already on record (even a stale/invalid one), otherwise stamps now.
+// This guarantees "date" always reflects the FIRST time the file was ever
+// seen by the server, not the last refresh/version-bump time.
+function resolveAddedDate(fileId) {
+    const existing = store.get(fileId);
+    return existing?.date || new Date().toISOString();
+}
+
 async function getCached(fileId) {
     await loadStore();
     const entry = store.get(fileId);
@@ -141,8 +152,11 @@ function setCache(fileId, metadata) {
     //   title, year, overview, poster, backdrop, genres, cast, trailer, ...
     const { parsed: _drop, ...cleanMetadata } = metadata;
 
+    const date = resolveAddedDate(fileId);
+
     store.set(fileId, {
         ...cleanMetadata,
+        date,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
     });
@@ -150,9 +164,12 @@ function setCache(fileId, metadata) {
 }
 
 function setNotFound(fileId, title) {
+    const date = resolveAddedDate(fileId);
+
     store.set(fileId, {
         _notFound: true,
         _title: title,
+        date,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
     });
@@ -201,6 +218,10 @@ async function purgeStaleEntries() {
  *
  * Network/auth errors are NOT cached — next request will retry TMDB.
  * Genuine "no result" responses ARE cached (for NOT_FOUND_TTL_MS).
+ *
+ * "date" field: always the ISO timestamp of the FIRST time this file was
+ * ever cached — i.e. the "added to server" date. Survives version bumps
+ * and refreshes because resolveAddedDate() carries it forward.
  */
 async function getMetadata(file) {
     await loadStore();
@@ -238,7 +259,7 @@ async function getMetadata(file) {
         return null;
     }
 
-    // Store clean TMDB data (no 'parsed' internals)
+    // Store clean TMDB data (no 'parsed' internals) + date
     setCache(file.id, metadata);
     return store.get(file.id); // return the stored version (without parsed)
 }

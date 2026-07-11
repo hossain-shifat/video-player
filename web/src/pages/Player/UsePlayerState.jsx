@@ -53,8 +53,13 @@ const initialState = {
     // list so a local pick always takes priority and isn't lost if the
     // backend list re-fetches.
     localSubtitleFile: null, // { url (blob:), filename, lang, source: "local" } or null
+    subtitlePanelMode: false, // "Panel" toggle in Settings — renders subtitles in a fixed bottom bar instead of overlaying the video
 
     qualityLevels: [], // HLS quality levels [{ index, height, width, bitrate, label }]
+    requestedQuality: null, // user-requested manual quality tier (e.g. "720p") — separate
+    // from the auto-adaptive qualityLevels/activeQuality above. Setting this triggers
+    // VideoCore/PlayerPage's on-demand quality-switch (new session at that resolution),
+    // not an hls.js level change within the same manifest.
     activeQuality: -1, // -1 = auto
     audioTracks: [], // [{ index, id, name, lang, default }]
     activeAudioTrack: 0,
@@ -145,6 +150,7 @@ export const A = {
     SET_LOCAL_SUBTITLE_FILE: "SET_LOCAL_SUBTITLE_FILE",
     SET_QUALITY_LEVELS: "SET_QUALITY_LEVELS",
     SET_ACTIVE_QUALITY: "SET_ACTIVE_QUALITY",
+    SET_REQUESTED_QUALITY: "SET_REQUESTED_QUALITY",
     SET_AUDIO_TRACKS: "SET_AUDIO_TRACKS",
     SET_ACTIVE_AUDIO_TRACK: "SET_ACTIVE_AUDIO_TRACK",
     SET_BUFFERED: "SET_BUFFERED",
@@ -230,6 +236,8 @@ function playerReducer(state, action) {
             return { ...state, localSubtitleFile: action.payload };
         case A.SET_QUALITY_LEVELS:
             return { ...state, qualityLevels: action.payload };
+        case A.SET_REQUESTED_QUALITY:
+            return { ...state, requestedQuality: action.payload };
         case A.SET_ACTIVE_QUALITY:
             return { ...state, activeQuality: action.payload };
         case A.SET_AUDIO_TRACKS:
@@ -344,6 +352,7 @@ export function PlayerProvider({ children }) {
     const setLocalSubtitleFile = useCallback((v) => dispatch({ type: A.SET_LOCAL_SUBTITLE_FILE, payload: v }), []);
     const setQualityLevels = useCallback((v) => dispatch({ type: A.SET_QUALITY_LEVELS, payload: v }), []);
     const setActiveQuality = useCallback((v) => dispatch({ type: A.SET_ACTIVE_QUALITY, payload: v }), []);
+    const setRequestedQuality = useCallback((v) => dispatch({ type: A.SET_REQUESTED_QUALITY, payload: v }), []);
     const setAudioTracks = useCallback((v) => dispatch({ type: A.SET_AUDIO_TRACKS, payload: v }), []);
     const setActiveAudioTrack = useCallback((v) => dispatch({ type: A.SET_ACTIVE_AUDIO_TRACK, payload: v }), []);
     const setBuffered = useCallback((v) => dispatch({ type: A.SET_BUFFERED, payload: v }), []);
@@ -398,6 +407,7 @@ export function PlayerProvider({ children }) {
             setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
+            setRequestedQuality,
             setAudioTracks,
             setActiveAudioTrack,
             setBuffered,
@@ -451,6 +461,7 @@ export function PlayerProvider({ children }) {
             setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
+            setRequestedQuality,
             setAudioTracks,
             setActiveAudioTrack,
             setBuffered,

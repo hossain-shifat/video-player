@@ -34,6 +34,32 @@ const LANG_MAP = {
     tr: "Turkish",
     urd: "Urdu",
     ur: "Urdu",
+    tam: "Tamil",
+    ta: "Tamil",
+    tel: "Telugu",
+    te: "Telugu",
+    mal: "Malayalam",
+    ml: "Malayalam",
+    kan: "Kannada",
+    kn: "Kannada",
+    pan: "Punjabi",
+    pa: "Punjabi",
+    mar: "Marathi",
+    mr: "Marathi",
+    guj: "Gujarati",
+    gu: "Gujarati",
+    vie: "Vietnamese",
+    vi: "Vietnamese",
+    tha: "Thai",
+    th: "Thai",
+    pol: "Polish",
+    pl: "Polish",
+    dut: "Dutch",
+    nld: "Dutch",
+    nl: "Dutch",
+    per: "Persian",
+    fas: "Persian",
+    fa: "Persian",
 };
 
 function resolveLanguageName(track, index) {
@@ -812,17 +838,29 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         };
     }, []);
 
-    // ── Shared Web Audio graph: Volume Boost + 3-Band Equalizer ───────────────
+    // ── Shared Web Audio graph: Volume Boost + 5-Band Equalizer ───────────────
     //
     // <video>.volume natively caps at 1.0 — pushing louder, or applying any
     // frequency-selective EQ, requires routing through Web Audio. This is a
     // ONE-WAY change: createMediaElementSource() can only be called ONCE
     // per <video> element, ever — so Volume Boost and EQ MUST share the
     // exact same source/context; they cannot each create their own. Graph:
-    //   source → bassFilter → midFilter → trebleFilter → gain → destination
+    //   source → b60 → b230 → b910 → b4000 → b14000 → gain → destination
     // Lazily created on first actual use of EITHER feature. If neither is
     // ever touched, native <video>.volume keeps working with zero Web Audio
     // involvement at all.
+    //
+    // FIX: this used to be a 3-band chain (bass/mid/treble) reading
+    // state.eqBands.bass/mid/treble — but UsePlayerState.jsx and
+    // PlayerControls.jsx have always used a 5-band shape
+    // (b60/b230/b910/b4000/b14000, with 11 presets tuned for 5 distinct
+    // bands). Since state.eqBands never had .bass/.mid/.treble, every band
+    // silently destructured to 0 — the EQ sliders/presets had zero audible
+    // effect regardless of what the user picked. Expanded to a real 5-band
+    // chain (standard graphic-EQ topology: low-shelf, 3× peaking, high-shelf)
+    // matching the state shape that already exists everywhere else, rather
+    // than collapsing the UI/presets down to 3 bands — keeps this fix
+    // contained to this one file instead of touching state/UI/preset data.
     //
     // Defensive: AudioContext requires a prior user gesture on most
     // browsers — if construction fails, both features silently have no
@@ -830,7 +868,7 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
     const audioCtxRef = useRef(null);
     const gainNodeRef = useRef(null);
     const sourceNodeRef = useRef(null);
-    const eqBandsRef = useRef({ bass: null, mid: null, treble: null });
+    const eqBandsRef = useRef({ b60: null, b230: null, b910: null, b4000: null, b14000: null });
 
     const ensureAudioGraph = useCallback(() => {
         const video = videoRef.current;
@@ -840,34 +878,48 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
             const ctx = new Ctx();
             const source = ctx.createMediaElementSource(video);
 
-            const bass = ctx.createBiquadFilter();
-            bass.type = "lowshelf";
-            bass.frequency.value = 200;
-            bass.gain.value = 0;
+            const b60 = ctx.createBiquadFilter();
+            b60.type = "lowshelf";
+            b60.frequency.value = 60;
+            b60.gain.value = 0;
 
-            const mid = ctx.createBiquadFilter();
-            mid.type = "peaking";
-            mid.frequency.value = 1000;
-            mid.Q.value = 0.7;
-            mid.gain.value = 0;
+            const b230 = ctx.createBiquadFilter();
+            b230.type = "peaking";
+            b230.frequency.value = 230;
+            b230.Q.value = 1;
+            b230.gain.value = 0;
 
-            const treble = ctx.createBiquadFilter();
-            treble.type = "highshelf";
-            treble.frequency.value = 3000;
-            treble.gain.value = 0;
+            const b910 = ctx.createBiquadFilter();
+            b910.type = "peaking";
+            b910.frequency.value = 910;
+            b910.Q.value = 1;
+            b910.gain.value = 0;
+
+            const b4000 = ctx.createBiquadFilter();
+            b4000.type = "peaking";
+            b4000.frequency.value = 4000;
+            b4000.Q.value = 1;
+            b4000.gain.value = 0;
+
+            const b14000 = ctx.createBiquadFilter();
+            b14000.type = "highshelf";
+            b14000.frequency.value = 14000;
+            b14000.gain.value = 0;
 
             const gain = ctx.createGain();
 
-            source.connect(bass);
-            bass.connect(mid);
-            mid.connect(treble);
-            treble.connect(gain);
+            source.connect(b60);
+            b60.connect(b230);
+            b230.connect(b910);
+            b910.connect(b4000);
+            b4000.connect(b14000);
+            b14000.connect(gain);
             gain.connect(ctx.destination);
 
             audioCtxRef.current = ctx;
             sourceNodeRef.current = source;
             gainNodeRef.current = gain;
-            eqBandsRef.current = { bass, mid, treble };
+            eqBandsRef.current = { b60, b230, b910, b4000, b14000 };
             return true;
         } catch {
             // Web Audio unavailable or blocked — both features silently
@@ -888,22 +940,25 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         gainNodeRef.current.gain.value = state.volumeBoost;
     }, [state.volumeBoost]);
 
-    // ── 3-Band EQ ──────────────────────────────────────────────────────────────
-    // state.eqBands = { bass, mid, treble }, each in dB, range roughly
-    // -12..+12. Connects the shared audio graph on first non-zero use,
-    // same lazy pattern as volume boost.
+    // ── 5-Band EQ ──────────────────────────────────────────────────────────────
+    // state.eqBands = { b60, b230, b910, b4000, b14000 }, each in dB, range
+    // roughly -12..+12 (matches UsePlayerState.jsx's EQ_PRESETS). Connects
+    // the shared audio graph on first non-zero use, same lazy pattern as
+    // volume boost.
     useEffect(() => {
-        const { bass, mid, treble } = state.eqBands || {};
-        if (state.eqEnabled && (bass || mid || treble)) ensureAudioGraph();
+        const { b60, b230, b910, b4000, b14000 } = state.eqBands || {};
+        if (state.eqEnabled && (b60 || b230 || b910 || b4000 || b14000)) ensureAudioGraph();
     }, [state.eqBands, state.eqEnabled, ensureAudioGraph]);
 
     useEffect(() => {
         const bands = eqBandsRef.current;
-        if (!bands.bass) return;
-        const { bass = 0, mid = 0, treble = 0 } = state.eqEnabled ? state.eqBands || {} : {};
-        bands.bass.gain.value = bass;
-        bands.mid.gain.value = mid;
-        bands.treble.gain.value = treble;
+        if (!bands.b60) return;
+        const { b60 = 0, b230 = 0, b910 = 0, b4000 = 0, b14000 = 0 } = state.eqEnabled ? state.eqBands || {} : {};
+        bands.b60.gain.value = b60;
+        bands.b230.gain.value = b230;
+        bands.b910.gain.value = b910;
+        bands.b4000.gain.value = b4000;
+        bands.b14000.gain.value = b14000;
     }, [state.eqBands, state.eqEnabled]);
 
     // ── Sync playback speed ───────────────────────────────────────────────────

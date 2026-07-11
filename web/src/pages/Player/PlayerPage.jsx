@@ -45,6 +45,12 @@ function PlayerInner({ mediaId, knownResumePosition }) {
     const setDefaultSubRef = useRef(null);
     // HLS instance ref — populated by VideoCore via onHlsCreated, used by useProgress deferredSeek
     const hlsRef = useRef(null);
+    // Captured playback state during an on-demand quality switch (position/
+    // playing/etc to restore once the new-quality session is ready). Kept
+    // completely separate from useProgress's history-resume machinery —
+    // this is a mid-playback stream swap, not a fresh video load, and must
+    // never trigger the resume dialog or INIT_PHASE reset logic.
+    const qualitySwitchStateRef = useRef(null);
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
@@ -709,7 +715,90 @@ function PlayerInner({ mediaId, knownResumePosition }) {
     // here — it only happens once the phase machine actually reaches
     // PLAYING (see the dedicated effect below), so the sequence can't be
     // accidentally short-circuited by calling this function early.
+    // ── On-demand quality switch (new session per tier, not a full ABR ladder) ──
+    // Backend already supports an explicit ?quality= override on the same
+    // endpoint used for initial playback (streamController.js req.query.quality)
+    // — this just calls it again mid-playback, captures/restores state around
+    // the swap, same spirit as the audio-track seamless-switch work in
+    // VideoCore.jsx but for a full new session (quality changes always need a
+    // new ffmpeg process — there's no way around that, unlike audio which
+    // stays within one manifest).
+    //
+    // ASSUMPTION FLAGGED: this calls resolvePlayback(mediaId, { quality }) —
+    // assuming it forwards a second options arg through as ?quality=, the way
+    // getMediaById/etc typically do in this codebase. I don't have
+    // src/api/stream.js to confirm the exact signature — if this 401s or the
+    // quality param doesn't reach the backend, that file's resolvePlayback
+    // signature is different from assumed and needs adjusting here.
+    const switchQuality = useCallback(
+        async (targetQuality) => {
+            if (!mediaId || !targetQuality) return;
+            const video = videoRef.current;
+            qualitySwitchStateRef.current = {
+                time: video?.currentTime || 0,
+                playing: !!video && !video.paused,
+                playbackRate: video?.playbackRate || 1,
+                volume: video?.volume,
+                muted: video?.muted,
+                subtitle: state.activeSubtitle,
+            };
+            try {
+                // Pass seekSec so the new session's ffmpeg starts encoding
+                // near where we actually are, not from 0:00 — without this,
+                // the restore-seek below would jump forward past whatever
+                // the fresh session buffered from the start, tripping the
+                // exact same forward-gap-restart logic debugged at length
+                // earlier in this project for audio switching.
+                const playback = await resolvePlayback(mediaId, { quality: targetQuality, seekSec: qualitySwitchStateRef.current.time });
+                if (playback.mode === "hls") {
+                    setSessionId(playback.sessionId);
+                    sessionIdRef.current = playback.sessionId;
+                    setStreamUrl(playback.hlsUrl);
+                } else {
+                    setStreamUrl(playback.streamUrl);
+                }
+                // VideoCore's existing [streamUrl] effect tears down and
+                // rebuilds hls.js for the new URL, then fires onReadyToSeek
+                // same as it does for the very first load — handleReadyToSeek
+                // below checks qualitySwitchStateRef first and restores from
+                // it instead of running the normal resume-dialog flow.
+            } catch (err) {
+                console.error("[PlayerPage] Quality switch failed:", err.message);
+                qualitySwitchStateRef.current = null;
+            }
+        },
+        [mediaId, state.activeSubtitle],
+    );
+
     const handleReadyToSeek = useCallback(() => {
+        // Quality-switch restore path: if a quality switch is pending, this
+        // ready signal is from the NEW-quality session finishing its initial
+        // buffer, not a fresh video load. Restore captured state directly and
+        // skip the resume-dialog/INIT_PHASE machinery entirely — that flow
+        // assumes "opening a video for the first time," which is not what's
+        // happening here and must not be disturbed by this addition.
+        const pending = qualitySwitchStateRef.current;
+        if (pending) {
+            qualitySwitchStateRef.current = null;
+            const video = videoRef.current;
+            // FIX: a plain `video.currentTime = pending.time` here was the
+            // actual cause of "quality switch restarts from 0:00" — the new
+            // session's manifest isn't seekable to that position the instant
+            // this fires (same reason the ORIGINAL resume flow below needs
+            // deferredSeek's poll-until-seekable + hls.startLoad(target)
+            // instead of a one-shot assignment). Reusing that exact same
+            // proven mechanism here instead of a weaker one-off version.
+            if (video) {
+                console.log(`[PlayerPage] Quality-switch restore: seeking to ${pending.time.toFixed(1)}s via deferredSeek`);
+                progressProps.deferredSeek(pending.time, () => {
+                    video.playbackRate = pending.playbackRate;
+                    if (pending.volume != null) video.volume = pending.volume;
+                    if (pending.muted != null) video.muted = pending.muted;
+                    if (pending.playing) video.play().catch(() => {});
+                });
+            }
+            return;
+        }
         advancePhase(INIT_PHASE.METADATA_READY);
         advancePhase(INIT_PHASE.BUFFERING);
         if (progressProps.showResumeDialog) {
@@ -862,7 +951,7 @@ function PlayerInner({ mediaId, knownResumePosition }) {
             <PlayerOverlays overlayState={overlayState} overlayVis={overlayVis} />
 
             {/* Subtitles */}
-            <SubtitleRenderer />
+            <SubtitleRenderer videoRef={videoRef} />
 
             {/* Screen lock */}
             <PlayerLock />
@@ -877,6 +966,8 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                 onShowControls={showControls}
                 controlsPhase={controlsPhase}
                 isPortraitOverride={isPortraitOverride}
+                onSwitchQuality={switchQuality}
+                mediaId={mediaId}
             />
 
             {/* Resume dialog — auto-fades after 6s of no interaction (pure UI

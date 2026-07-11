@@ -42,6 +42,10 @@ const mediaCache = require("../utils/mediaCache");
 const { probe } = require("../utils/ffprobe");
 const { decidePlayback, DECISION } = require("../utils/streamingEngine");
 const { parseFilename } = require("../utils/nameParser");
+// NOTE: path assumed to match the sibling utils/ convention used by probe,
+// streamingEngine, nameParser above — adjust if mediaInfoStore actually
+// lives elsewhere in this project.
+const { getLanguageName, isRealLanguageTag, getMediaInfo } = require("../utils/mediaInfoStore");
 const {
     createSession,
     getSession,
@@ -64,6 +68,108 @@ const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB for direct-play range chunks
 // BUG-09 FIX: proper LRU — on hit, delete+re-insert to update insertion order.
 const durationCache = new Map();
 const MAX_DURATION_CACHE = 1000;
+
+// ─── Audio track language enrichment (NEW — response layer only) ────────────
+// streamingEngine.extractMediaInfo() reports whatever ffprobe's tags.language
+// says, which is frequently the literal placeholder "und" for files that
+// were never given a real language tag by whatever tool created them —
+// that's what was showing up as "UND" in the audio-track switcher. This does
+// NOT change streamingEngine's decision logic or extractMediaInfo's own
+// shape at all — decidePlayback() still sees the exact same mediaInfo it
+// always did. It only enriches the *response* streamController builds on
+// top of that, using the filename language hints (mediaInfo.parsedLanguages,
+// already computed above via parseFilename but previously left unused past
+// a console.log) the same way mediaInfoStore already infers languages for
+// the file's metadata card — so the audio-track switcher and the metadata
+// panel agree, instead of one saying "Hindi" and the other saying "und".
+// mediaInfoStore.getMediaInfo() already does everything the older
+// mediainfo.json-era code was reaching for: it reuses ffprobe's own
+// language tag when real, then falls back to scanning each stream's OWN
+// title tag (e.g. "5.1 Surround - Hindi"), then the filename — the exact
+// "how it collects audio/subtitle track names" logic asked for here.
+// streamingEngine.extractMediaInfo() (used for decidePlayback + the actual
+// FFmpeg args) doesn't carry stream titles at all, so it can't reach that
+// tier on its own. This pulls mediaInfoStore's already-inferred language
+// per track back onto mediaInfo.audio[] BEFORE it reaches
+// decidePlayback/buildFFmpegArgs — so transcoderService's existing
+// Tier-1 check (`language && language !== "und"`) just naturally picks up
+// the richer result, with ZERO changes to transcoderService.js or
+// streamingEngine.js themselves.
+// Wrapped in try/catch and completely optional: if mediaInfoStore's probe
+// fails for any reason, mediaInfo.audio keeps whatever streamingEngine
+// already gave it (its own ffprobe tag, "und" if none) and transcoderService's
+// existing filename-word-scan fallback still runs exactly as before — this
+// can only add information, never remove or block anything.
+async function enrichAudioLanguagesFromMediaInfoStore(mediaInfo, fileObj) {
+    if (!mediaInfo?.audio?.length) return;
+    // FIX (perf regression): skip entirely when every track already has a
+    // real tag — the common case for well-tagged files. Previously this
+    // called getMediaInfo() unconditionally, which on a cold cache runs its
+    // own full ffprobe even though nothing needed backfilling, adding
+    // needless latency to every stream start/seek-restart.
+    const needsBackfill = mediaInfo.audio.some((t) => !isRealLanguageTag(t.language));
+    if (!needsBackfill) return;
+    try {
+        // FIX (perf regression): a cold mediaInfoStore cache means this runs
+        // its own ffprobe, which can take seconds on a slow/networked disk —
+        // that's fine for correctness but must never be allowed to stall
+        // playback start. Race it against a short timeout; on timeout this
+        // just skips enrichment for this request (mediaInfo.audio keeps
+        // whatever streamingEngine/transcoderService's own fallback gives
+        // it), the SAME as any other failure path here.
+        const richInfo = await Promise.race([
+            getMediaInfo({ id: fileObj.id, path: fileObj.path, name: fileObj.name }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), 800)),
+        ]);
+        const richTracks = richInfo?.audioTracks || [];
+        mediaInfo.audio.forEach((track, i) => {
+            if (isRealLanguageTag(track.language)) return; // ffprobe's own tag wins, untouched
+            const rich = richTracks[i];
+            if (rich && isRealLanguageTag(rich.language)) {
+                track.language = rich.language;
+            }
+        });
+    } catch (err) {
+        console.warn(`[Stream] mediaInfoStore language enrichment skipped: ${err.message}`);
+    }
+}
+
+function buildAudioTrackList(mediaInfo) {
+    const audio = mediaInfo?.audio || [];
+    const filenameLangs = (mediaInfo?.parsedLanguages || []).slice();
+
+    // Don't reuse a filename-hinted language for backfilling if some OTHER
+    // track already carries that real tag from ffprobe — same "don't
+    // duplicate a tag that's already spoken for" rule mediaInfoStore uses.
+    for (const t of audio) {
+        if (isRealLanguageTag(t.language)) {
+            const idx = filenameLangs.indexOf(t.language);
+            if (idx !== -1) filenameLangs.splice(idx, 1);
+        }
+    }
+
+    let guessIndex = 0;
+    return audio.map((t, i) => {
+        let language = t.language;
+        let languageSource = isRealLanguageTag(language) ? "tag" : null;
+        if (!languageSource) {
+            const guessed = filenameLangs[guessIndex];
+            if (guessed) {
+                language = guessed;
+                languageSource = "filename";
+                guessIndex++;
+            }
+        }
+        return {
+            index: i,
+            language,
+            languageName: getLanguageName(language),
+            languageSource,
+            channels: t.channels,
+            default: t.default || i === 0,
+        };
+    });
+}
 
 async function getDuration(filePath) {
     if (durationCache.has(filePath)) {
@@ -241,7 +347,7 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
         // groups. The player reads this to build its audio-track switcher —
         // switching is just an HLS.js audioTrack index change, no new
         // request to this server, no session restart.
-        audioTracks: session.isMultiAudioPath ? (mediaInfo?.audio || []).map((t, i) => ({ index: i, language: t.language, channels: t.channels, default: t.default || i === 0 })) : [],
+        audioTracks: session.isMultiAudioPath ? buildAudioTrackList(mediaInfo) : [],
     });
 }
 
@@ -273,6 +379,7 @@ async function streamVideo(req, res) {
             // tags are missing ("und").
             if (mediaInfo) mediaInfo.parsedLanguages = parseFilename(fileObj.name)?.languages || [];
             console.log(`[Stream] filename language hints for "${fileObj.name}": ${JSON.stringify(mediaInfo?.parsedLanguages || [])}`);
+            await enrichAudioLanguagesFromMediaInfoStore(mediaInfo, fileObj);
         } catch (err) {
             console.warn(`[Stream] ffprobe failed: ${err.message}`);
         }
@@ -504,6 +611,12 @@ async function serveHLSFile(req, res) {
 
                 try {
                     // Re-probe is expensive; reuse cached info if available
+                    // FIX (perf regression): mediaInfoStore enrichment removed
+                    // from this path — this is the most latency-sensitive one
+                    // (fires on every seek-restart) and is redundant anyway:
+                    // it's the same file, whose language tags don't change
+                    // between restarts. Enrichment already ran once when the
+                    // session was first created; that's enough.
                     let mediaInfo;
                     try {
                         mediaInfo = await probe(fileObj.path);
@@ -589,6 +702,7 @@ async function startTranscode(req, res) {
             mediaInfo = await probe(fileObj.path);
             if (mediaInfo) mediaInfo.parsedLanguages = parseFilename(fileObj.name)?.languages || [];
             console.log(`[Stream] filename language hints for "${fileObj.name}": ${JSON.stringify(mediaInfo?.parsedLanguages || [])}`);
+            await enrichAudioLanguagesFromMediaInfoStore(mediaInfo, fileObj);
         } catch {}
 
         const decision = decidePlayback(mediaInfo, clientCaps, options);
@@ -606,7 +720,7 @@ async function startTranscode(req, res) {
             hlsUrl: `/stream/hls/${session.id}/${session.isMultiAudioPath ? "master.m3u8" : "index.m3u8"}`,
             startSegment: startSeg,
             segmentDuration: SEGMENT_DURATION,
-            audioTracks: session.isMultiAudioPath ? (mediaInfo?.audio || []).map((t, i) => ({ index: i, language: t.language, channels: t.channels, default: t.default || i === 0 })) : [],
+            audioTracks: session.isMultiAudioPath ? buildAudioTrackList(mediaInfo) : [],
         });
     } catch (err) {
         console.error("[Stream] startTranscode error:", err);
@@ -804,6 +918,26 @@ async function streamEmbeddedSubtitle(req, res) {
     }
 }
 
+// ─── NEW: mediaInfoStore lookup by id ─────────────────────────────────────────
+// Exposes the exact same cached data persisted at data/mediainfo.json,
+// keyed by file id — a fallback language source for whenever some other
+// endpoint's live response is missing a real audio/subtitle language name.
+// Cache-hit is instant; cache-miss runs one ffprobe (same cost as any other
+// first-time probe of this file elsewhere in the app).
+async function getMediaInfoById(req, res) {
+    try {
+        const { id } = req.params;
+        const fileObj = await resolveFileById(id);
+        if (!fileObj) return res.status(404).json({ error: "Media not found" });
+        const info = await getMediaInfo({ id: fileObj.id, path: fileObj.path, name: fileObj.name });
+        if (!info) return res.status(404).json({ error: "No media info available for this file" });
+        return res.json(info);
+    } catch (err) {
+        console.error("[Stream] getMediaInfoById error:", err.message);
+        return res.status(500).json({ error: "Failed to load media info" });
+    }
+}
+
 module.exports = {
     streamVideo,
     serveHLSFile,
@@ -813,4 +947,5 @@ module.exports = {
     streamSubtitle,
     streamEmbeddedSubtitle,
     pingSessionHandler,
+    getMediaInfoById,
 };

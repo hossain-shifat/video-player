@@ -287,6 +287,13 @@ function buildFlatRows() {
                 country: ch.country || null,
                 source: ch.source,
                 url: ch.url,
+                // Written by the bulk stream-health checker (runBulkStreamCheck) —
+                // "working" | "offline" | "timeout" | "unknown" (unprobed / non-HTTP).
+                // Was previously dropped here, so /api/live/channels?workingOnly=true
+                // had nothing to actually filter on.
+                streamStatus: ch.streamStatus || "unknown",
+                httpCode: ch.httpCode ?? null,
+                lastChecked: ch.lastChecked || null,
             });
         }
     }
@@ -306,6 +313,7 @@ function getChannels(req, res) {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 24));
         const q = (req.query.q || "").toLowerCase().trim();
         const category = (req.query.category || "").toLowerCase().trim();
+        const workingOnly = req.query.workingOnly === "true" || req.query.workingOnly === "1";
 
         let rows = channelStateStore.applyChannelState(buildFlatRows());
 
@@ -314,6 +322,13 @@ function getChannels(req, res) {
         }
         if (category) {
             rows = rows.filter((c) => (c.category || "").toLowerCase() === category);
+        }
+        if (workingOnly) {
+            // Strictly "confirmed working" — excludes offline, timeout, AND
+            // unknown/unprobed. A channel that's never been health-checked
+            // yet doesn't get the benefit of the doubt here; it'll show up
+            // once the bulk checker (or the next scheduled run) confirms it.
+            rows = rows.filter((c) => c.streamStatus === "working");
         }
 
         const totalItems = rows.length;
