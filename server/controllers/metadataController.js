@@ -4,23 +4,25 @@ const { readFolders } = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
 const { getMetadata, getCached, invalidate, invalidateAll } = require("../utils/metadataStore");
 const { parseFilename } = require("../utils/nameParser");
+const { getMediaInfo, invalidate: invalidateMediaInfo } = require("../utils/mediaInfoStore");
 
-// GET /api/metadata/:id — returns metadata for one file, fetching TMDB if needed
+// GET /api/metadata/:id — returns metadata + mediaInfo for one file, fetching TMDB/ffprobe if needed
 async function getOne(req, res) {
     try {
         const folders = await readFolders();
         const file = await findById(folders, req.params.id);
         if (!file) return res.status(404).json({ error: "Media not found" });
 
-        const metadata = await getMetadata(file);
-        return res.json({ id: file.id, name: file.name, metadata });
+        const [metadata, mediaInfo] = await Promise.all([getMetadata(file), getMediaInfo(file)]);
+
+        return res.json({ id: file.id, name: file.name, metadata, mediaInfo });
     } catch (err) {
         console.error("[Metadata] getOne error:", err);
         return res.status(500).json({ error: "Failed to get metadata" });
     }
 }
 
-// POST /api/metadata/refresh/:id — clears cache for one file and re-fetches TMDB
+// POST /api/metadata/refresh/:id — clears cache for one file and re-fetches TMDB + ffprobe
 async function refreshOne(req, res) {
     try {
         const folders = await readFolders();
@@ -28,8 +30,11 @@ async function refreshOne(req, res) {
         if (!file) return res.status(404).json({ error: "Media not found" });
 
         invalidate(file.id);
-        const metadata = await getMetadata(file);
-        return res.json({ id: file.id, name: file.name, metadata });
+        invalidateMediaInfo(file.id);
+
+        const [metadata, mediaInfo] = await Promise.all([getMetadata(file), getMediaInfo(file)]);
+
+        return res.json({ id: file.id, name: file.name, metadata, mediaInfo });
     } catch (err) {
         console.error("[Metadata] refreshOne error:", err);
         return res.status(500).json({ error: "Failed to refresh metadata" });
@@ -55,6 +60,9 @@ async function parseDebug(req, res) {
 }
 
 // GET /api/media/enriched — returns full media list with metadata attached (may be slow first time)
+// NOTE: mediaInfo intentionally NOT attached here — running ffprobe over an
+// entire library on one request would be extremely slow. mediaInfo is fetched
+// lazily per-file via getOne() above (same lazy pattern as TMDB metadata).
 async function getAllEnriched(req, res) {
     try {
         const folders = await readFolders();

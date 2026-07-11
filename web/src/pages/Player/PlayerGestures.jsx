@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { usePlayerState } from "./UsePlayerState";
 import { useOverlay } from "./PlayerOverlays";
+import { isGestureLocked } from "./gestureLock";
 
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
@@ -352,6 +353,16 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
             // elements are marked with data-gesture-exclude="true" (set on
             // the Quick Action row's wrapper in PlayerControls).
             if (e.target?.closest?.('[data-gesture-exclude="true"]')) {
+                return;
+            }
+            // FIX (gesture conflict): second, DOM-independent check — see
+            // gestureLock.js. The subtitle dialogue-skip zone's actual DOM
+            // hit box is narrower than its visual swipe area (only as wide
+            // as the centered caption text), so a touch can start just
+            // outside it and still slip past the closest() check above
+            // while visually feeling like the same swipe. This catches
+            // that case too.
+            if (isGestureLocked()) {
                 return;
             }
 

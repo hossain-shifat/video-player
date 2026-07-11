@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router";
-import { EllipsisVertical, Film, Tv, Trash2 } from "lucide-react";
+import { EllipsisVertical, Film, Tv, Trash2, Heart, Bookmark, BookmarkCheck, Copy, Share2, Check, CheckCircle, Circle } from "lucide-react";
 import { api } from "../api/client";
 import { getOrCreateClientId } from "../api/stream";
+import { useApi } from "../Context/apiContext";
 
 // ─── Icon fallback — only if ffmpeg frame AND poster both fail ─────────────
 function IconFallback({ title, type }) {
@@ -15,10 +16,9 @@ function IconFallback({ title, type }) {
     );
 }
 
-// 14 → "14s", 65 → "1h 5m", 45 → "45m"
+// 65 → "1h 5m", 45 → "45m"
 function fmtDuration(secs) {
-    if (!secs || secs <= 0) return "0s";
-    if (secs < 60) return `${Math.round(secs)}s`;
+    if (!secs || secs <= 0) return "0m";
     const mins = Math.round(secs / 60);
     const h = Math.floor(mins / 60);
     const m = mins % 60;
@@ -26,31 +26,28 @@ function fmtDuration(secs) {
     return `${m}m`;
 }
 
+// "Farzi • S1 E1 • Artist"
+function buildSeriesLabel(item) {
+    const title = item.title || "";
+    const se = [item.seasonNumber != null ? `S${item.seasonNumber}` : null, item.episodeNumber != null ? `E${item.episodeNumber}` : null].filter(Boolean).join(" ");
+    const epTitle = item.seriesTitle || item.episodeTitle || "";
+    return [title, se, epTitle].filter(Boolean).join(" • ");
+}
+
 /**
- * HistoryCard — "Continue Watching" card, landscape (same shape/hover as LiveCard).
+ * HistoryCard — "Continue Watching" card.
  *
- * item shape (server/utils/userStore.js → saveProgress):
- *   { id, mediaType, title,
- *     seriesTitle,   — episode title for series/anime (replaces episodeTitle)
- *     seasonNumber,  — integer | null
- *     episodeNumber, — integer | null
- *     partNumber,    — integer | null  (multi-part movies)
- *     episodeTitle,  — legacy alias, still accepted
- *     poster, streamUrl, position, maxPositionReached,
- *     duration, completed, watchedAt }
- *
- * <img src> → GET /api/media/:id/thumbnail?time=<position>&clientId=<cid>
- * Falls back to poster → icon tile if ffmpeg extraction fails.
- *
- * onRemove(item) — fired by parent (ContinueWatchingRow) which owns the
- * TanStack mutation + optimistic cache update.
+ * onRemove(item) — fires after "Remove From History" confirmed in menu.
  */
 export default function HistoryCard({ item, onRemove }) {
+    const { isFavourite, toggleFavourite, isInWatchlist, toggleWatchlist } = useApi();
+
     const [thumbError, setThumbError] = useState(false);
     const [posterError, setPosterError] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [menuVisible, setMenuVisible] = useState(false);
     const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+    const [copied, setCopied] = useState(false);
     const btnRef = useRef(null);
     const menuRef = useRef(null);
 
@@ -68,8 +65,13 @@ export default function HistoryCard({ item, onRemove }) {
     const leftFmt = fmtDuration(Math.max(0, (item.duration || 0) - (item.position || 0)));
     const totalFmt = fmtDuration(item.duration);
 
-    // partNumber sub-label for multi-part movies
+    const seriesLabel = isSeries ? buildSeriesLabel(item) : null;
     const partLabel = !isSeries && item.partNumber != null ? `Part ${item.partNumber}` : null;
+
+    // ── useApi state — same pattern as MediaCard ────────────────────────────
+    const favourited = isFavourite(item.id);
+    const watchlisted = isInWatchlist(item.id);
+    const payload = { name: item.title, poster: item.poster, type: mediaType };
 
     function closeMenu() {
         setMenuVisible(false);
@@ -79,7 +81,6 @@ export default function HistoryCard({ item, onRemove }) {
     useEffect(() => {
         if (!menuOpen) return;
         const raf = requestAnimationFrame(() => setMenuVisible(true));
-
         function handleClick(e) {
             if (menuRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return;
             closeMenu();
@@ -87,11 +88,9 @@ export default function HistoryCard({ item, onRemove }) {
         function handleScroll() {
             closeMenu();
         }
-
         document.addEventListener("mousedown", handleClick);
         window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
         window.addEventListener("resize", handleScroll, { passive: true });
-
         return () => {
             cancelAnimationFrame(raf);
             document.removeEventListener("mousedown", handleClick);
@@ -115,11 +114,55 @@ export default function HistoryCard({ item, onRemove }) {
         setMenuOpen(true);
     }
 
-    function handleRemove(e) {
+    function handleAction(e, action) {
         e.preventDefault();
         e.stopPropagation();
-        closeMenu();
-        onRemove?.(item);
+        switch (action) {
+            case "favourite":
+                toggleFavourite(item.id, payload);
+                break;
+            case "watchlist":
+                toggleWatchlist(item.id, payload);
+                break;
+            case "copy": {
+                const url = item.streamUrl || `${window.location.origin}/player/${encodeURIComponent(item.id)}`;
+                navigator.clipboard
+                    ?.writeText(url)
+                    .then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                    })
+                    .catch(() => {});
+                break;
+            }
+            case "share": {
+                const shareUrl = `${window.location.origin}/media/${encodeURIComponent(item.id)}`;
+                if (navigator.share) {
+                    // Must be called synchronously inside a user-gesture handler.
+                    // setTimeout breaks the gesture context on mobile browsers.
+                    navigator
+                        .share({
+                            title: item.title || "Watch on FLUX",
+                            text: item.title || "",
+                            url: shareUrl,
+                        })
+                        .then(() => closeMenu())
+                        .catch(() => closeMenu());
+                } else {
+                    navigator.clipboard?.writeText(shareUrl).catch(() => {});
+                    closeMenu();
+                }
+                break;
+            }
+            case "trailer":
+                closeMenu();
+                // Not yet functional — trailer URL not stored in history
+                break;
+            case "remove":
+                closeMenu();
+                onRemove?.(item);
+                break;
+        }
     }
 
     return (
@@ -129,22 +172,29 @@ export default function HistoryCard({ item, onRemove }) {
             className="relative shrink-0 w-56 sm:w-64 cursor-pointer select-none no-underline my-2 ml-0.5">
             {/* ── Thumbnail ── */}
             <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-base-300 shadow-lg ring-1 ring-white/5 transition-transform duration-200 hover:scale-[1.03] hover:shadow-2xl hover:ring-white/20">
-                {showThumbnail && <img src={thumbUrl} alt={item.title || item.name} className="w-full h-full object-cover" loading="lazy" draggable={false} onError={() => setThumbError(true)} />}
-
+                {showThumbnail && (
+                    <img
+                        src={thumbUrl}
+                        alt={item.title}
+                        className="absolute inset-0 w-full h-full object-cover object-center block"
+                        loading="lazy"
+                        draggable={false}
+                        onError={() => setThumbError(true)}
+                    />
+                )}
                 {showPosterFallback && (
                     <img
                         src={item.poster}
-                        alt={item.title || item.name}
-                        className="absolute inset-0 w-full h-full object-cover"
+                        alt={item.title}
+                        className="absolute inset-0 w-full h-full object-cover object-center block"
                         loading="lazy"
                         draggable={false}
                         onError={() => setPosterError(true)}
                     />
                 )}
-
                 {showIconFallback && (
                     <div className="absolute inset-0">
-                        <IconFallback title={item.title || item.name} type={mediaType} />
+                        <IconFallback title={item.title} type={mediaType} />
                     </div>
                 )}
 
@@ -152,9 +202,7 @@ export default function HistoryCard({ item, onRemove }) {
 
                 {/* Type badge */}
                 <span
-                    className={`absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
-                        isSeries ? "bg-accent/90 text-accent-content" : "bg-primary/90 text-primary-content"
-                    }`}>
+                    className={`absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${isSeries ? "bg-accent/90 text-accent-content" : "bg-primary/90 text-primary-content"}`}>
                     {mediaType === "anime" ? "Anime" : mediaType === "series" ? "Series" : "Movie"}
                 </span>
 
@@ -179,32 +227,12 @@ export default function HistoryCard({ item, onRemove }) {
             <div className="flex justify-between items-start mt-2 px-0.5">
                 <div className="flex-1 min-w-0">
                     {isSeries ? (
-                        <>
-                            {/* Line 1: Series Name · Episode Title */}
-                            <p
-                                className="text-[13px] font-medium text-base-content truncate leading-tight"
-                                title={`${item.title}${item.seriesTitle || item.episodeTitle ? ` · ${item.seriesTitle || item.episodeTitle}` : ""}`}>
-                                <span>{item.title}</span>
-                                {(item.seriesTitle || item.episodeTitle) && (
-                                    <>
-                                        <span className="mx-1 text-base-content/30">·</span>
-                                        <span className="text-base-content/70">{item.seriesTitle || item.episodeTitle}</span>
-                                    </>
-                                )}
-                            </p>
-                            {/* Line 2: S1 · E3 */}
-                            {(item.seasonNumber != null || item.episodeNumber != null) && (
-                                <p className="text-[11px] text-base-content/45 font-medium mt-0.5 truncate leading-snug">
-                                    {item.seasonNumber != null && <span>S{item.seasonNumber}</span>}
-                                    {item.seasonNumber != null && item.episodeNumber != null && <span className="mx-1 text-base-content/25">·</span>}
-                                    {item.episodeNumber != null && <span>E{item.episodeNumber}</span>}
-                                </p>
-                            )}
-                        </>
+                        <p className="text-[12.5px] font-medium text-base-content/85 truncate leading-tight" title={seriesLabel}>
+                            {seriesLabel}
+                        </p>
                     ) : (
-                        /* Movie: title + optional Part N */
-                        <p className="text-[13px] font-medium text-base-content truncate leading-tight" title={item.title || item.name}>
-                            {item.title || item.name}
+                        <p className="text-[13px] font-medium text-base-content truncate leading-tight" title={item.title}>
+                            {item.title}
                             {partLabel && <span className="ml-1 text-base-content/40 text-[11px] font-normal">{partLabel}</span>}
                         </p>
                     )}
@@ -214,7 +242,7 @@ export default function HistoryCard({ item, onRemove }) {
                     ref={btnRef}
                     type="button"
                     onClick={handleToggleMenu}
-                    className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white hover:text-primary cursor-pointer transition-colors">
+                    className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white/60 hover:text-white cursor-pointer transition-colors">
                     <EllipsisVertical size={14} />
                 </button>
 
@@ -232,19 +260,80 @@ export default function HistoryCard({ item, onRemove }) {
                                 transition: "opacity 150ms ease, transform 150ms ease",
                                 zIndex: 9999,
                             }}
-                            className="w-48 rounded-md bg-base-200 shadow-xl ring-1 ring-white/10 py-1"
+                            className="w-52 rounded-xl bg-[oklch(15%_0.01_260/0.97)] backdrop-blur-md shadow-2xl border border-white/10 py-1.5"
                             onClick={(e) => e.stopPropagation()}>
-                            <button
-                                type="button"
-                                onClick={handleRemove}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-base-content/80 hover:bg-base-300 hover:text-error transition-colors">
-                                <Trash2 size={14} />
-                                Remove From History
-                            </button>
+                            {/* Add to Favorites — toggleFavourite (same as MediaCard) */}
+                            <MenuItem
+                                icon={favourited ? Heart : Heart}
+                                label={favourited ? "Remove from Favorites" : "Add to Favorites"}
+                                active={favourited}
+                                iconClass={favourited ? "text-error" : "text-white/45"}
+                                onClick={(e) => handleAction(e, "favourite")}
+                            />
+
+                            {/* Add to Watchlist — toggleWatchlist (same as MediaCard) */}
+                            <MenuItem
+                                icon={watchlisted ? BookmarkCheck : Bookmark}
+                                label={watchlisted ? "Remove from Watchlist" : "Add to Watchlist"}
+                                active={watchlisted}
+                                iconClass={watchlisted ? "text-accent" : "text-white/45"}
+                                onClick={(e) => handleAction(e, "watchlist")}
+                            />
+
+                            {/* Mark as Watched / Unwatched — item.completed drives label */}
+                            <MenuItem
+                                icon={item.completed ? CheckCircle : Circle}
+                                label={item.completed ? "Mark as Unwatched" : "Mark as Watched"}
+                                active={item.completed}
+                                iconClass={item.completed ? "text-success" : "text-white/45"}
+                                onClick={(e) => handleAction(e, "watched")}
+                            />
+
+                            <Divider />
+
+                            {/* Watch Trailer — not yet functional */}
+                            <MenuItem icon={Film} label="Watch Trailer" iconClass="text-white/45" onClick={(e) => handleAction(e, "trailer")} />
+
+                            {/* Copy Stream Link — clipboard functional */}
+                            <MenuItem
+                                icon={copied ? Check : Copy}
+                                label={copied ? "Copied!" : "Copy Stream Link"}
+                                active={copied}
+                                iconClass={copied ? "text-success" : "text-white/45"}
+                                onClick={(e) => handleAction(e, "copy")}
+                            />
+
+                            {/* Share — Web Share API */}
+                            <MenuItem icon={Share2} label="Share" iconClass="text-white/45" onClick={(e) => handleAction(e, "share")} />
+
+                            <Divider />
+
+                            {/* Remove from History */}
+                            <MenuItem icon={Trash2} label="Remove From History" iconClass="text-white/45" textClass="text-error/80 hover:text-error" onClick={(e) => handleAction(e, "remove")} />
                         </div>,
                         document.body,
                     )}
             </div>
         </Link>
     );
+}
+
+// ─── Shared menu item component ───────────────────────────────────────────────
+function MenuItem({ icon: Icon, label, onClick, iconClass = "text-white/45", textClass = "text-white/80", active }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium cursor-pointer
+                        hover:bg-white/8 active:bg-white/12 transition-colors duration-100
+                        ${textClass}`}>
+            <Icon size={14} strokeWidth={1.8} className={`shrink-0 ${iconClass}`} fill={active && Icon.name === "Heart" ? "currentColor" : "none"} />
+            {label}
+        </button>
+    );
+}
+
+// ─── Divider ──────────────────────────────────────────────────────────────────
+function Divider() {
+    return <div className="my-1 mx-3 border-t border-white/8" />;
 }

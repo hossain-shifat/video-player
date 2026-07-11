@@ -1,4 +1,7 @@
-import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
+import { useNavigate } from "react-router";
+import { getMedia } from "../../api/media";
+import { getHistory } from "../../api/history";
 import {
     Play,
     Pause,
@@ -20,7 +23,6 @@ import {
     Gauge,
     Repeat,
     Repeat1,
-    RotateCcw,
     Zap,
     Settings,
     AlignCenter,
@@ -47,29 +49,204 @@ import {
     MoveHorizontal,
     Tv,
     Square,
+    ListVideo,
 } from "lucide-react";
-import { MdOutlineHighQuality, MdHighQuality, MdOutlineScreenRotation, MdScreenLockRotation, MdMusicNote, MdSubtitles } from "react-icons/md";
+import { MdOutlineHighQuality, MdOutlineScreenRotation, MdScreenLockRotation, MdMusicNote, MdSubtitles } from "react-icons/md";
 import { usePlayerState } from "./UsePlayerState";
 import { useIsMobile } from "./useIsMobile";
 import SeekBar from "./SeekBar";
-import VideoSidebar, { SidebarItem } from "./VideoSidebar";
+// VideoSidebar.jsx now owns all the actual panel/menu CONTENT (per the
+// refactor: PlayerControls.jsx keeps only the button row + open/close state
+// + play-next/prev/library-nav logic; the popup/sidebar bodies themselves —
+// what's actually INSIDE each menu — live in VideoSidebar.jsx). Imported
+// back here since the buttons in this file are what trigger/render them.
+import VideoSidebar, {
+    SidebarItem,
+    MenuShell,
+    MenuItem,
+    DisabledRow,
+    PlaylistPanel,
+    QualityPicker,
+    SpeedPicker,
+    SubtitlePicker,
+    AbRepeatPanel,
+    AudioTrackPanel,
+    DecoderModePanel,
+    AudioFxPanel,
+    SleepTimerPanel,
+    CustomiseItemsPanel,
+} from "./VideoSidebar";
+// FIX: these are plain consts/a function, not components — importing them
+// from VideoSidebar.jsx (alongside its component exports) was what broke
+// Fast Refresh ("ALL_QUICK_ITEMS export is incompatible"). They live in
+// their own file now; both files import from here directly.
+import { DECODER_LABELS, ALL_QUICK_ITEMS, QUICK_KEYS_WITH_SIDEBAR, formatTime } from "./playerConstants";
 import { SpeedSliderOverlay } from "./PlayerOverlays";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+/**
+ * PlayerControls.jsx — the button row/controls bar ONLY.
+ *
+ * Per the sidebar/content split: this file is responsible for what buttons
+ * exist, what they look like, when they're enabled/highlighted, and what
+ * happens on click (open a panel, seek, toggle play, switch quality, jump to
+ * the next/previous video, etc). It does NOT render what's actually INSIDE
+ * any panel/menu anymore — that content (audio track list, quality list,
+ * subtitle list, equalizer, playlist sidebar, sleep timer, etc.) has moved
+ * to VideoSidebar.jsx and is imported back in from there.
+ *
+ * Still lives here (control-bar-level, not panel content):
+ *   - useLibraryNav — computes play-next/play-previous targets + the data
+ *     the Playlist panel needs; used directly by the skip buttons in this
+ *     file, so it stays here rather than moving with PlaylistPanel itself.
+ *   - IconBtn, AspectToggleButton, LoopIcon, VolumeControl, TimeDisplay,
+ *     QuickIconRow — these ARE the visible control-bar elements themselves,
+ *     not panel content, so they stay.
+ */
 
-function formatTime(secs) {
-    if (!secs || !isFinite(secs) || isNaN(secs)) return "0:00";
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = Math.floor(secs % 60);
-    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    return `${m}:${String(s).padStart(2, "0")}`;
+// ─── Library navigation (Playlist sidebar + Play Next/Previous) ─────────────
+//
+// ASSUMPTIONS FLAGGED — I don't have api/media.js or api/history.js in this
+// project, so these are raw, self-contained fetches rather than using
+// whatever wrapper functions those files export elsewhere. Confirmed from
+// earlier in this project: grouper.js's real output shape is
+//   { movies: [...], series: [...], anime: [...] }
+// where each series/anime entry has .seasons = { [num]: { seasonNumber,
+// episodes: [{ id, episode, name, streamUrl, parsed, title, ... }] } } —
+// that part is solid. What's NOT confirmed: the exact endpoint paths
+// (guessed /api/media and /api/history, matching the route files seen in
+// the project's file tree) and the history entry shape (guessed
+// { mediaId, updatedAt }-ish — adjust the two small accessor spots below if
+// the real shape differs).
+function normalizeTitle(t) {
+    return (t || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
-function bitrateLabel(bps) {
-    if (!bps) return "";
-    if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
-    return `${Math.round(bps / 1000)} Kbps`;
+function findEpisodeInBucket(bucket, mediaId) {
+    for (const series of bucket || []) {
+        for (const seasonNum of Object.keys(series.seasons || {})) {
+            const season = series.seasons[seasonNum];
+            const episode = (season.episodes || []).find((e) => e.id === mediaId);
+            if (episode) return { series, seasonNum: Number(seasonNum), episode };
+        }
+    }
+    return null;
+}
+
+function useLibraryNav(mediaId) {
+    const [library, setLibrary] = useState(null);
+    const [history, setHistory] = useState([]);
+
+    useEffect(() => {
+        let cancelled = false;
+        // getMedia() with no params returns the whole library grouped by
+        // type — exactly the { movies, series, anime } shape this hook needs.
+        getMedia()
+            .then((d) => !cancelled && setLibrary(d))
+            .catch(() => {});
+        // getHistory() shape isn't fully confirmed (history entry field
+        // names are guessed further below as mediaId/updatedAt) — if
+        // "previous" ends up always disabled, that's the actual real
+        // history response shape differing from this guess.
+        getHistory()
+            .then((d) => !cancelled && setHistory(d?.history || d || []))
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    return useMemo(() => {
+        if (!library || !mediaId) return { loading: true };
+
+        // FIX (real bug, confirmed via useMedia.js): each category from
+        // getMedia() is an object with an .items array inside — { movies:
+        // { items: [...] }, series: { items: [...] }, ... } — not a bare
+        // array like grouper.js's raw output alone suggested. This was the
+        // actual "movies.find is not a function" crash: .movies was the
+        // wrapper object, not the array.
+        const movies = library.movies?.items || [];
+        const seriesList = library.series?.items || [];
+        const animeList = library.anime?.items || [];
+
+        const currentMovie = movies.find((m) => m.id === mediaId);
+        const inSeries = findEpisodeInBucket(seriesList, mediaId);
+        const inAnime = !inSeries ? findEpisodeInBucket(animeList, mediaId) : null;
+        const active = inSeries || inAnime;
+        const currentType = currentMovie ? "movie" : inSeries ? "series" : inAnime ? "anime" : null;
+
+        // ── Movie parts (multi-part films, e.g. "KGF Chapter 1/2") ──────────
+        let movieParts = [];
+        let nextPart = null;
+        if (currentMovie?.partId) {
+            movieParts = movies.filter((m) => m.partId && normalizeTitle(m.parsed?.title) === normalizeTitle(currentMovie.parsed?.title)).sort((a, b) => (a.parsed?.part || 0) - (b.parsed?.part || 0));
+            const idx = movieParts.findIndex((m) => m.id === mediaId);
+            nextPart = idx >= 0 ? movieParts[idx + 1] || null : null;
+        }
+        const otherMovies = movies.filter((m) => m.id !== mediaId && !movieParts.some((p) => p.id === m.id));
+
+        // ── Next episode: same season → next season → next series/anime ────
+        let nextMediaId = null;
+        if (currentType === "movie") {
+            if (nextPart) {
+                nextMediaId = nextPart.id;
+            } else {
+                const idx = movies.findIndex((m) => m.id === mediaId);
+                nextMediaId = movies[idx + 1]?.id || null;
+            }
+        } else if (active) {
+            const { series, seasonNum, episode } = active;
+            const seasonNums = Object.keys(series.seasons)
+                .map(Number)
+                .sort((a, b) => a - b);
+            const season = series.seasons[seasonNum];
+            const epIdx = (season.episodes || []).findIndex((e) => e.id === episode.id);
+            if (epIdx >= 0 && epIdx < season.episodes.length - 1) {
+                nextMediaId = season.episodes[epIdx + 1].id;
+            } else {
+                const nextSeasonNum = seasonNums.find((n) => n > seasonNum);
+                if (nextSeasonNum != null) {
+                    nextMediaId = series.seasons[nextSeasonNum].episodes?.[0]?.id || null;
+                } else {
+                    const bucket = inSeries ? seriesList : animeList;
+                    const idx = bucket.findIndex((s) => s.id === series.id);
+                    const nextSeries = bucket[idx + 1];
+                    if (nextSeries) {
+                        const firstSeasonNum = Object.keys(nextSeries.seasons)
+                            .map(Number)
+                            .sort((a, b) => a - b)[0];
+                        nextMediaId = firstSeasonNum != null ? nextSeries.seasons[firstSeasonNum]?.episodes?.[0]?.id || null : null;
+                    }
+                }
+            }
+        }
+
+        // ── Previous: the history entry watched right before this one ──────
+        // Guessed shape: { mediaId, updatedAt }. Adjust field names here if
+        // api/history.js's real response differs.
+        const sortedHistory = [...history].sort((a, b) => new Date(b.updatedAt || b.watchedAt || 0) - new Date(a.updatedAt || a.watchedAt || 0));
+        const curIdx = sortedHistory.findIndex((h) => (h.mediaId || h.id) === mediaId);
+        const prevMediaId = curIdx >= 0 ? sortedHistory[curIdx + 1]?.mediaId || sortedHistory[curIdx + 1]?.id || null : null;
+
+        return {
+            loading: false,
+            library,
+            currentType,
+            currentMovie,
+            movieParts,
+            nextPart,
+            otherMovies,
+            seriesList,
+            animeList,
+            activeSeriesInfo: active,
+            activeBucketKey: inSeries ? "series" : inAnime ? "anime" : null,
+            nextMediaId,
+            prevMediaId,
+        };
+    }, [library, history, mediaId]);
 }
 
 const AUDIO_FLAGS = {
@@ -89,12 +266,6 @@ const AUDIO_FLAGS = {
     Turkish: "🇹🇷",
 };
 
-function langAbbr(name) {
-    if (!name) return "AUD";
-    return name.slice(0, 3).toUpperCase();
-}
-
-const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 // MX-Player-style aspect ratio ring. Index order is the cycle order.
 // Maps directly onto the existing aspectRatio reducer values — "fill" is
 // reused for CROP/Zoom since getAspectStyle() already implements it as
@@ -136,236 +307,6 @@ const IconBtn = memo(function IconBtn({ onClick, active, children, size = "md", 
         </button>
     );
 });
-
-const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "right", title: menuTitle }) {
-    const ref = useRef(null);
-    useEffect(() => {
-        if (!open) return;
-        const close = (e) => {
-            if (ref.current && !ref.current.contains(e.target)) onClose();
-        };
-        const id = setTimeout(() => document.addEventListener("mousedown", close), 50);
-        return () => {
-            clearTimeout(id);
-            document.removeEventListener("mousedown", close);
-        };
-    }, [open, onClose]);
-    if (!open) return null;
-    return (
-        <div ref={ref} className={`flux-popup ${align === "left" ? "align-left" : ""}`} style={{ zIndex: 60 }}>
-            {menuTitle && <div className="flux-popup-header">{menuTitle}</div>}
-            {children}
-        </div>
-    );
-});
-
-function PopupItem({ active, onClick, children, icon: Icon }) {
-    return (
-        <button className={`flux-popup-item ${active ? "active" : ""}`} onClick={onClick}>
-            {Icon && <Icon size={14} style={{ opacity: 0.6, flexShrink: 0 }} />}
-            <span style={{ flex: 1, display: "flex", alignItems: "center", minWidth: 0 }}>{children}</span>
-            {active && <Check size={13} className="check" />}
-        </button>
-    );
-}
-
-// ─── Dual-mode menu shell ────────────────────────────────────────────────────
-// Mobile: VideoSidebar (right in landscape / bottom in portrait, 45% size).
-// Desktop: old floating PopupMenu. One call site per picker, body unchanged.
-
-function MenuShell({ isMobile, open, onClose, title, children, align }) {
-    if (isMobile) {
-        return (
-            <VideoSidebar open={open} onClose={onClose} title={title}>
-                {children}
-            </VideoSidebar>
-        );
-    }
-    return (
-        <PopupMenu open={open} onClose={onClose} title={title} align={align}>
-            {children}
-        </PopupMenu>
-    );
-}
-
-function MenuItem({ isMobile, active, onClick, children, icon }) {
-    if (isMobile) {
-        return (
-            <SidebarItem active={active} onClick={onClick} icon={icon}>
-                {children}
-                {active && <Check size={13} style={{ marginLeft: "auto", flexShrink: 0 }} />}
-            </SidebarItem>
-        );
-    }
-    return (
-        <PopupItem active={active} onClick={onClick} icon={icon}>
-            {children}
-        </PopupItem>
-    );
-}
-
-function QualityPicker({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Quality">
-            <MenuItem
-                isMobile={isMobile}
-                active={state.activeQuality === -1}
-                icon={Gauge}
-                onClick={() => {
-                    actions.setActiveQuality(-1);
-                    onClose();
-                }}>
-                <div>
-                    <div>Auto</div>
-                    <div style={{ fontSize: 11, opacity: 0.4 }}>Adaptive bitrate</div>
-                </div>
-            </MenuItem>
-            {state.qualityLevels.map((lvl) => (
-                <MenuItem
-                    isMobile={isMobile}
-                    key={lvl.index}
-                    active={state.activeQuality === lvl.index}
-                    icon={MonitorPlay}
-                    onClick={() => {
-                        actions.setActiveQuality(lvl.index);
-                        onClose();
-                    }}>
-                    <div>
-                        <div>{lvl.label}</div>
-                        {lvl.bitrate && <div style={{ fontSize: 11, opacity: 0.4 }}>{bitrateLabel(lvl.bitrate)}</div>}
-                    </div>
-                </MenuItem>
-            ))}
-        </MenuShell>
-    );
-}
-
-function SpeedPicker({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Playback Speed">
-            {SPEEDS.map((s) => (
-                <MenuItem
-                    isMobile={isMobile}
-                    key={s}
-                    active={state.playbackSpeed === s}
-                    onClick={() => {
-                        actions.setPlaybackSpeed(s);
-                        onClose();
-                    }}>
-                    {s === 1 ? "Normal (1×)" : `${s}×`}
-                </MenuItem>
-            ))}
-        </MenuShell>
-    );
-}
-
-function SubtitlePicker({ open, onClose, subtitles, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    function getLabel(sub) {
-        if (sub.label && sub.label.toLowerCase() !== sub.lang) return sub.label;
-        return (sub.lang || "Unknown").toUpperCase();
-    }
-    function SourceBadge({ source }) {
-        if (!source) return null;
-        const styles = {
-            embedded: { background: "rgba(99,102,241,0.25)", color: "#a5b4fc" },
-            external: { background: "rgba(16,185,129,0.2)", color: "#6ee7b7" },
-            online: { background: "rgba(251,191,36,0.2)", color: "#fcd34d" },
-        };
-        const label = { embedded: "EMB", external: "EXT", online: "WEB" }[source] || source.toUpperCase();
-        const style = styles[source] || { background: "rgba(255,255,255,0.1)", color: "#ccc" };
-        return <span style={{ ...style, fontSize: 9, padding: "1px 5px", borderRadius: 4, marginLeft: 6, fontWeight: 700, letterSpacing: "0.04em" }}>{label}</span>;
-    }
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Subtitles">
-            <MenuItem
-                isMobile={isMobile}
-                active={!state.activeSubtitle}
-                onClick={() => {
-                    actions.setActiveSubtitle(null);
-                }}>
-                Off
-            </MenuItem>
-            {subtitles.map((sub) => (
-                <MenuItem
-                    isMobile={isMobile}
-                    key={sub.url}
-                    active={state.activeSubtitle?.url === sub.url}
-                    onClick={() => {
-                        actions.setActiveSubtitle(sub);
-                    }}>
-                    <span style={{ display: "flex", alignItems: "center" }}>
-                        {getLabel(sub)}
-                        {sub.forced && <span style={{ fontSize: 9, color: "#f87171", marginLeft: 4 }}>FORCED</span>}
-                        <SourceBadge source={sub.source} />
-                    </span>
-                </MenuItem>
-            ))}
-
-            {/* Settings (size/delay) live in the same panel now — no separate
-                "T" trigger button. Only shown once a subtitle track is on. */}
-            {state.activeSubtitle && (
-                <div style={{ padding: "14px 16px 4px", marginTop: 4, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div>
-                        <label
-                            htmlFor="subtitle-size-range"
-                            style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                            Size — {state.subtitleFontSize}px
-                        </label>
-                        <input
-                            id="subtitle-size-range"
-                            name="subtitle-size"
-                            type="range"
-                            min={12}
-                            max={36}
-                            step={1}
-                            value={state.subtitleFontSize}
-                            onChange={(e) => actions.setSubtitleFontSize(+e.target.value)}
-                            style={{ width: "100%", accentColor: "var(--color-primary)" }}
-                        />
-                    </div>
-                    <div>
-                        <label
-                            htmlFor="subtitle-delay-range"
-                            style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                            Delay — {(state.subtitleDelay / 1000).toFixed(1)}s
-                        </label>
-                        <input
-                            id="subtitle-delay-range"
-                            name="subtitle-delay"
-                            type="range"
-                            min={-5000}
-                            max={5000}
-                            step={100}
-                            value={state.subtitleDelay}
-                            onChange={(e) => actions.setSubtitleDelay(+e.target.value)}
-                            style={{ width: "100%", accentColor: "var(--color-primary)" }}
-                        />
-                    </div>
-                    <button
-                        onClick={() => {
-                            actions.setSubtitleDelay(0);
-                            actions.setSubtitleFontSize(20);
-                        }}
-                        style={{
-                            padding: "7px 0",
-                            borderRadius: 8,
-                            background: "rgba(255,255,255,0.06)",
-                            color: "#fff",
-                            fontSize: 12,
-                            border: "none",
-                            cursor: "pointer",
-                            fontWeight: 600,
-                        }}>
-                        Reset to defaults
-                    </button>
-                </div>
-            )}
-        </MenuShell>
-    );
-}
 
 function AspectToggleButton({ size = 19 }) {
     const { state, actions } = usePlayerState();
@@ -487,756 +428,6 @@ function TimeDisplay({ style = {} }) {
                 </span>
             )}
         </div>
-    );
-}
-
-// ─── A-B Repeat popup ─────────────────────────────────────────────────────────
-
-function AbRepeatPanel({ open, onClose, videoRef, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    const { a, b, active } = state.abRepeat;
-    const setPoint = (point) => actions.setAbRepeat({ [point]: videoRef.current?.currentTime ?? 0 });
-    const clear = () => actions.setAbRepeat({ a: null, b: null, active: false });
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="A-B Repeat">
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 16px 12px" }}>
-                <button
-                    onClick={() => setPoint("a")}
-                    style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "none",
-                        background: a != null ? "rgba(229,62,62,0.18)" : "rgba(255,255,255,0.06)",
-                        color: "#fff",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                    }}>
-                    <span>Set Point A</span>
-                    <span style={{ opacity: 0.6, fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{a != null ? formatTime(a) : "—"}</span>
-                </button>
-                <button
-                    onClick={() => setPoint("b")}
-                    disabled={a == null}
-                    style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "none",
-                        background: b != null ? "rgba(229,62,62,0.18)" : "rgba(255,255,255,0.06)",
-                        color: a == null ? "rgba(255,255,255,0.3)" : "#fff",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: a == null ? "not-allowed" : "pointer",
-                    }}>
-                    <span>Set Point B</span>
-                    <span style={{ opacity: 0.6, fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{b != null ? formatTime(b) : "—"}</span>
-                </button>
-                <button
-                    onClick={() => {
-                        if (a != null && b != null && b > a) actions.setAbRepeat({ active: !active });
-                    }}
-                    disabled={a == null || b == null || b <= a}
-                    style={{
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "none",
-                        background: active ? "#e53e3e" : "rgba(255,255,255,0.06)",
-                        color: a != null && b != null && b > a ? "#fff" : "rgba(255,255,255,0.3)",
-                        fontSize: 13,
-                        fontWeight: 700,
-                        cursor: a != null && b != null && b > a ? "pointer" : "not-allowed",
-                    }}>
-                    {active ? "Repeating A → B" : "Start Repeat"}
-                </button>
-                {(a != null || b != null) && (
-                    <button onClick={clear} style={{ padding: "6px 0", borderRadius: 8, background: "transparent", border: "none", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" }}>
-                        Clear points
-                    </button>
-                )}
-            </div>
-        </MenuShell>
-    );
-}
-
-// ─── Customise Items popup ────────────────────────────────────────────────────
-
-// ─── Equalizer panel (3-band, real Web Audio DSP via VideoCore) ─────────────
-
-// ─── Audio output device label (best-effort) ─────────────────────────────────
-// Browsers only expose real device labels (e.g. "My Headphones (Bluetooth)")
-// after mic/cam permission has been granted for some reason — we deliberately
-// do NOT prompt for that here (would be a confusing, unrelated permission ask
-// in a video player). If labels are already available we show the real one;
-// otherwise a generic fallback.
-function useAudioOutputLabel() {
-    const [label, setLabel] = useState("Device Audio");
-
-    useEffect(() => {
-        if (!navigator.mediaDevices?.enumerateDevices) return;
-        let cancelled = false;
-        const check = () => {
-            navigator.mediaDevices
-                .enumerateDevices()
-                .then((devices) => {
-                    if (cancelled) return;
-                    const out = devices.find((d) => d.kind === "audiooutput" && d.label);
-                    if (out) setLabel(out.label);
-                })
-                .catch(() => {});
-        };
-        check();
-        navigator.mediaDevices.addEventListener?.("devicechange", check);
-        return () => {
-            cancelled = true;
-            navigator.mediaDevices.removeEventListener?.("devicechange", check);
-        };
-    }, []);
-
-    return label;
-}
-
-const AUDIO_EFFECT_OPTIONS = [
-    { key: "original", label: "Original", icon: AudioLines },
-    { key: "clarity", label: "Clarity", icon: Mic2 },
-    { key: "bassBoost", label: "Bass Boost", icon: Speaker },
-    { key: "trebleBoost", label: "Treble Boost", icon: Waves },
-    { key: "movie", label: "Movie", icon: Film },
-    { key: "music", label: "Music", icon: Music2 },
-];
-
-const EQ_PRESET_OPTIONS = [
-    { key: "custom", label: "Custom" },
-    { key: "normal", label: "Normal" },
-    { key: "classical", label: "Classical" },
-    { key: "dance", label: "Dance" },
-    { key: "flat", label: "Flat" },
-    { key: "folk", label: "Folk" },
-    { key: "heavyMetal", label: "Heavy Metal" },
-    { key: "hipHop", label: "Hip Hop" },
-    { key: "jazz", label: "Jazz" },
-    { key: "pop", label: "Pop" },
-    { key: "rock", label: "Rock" },
-];
-const EQ_BAND_KEYS = [
-    { key: "b60", hz: "60 Hz" },
-    { key: "b230", hz: "230 Hz" },
-    { key: "b910", hz: "910 Hz" },
-    { key: "b4000", hz: "4000 Hz" },
-    { key: "b14000", hz: "14000 Hz" },
-];
-
-function DecoderLockedNotice({ onSwitch }) {
-    return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "28px 20px" }}>
-            <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <Lock size={20} color="rgba(255,255,255,0.85)" style={{ flexShrink: 0, marginTop: 2 }} />
-                <p style={{ color: "rgba(255,255,255,0.85)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>
-                    Audio effects are not available in HW decoder mode. Switch to HW+ decoder or SW decoder mode to enable.
-                </p>
-            </div>
-            <div style={{ display: "flex", gap: 8, paddingLeft: 34 }}>
-                <button
-                    onClick={() => onSwitch("hw+")}
-                    style={{
-                        padding: "7px 14px",
-                        borderRadius: 8,
-                        border: "1px solid var(--color-primary)",
-                        background: "transparent",
-                        color: "var(--color-primary)",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                    }}>
-                    Use HW+
-                </button>
-                <button
-                    onClick={() => onSwitch("sw")}
-                    style={{
-                        padding: "7px 14px",
-                        borderRadius: 8,
-                        border: "1px solid rgba(255,255,255,0.25)",
-                        background: "transparent",
-                        color: "#fff",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                    }}>
-                    Use SW
-                </button>
-            </div>
-        </div>
-    );
-}
-
-function RadioRow({ label, checked, onClick }) {
-    return (
-        <button
-            onClick={onClick}
-            style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                width: "100%",
-                padding: "13px 16px",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                WebkitTapHighlightColor: "transparent",
-            }}>
-            <span
-                style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: "50%",
-                    border: `2px solid ${checked ? "var(--color-primary)" : "rgba(255,255,255,0.5)"}`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                }}>
-                {checked && <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--color-primary)" }} />}
-            </span>
-            <span style={{ color: "#fff", fontSize: 14.5 }}>{label}</span>
-        </button>
-    );
-}
-
-function CheckboxRow({ label, checked, onClick }) {
-    return (
-        <button
-            onClick={onClick}
-            style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                width: "100%",
-                padding: "13px 16px",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                WebkitTapHighlightColor: "transparent",
-            }}>
-            <span
-                style={{
-                    width: 18,
-                    height: 18,
-                    borderRadius: 4,
-                    border: `2px solid ${checked ? "var(--color-primary)" : "rgba(255,255,255,0.5)"}`,
-                    background: checked ? "var(--color-primary)" : "transparent",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                }}>
-                {checked && <Check size={12} color="#fff" strokeWidth={3} />}
-            </span>
-            <span style={{ color: "#fff", fontSize: 14.5 }}>{label}</span>
-        </button>
-    );
-}
-
-function DisabledRow({ label }) {
-    return <div style={{ padding: "13px 16px", color: "rgba(255,255,255,0.35)", fontSize: 14.5 }}>{label}</div>;
-}
-
-function AudioTrackPanel({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Audio Track">
-            {state.audioTracks.length === 0 ? (
-                <DisabledRow label="No alternate audio tracks for this file" />
-            ) : (
-                state.audioTracks.map((track) => (
-                    <RadioRow
-                        key={track.index}
-                        label={track.name}
-                        checked={!state.muted && state.activeAudioTrack === track.index}
-                        onClick={() => {
-                            actions.setMuted(false);
-                            actions.setActiveAudioTrack(track.index);
-                        }}
-                    />
-                ))
-            )}
-            {/* "Disable" is the closest real equivalent to muting — HLS.js
-                has no concept of "no audio track", only switching between
-                whatever tracks the manifest provides. */}
-            <RadioRow label="Disable" checked={state.muted} onClick={() => actions.setMuted(true)} />
-            <CheckboxRow label="Use SW audio decoder" checked={state.useSwAudioDecoder} onClick={() => actions.toggleSwAudioDecoder()} />
-            <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "8px 0" }} />
-            {/* Backend doesn't support these yet — shown disabled, matching
-                the reference UI's grayed-out placeholder rows. */}
-            <DisabledRow label="Open" />
-            <DisabledRow label="Stereo mode" />
-            <DisabledRow label="Synchronization" />
-            <DisabledRow label="AV sync" />
-        </MenuShell>
-    );
-}
-
-const DECODER_LABELS = { hw: "HW", "hw+": "HW+", sw: "SW" };
-
-function DecoderModePanel({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Decoder">
-            {["hw", "hw+", "sw"].map((mode) => (
-                <RadioRow key={mode} label={DECODER_LABELS[mode] + (mode === "hw+" ? " (Recommended)" : "")} checked={state.decoderMode === mode} onClick={() => actions.setDecoderMode(mode)} />
-            ))}
-        </MenuShell>
-    );
-}
-
-function CircularKnob({ label, value, onChange, disabled }) {
-    const knobRef = useRef(null);
-    const dragging = useRef(false);
-
-    const angleFor = (v) => -135 + (v / 100) * 270;
-    const angle = angleFor(value);
-    const handleX = 50 + 38 * Math.cos((angle * Math.PI) / 180);
-    const handleY = 50 + 38 * Math.sin((angle * Math.PI) / 180);
-
-    const updateFromEvent = (clientX, clientY) => {
-        const rect = knobRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        let deg = (Math.atan2(clientY - cy, clientX - cx) * 180) / Math.PI;
-        if (deg < -135) deg = -135;
-        if (deg > 135) deg = 135;
-        const pct = Math.round(((deg + 135) / 270) * 100);
-        onChange(Math.max(0, Math.min(100, pct)));
-    };
-
-    const onPointerDown = (e) => {
-        if (disabled) return;
-        dragging.current = true;
-        updateFromEvent(e.clientX, e.clientY);
-        e.currentTarget.setPointerCapture?.(e.pointerId);
-    };
-    const onPointerMove = (e) => {
-        if (!dragging.current) return;
-        updateFromEvent(e.clientX, e.clientY);
-    };
-    const onPointerUp = () => {
-        dragging.current = false;
-    };
-
-    return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flex: 1, opacity: disabled ? 0.4 : 1 }}>
-            <div
-                ref={knobRef}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                style={{
-                    position: "relative",
-                    width: 92,
-                    height: 92,
-                    borderRadius: "50%",
-                    background: "radial-gradient(circle at 35% 30%, color-mix(in oklch, var(--color-primary) 75%, white 10%), color-mix(in oklch, var(--color-primary) 90%, black 20%))",
-                    cursor: disabled ? "default" : "pointer",
-                    touchAction: "none",
-                    WebkitTapHighlightColor: "transparent",
-                }}>
-                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-                    <span style={{ color: "#fff", fontSize: 17, fontWeight: 700 }}>{value}%</span>
-                </div>
-                <div
-                    style={{
-                        position: "absolute",
-                        left: `${handleX}%`,
-                        top: `${handleY}%`,
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        background: "#fff",
-                        transform: "translate(-50%, -50%)",
-                        boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
-                        pointerEvents: "none",
-                    }}
-                />
-            </div>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>{label}</span>
-        </div>
-    );
-}
-
-function AudioFxPanel({ open, onClose, isMobile, controlsPhase, initialTab = "effect", onTabChange }) {
-    const { state, actions } = usePlayerState();
-    const [tab, setTab] = useState(initialTab);
-    const deviceLabel = useAudioOutputLabel();
-    const locked = state.decoderMode === "hw";
-
-    useEffect(() => {
-        if (open) setTab(initialTab);
-    }, [open, initialTab]);
-
-    const changeTab = (next) => {
-        setTab(next);
-        onTabChange?.(next);
-    };
-
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title={tab === "effect" ? "Audio Effect" : "Equalizer"}>
-            <div style={{ display: "flex", padding: "0 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                {[
-                    { key: "effect", label: "Audio Effect" },
-                    { key: "equalizer", label: "Equalizer" },
-                ].map((t) => (
-                    <button
-                        key={t.key}
-                        onClick={() => changeTab(t.key)}
-                        style={{
-                            flex: 1,
-                            padding: "10px 0",
-                            background: "none",
-                            border: "none",
-                            borderBottom: tab === t.key ? "2px solid var(--color-primary)" : "2px solid transparent",
-                            color: tab === t.key ? "#fff" : "rgba(255,255,255,0.5)",
-                            fontSize: 13,
-                            fontWeight: 700,
-                            cursor: "pointer",
-                            WebkitTapHighlightColor: "transparent",
-                        }}>
-                        {t.label}
-                    </button>
-                ))}
-            </div>
-
-            {locked ? (
-                <DecoderLockedNotice onSwitch={actions.setDecoderMode} />
-            ) : (
-                <div style={{ padding: "14px 16px 8px", display: "flex", alignItems: "center", gap: 10, color: "rgba(255,255,255,0.8)", fontSize: 13 }}>
-                    <Headphones size={16} />
-                    <span>{deviceLabel}</span>
-                </div>
-            )}
-
-            {!locked && tab === "effect" && (
-                <div style={{ padding: "8px 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    {AUDIO_EFFECT_OPTIONS.map((opt) => {
-                        const Icon = opt.icon;
-                        const active = state.audioEffectPreset === opt.key;
-                        return (
-                            <button
-                                key={opt.key}
-                                onClick={() => actions.setAudioEffectPreset(opt.key)}
-                                style={{
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    gap: 8,
-                                    padding: "14px 6px",
-                                    borderRadius: 10,
-                                    border: active ? "1px solid var(--color-primary)" : "1px solid rgba(255,255,255,0.15)",
-                                    background: active ? "color-mix(in oklch, var(--color-primary) 22%, transparent)" : "transparent",
-                                    cursor: "pointer",
-                                    WebkitTapHighlightColor: "transparent",
-                                }}>
-                                <Icon size={20} color={active ? "var(--color-primary)" : "#fff"} />
-                                <span style={{ fontSize: 11.5, fontWeight: 600, color: active ? "var(--color-primary)" : "#fff", textAlign: "center" }}>{opt.label}</span>
-                            </button>
-                        );
-                    })}
-                </div>
-            )}
-
-            {!locked && tab === "equalizer" && (
-                <div style={{ padding: "4px 16px 16px" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
-                        <span style={{ display: "flex", alignItems: "center", gap: 10, color: "#fff", fontSize: 14, fontWeight: 600 }}>
-                            <SlidersHorizontal size={16} />
-                            Equalizer
-                        </span>
-                        <button
-                            onClick={() => actions.toggleEq()}
-                            role="switch"
-                            aria-checked={state.eqEnabled}
-                            style={{
-                                width: 44,
-                                height: 26,
-                                borderRadius: 999,
-                                border: "none",
-                                position: "relative",
-                                background: state.eqEnabled ? "var(--color-primary)" : "rgba(255,255,255,0.2)",
-                                cursor: "pointer",
-                                flexShrink: 0,
-                                transition: "background 0.15s",
-                            }}>
-                            <span
-                                style={{
-                                    position: "absolute",
-                                    top: 3,
-                                    left: state.eqEnabled ? 21 : 3,
-                                    width: 20,
-                                    height: 20,
-                                    borderRadius: "50%",
-                                    background: "#fff",
-                                    transition: "left 0.15s",
-                                }}
-                            />
-                        </button>
-                    </div>
-
-                    <div className="flux-sidebar-scroll" style={{ display: "flex", gap: 6, padding: "6px 0 16px", overflowX: state.eqEnabled ? "auto" : "hidden" }}>
-                        {EQ_PRESET_OPTIONS.map(({ key, label }) => (
-                            <button
-                                key={key}
-                                onClick={() => actions.setEqPreset(key)}
-                                disabled={!state.eqEnabled}
-                                style={{
-                                    flexShrink: 0,
-                                    padding: "6px 12px",
-                                    borderRadius: 999,
-                                    border: "none",
-                                    background: state.eqPreset === key ? "var(--color-primary)" : "rgba(255,255,255,0.08)",
-                                    color: state.eqPreset === key ? "#fff" : "rgba(255,255,255,0.7)",
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                    cursor: state.eqEnabled ? "pointer" : "default",
-                                    opacity: state.eqEnabled ? 1 : 0.5,
-                                    WebkitTapHighlightColor: "transparent",
-                                }}>
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div style={{ display: "flex", justifyContent: "space-around", gap: 4 }}>
-                        {EQ_BAND_KEYS.map(({ key, hz }) => {
-                            const value = state.eqBands?.[key] ?? 0;
-                            return (
-                                <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
-                                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)", fontFamily: "ui-monospace,monospace" }}>{value > 0 ? `+${value}` : value} dB</span>
-                                    <input
-                                        type="range"
-                                        min={-12}
-                                        max={12}
-                                        step={1}
-                                        value={value}
-                                        onChange={(e) => actions.setEqBands({ [key]: +e.target.value })}
-                                        disabled={!state.eqEnabled}
-                                        style={{
-                                            writingMode: "vertical-lr",
-                                            direction: "rtl",
-                                            width: 24,
-                                            height: 100,
-                                            accentColor: "var(--color-primary)",
-                                            opacity: state.eqEnabled ? 1 : 0.4,
-                                        }}
-                                    />
-                                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", fontWeight: 600 }}>{hz}</span>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    <div style={{ display: "flex", justifyContent: "space-around", gap: 12, marginTop: 22, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                        <CircularKnob label="Bass Boost" value={state.bassBoostLevel} onChange={actions.setBassBoostLevel} disabled={!state.eqEnabled} />
-                        <CircularKnob label="Virtualizer" value={state.virtualizerLevel} onChange={actions.setVirtualizerLevel} disabled={!state.eqEnabled} />
-                    </div>
-                </div>
-            )}
-        </MenuShell>
-    );
-}
-
-// ─── Sleep Timer panel (full overlay, matches reference screenshot) ─────────
-
-function SleepTimerPanel({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    // Raw digit buffer, phone-dialer style: each digit pressed shifts left,
-    // pushing existing digits further left (e.g. press 1 → 0001 → "00h01m",
-    // press 5 → 0015 → "00h15m", press 3 → 0153 → "01h53m"). Max 4 digits.
-    const [digits, setDigits] = useState("0000");
-
-    const hours = parseInt(digits.slice(0, 2), 10);
-    const minsRaw = parseInt(digits.slice(2, 4), 10);
-    const minutes = Math.min(59, minsRaw); // clamp invalid minute entry (e.g. "75") down to 59
-
-    const pressDigit = (d) => {
-        setDigits((prev) => (prev + d).slice(-4));
-    };
-    const totalMs = (hours * 60 + minutes) * 60 * 1000;
-    const isRunning = !!state.sleepTimerEndsAt;
-
-    const handleStart = () => {
-        if (totalMs <= 0) return;
-        actions.setSleepTimer(Date.now() + totalMs);
-        onClose();
-    };
-    const handleStop = () => {
-        actions.setSleepTimer(null);
-        setDigits("0000");
-    };
-
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Sleep Timer">
-            <div style={{ display: "flex", flexDirection: "column", padding: "4px 20px 0", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 4 }}>
-                    <span style={{ color: "#fff", fontSize: 32, fontWeight: 800, lineHeight: 1 }}>
-                        {String(hours).padStart(2, "0")}
-                        <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.6 }}>h</span>
-                    </span>
-                    <span style={{ color: "#fff", fontSize: 32, fontWeight: 800, lineHeight: 1, marginLeft: 6 }}>
-                        {String(minutes).padStart(2, "0")}
-                        <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.6 }}>m</span>
-                    </span>
-                </div>
-                <div style={{ height: 1, background: "rgba(255,255,255,0.18)" }} />
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, justifyContent: "center", maxWidth: 150, margin: "0 auto", width: "100%" }}>
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
-                        <button
-                            key={n}
-                            onClick={() => pressDigit(String(n))}
-                            style={{
-                                width: "100%",
-                                maxWidth: 34,
-                                aspectRatio: "1",
-                                margin: "0 auto",
-                                borderRadius: "50%",
-                                background: "rgba(255,255,255,0.08)",
-                                border: "1px solid rgba(255,255,255,0.1)",
-                                color: "#fff",
-                                fontSize: 13,
-                                fontWeight: 600,
-                                cursor: "pointer",
-                            }}>
-                            {n}
-                        </button>
-                    ))}
-                    <div />
-                    <button
-                        onClick={() => pressDigit("0")}
-                        style={{
-                            width: "100%",
-                            maxWidth: 34,
-                            aspectRatio: "1",
-                            margin: "0 auto",
-                            borderRadius: "50%",
-                            background: "rgba(255,255,255,0.08)",
-                            border: "1px solid rgba(255,255,255,0.1)",
-                            color: "#fff",
-                            fontSize: 13,
-                            fontWeight: 600,
-                            cursor: "pointer",
-                        }}>
-                        0
-                    </button>
-                </div>
-
-                <label style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", cursor: "pointer", marginTop: 2 }}>
-                    <input type="checkbox" checked={state.sleepTimerPlayToEnd} onChange={() => actions.toggleSleepPlayToEnd()} style={{ width: 15, height: 15, accentColor: "#6366f1" }} />
-                    <span style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>Play last media to the end</span>
-                </label>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 20px", marginTop: 6, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                <button
-                    onClick={handleStop}
-                    disabled={!isRunning}
-                    style={{
-                        background: "none",
-                        border: "none",
-                        color: isRunning ? "#4d8dff" : "rgba(255,255,255,0.25)",
-                        fontSize: 13,
-                        fontWeight: 700,
-                        letterSpacing: "0.04em",
-                        cursor: isRunning ? "pointer" : "default",
-                    }}>
-                    STOP
-                </button>
-                <button
-                    onClick={handleStart}
-                    disabled={totalMs <= 0}
-                    style={{
-                        background: "none",
-                        border: "none",
-                        color: totalMs > 0 ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)",
-                        fontSize: 13,
-                        fontWeight: 700,
-                        letterSpacing: "0.04em",
-                        cursor: totalMs > 0 ? "pointer" : "default",
-                    }}>
-                    START
-                </button>
-            </div>
-        </MenuShell>
-    );
-}
-
-const ALL_QUICK_ITEMS = {
-    nightMode: { label: "Night Mode", icon: Moon },
-    customise: { label: "Customise Items", icon: PenLine },
-    shuffle: { label: "Shuffle", icon: Shuffle },
-    loop: { label: "Loop", icon: Repeat },
-    mute: { label: "Mute", icon: VolumeOff },
-    sleepTimer: { label: "Sleep Timer", icon: Timer },
-    abRepeat: { label: "A - B Repeat", icon: Repeat }, // visual is the text glyph below (iconOverride), this is just a fallback
-    audioFx: { label: "Audio Effect", icon: AudioLines },
-    eq: { label: "Equalizer", icon: SlidersHorizontal },
-    speed: { label: "Speed", icon: Gauge }, // visual is the "1×" text glyph below (iconOverride), this is just a fallback
-    screenshot: { label: "Screenshot", icon: Camera },
-    bgPlay: { label: "Background Play", icon: Headphones },
-    rotation: { label: "Screen Rotation", icon: MdOutlineScreenRotation },
-};
-
-// Keys whose handler opens a sidebar/popup menu (toggleMenu(...)). These
-// need the row collapse animation to finish FIRST, then the sidebar opens
-// — opening it mid-collapse was rendering against stale layout. Everything
-// else (mute, shuffle, pip, etc.) is an instant toggle with nothing to wait
-// for, so it fires immediately and the row just collapses alongside it.
-const QUICK_KEYS_WITH_SIDEBAR = new Set(["customise", "sleepTimer", "abRepeat", "audioFx", "eq", "speed"]);
-
-function CustomiseItemsPanel({ open, onClose, isMobile, controlsPhase }) {
-    const { state, actions } = usePlayerState();
-    const dragIndex = useRef(null);
-    const order = state.quickIconOrder;
-    const rest = Object.keys(ALL_QUICK_ITEMS).filter((k) => !order.includes(k));
-    const fullList = [...order, ...rest];
-    const handleDrop = (toIndex) => {
-        if (dragIndex.current === null || dragIndex.current === toIndex) return;
-        const next = [...fullList];
-        const [moved] = next.splice(dragIndex.current, 1);
-        next.splice(toIndex, 0, moved);
-        actions.setQuickIconOrder(next.slice(0, 5));
-        dragIndex.current = null;
-    };
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Customise Items">
-            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", padding: "0 16px 8px", margin: 0 }}>Drag to reorder. Top 5 show in the quick row.</p>
-            <div style={{ display: "flex", flexDirection: "column", padding: "0 12px 8px" }}>
-                {fullList.map((key, i) => {
-                    const item = ALL_QUICK_ITEMS[key];
-                    if (!item) return null;
-                    const Icon = item.icon;
-                    const isQuick = i < 5;
-                    return (
-                        <div
-                            key={key}
-                            draggable
-                            onDragStart={() => (dragIndex.current = i)}
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={() => handleDrop(i)}
-                            style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 8px", borderRadius: 8, cursor: "grab", background: isQuick ? "rgba(229,62,62,0.1)" : "transparent" }}>
-                            <GripVertical size={14} style={{ opacity: 0.35, flexShrink: 0 }} />
-                            <Icon size={16} style={{ opacity: 0.7, flexShrink: 0 }} />
-                            <span style={{ fontSize: 13, color: "#fff", flex: 1 }}>{item.label}</span>
-                            {isQuick && <span style={{ fontSize: 9, fontWeight: 700, color: "#e53e3e" }}>QUICK</span>}
-                        </div>
-                    );
-                })}
-            </div>
-        </MenuShell>
     );
 }
 
@@ -1541,7 +732,16 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
 
 // ─── PlayerControls ───────────────────────────────────────────────────────────
 
-export default function PlayerControls({ mediaInfo, videoRef, containerRef, subtitles = [], onBack, onShowControls, controlsPhase = "VISIBLE", isPortraitOverride = false }) {
+export default function PlayerControls({ mediaInfo, videoRef, containerRef, subtitles = [], onBack, onShowControls, controlsPhase = "VISIBLE", isPortraitOverride = false, onSwitchQuality, mediaId }) {
+    const navigate = useNavigate();
+    const nav = useLibraryNav(mediaId);
+    const goToMedia = useCallback(
+        (id) => {
+            if (!id) return;
+            navigate(`/player/${id}`);
+        },
+        [navigate],
+    );
     const { state, actions } = usePlayerState();
     const isMobile = useIsMobile();
     const [openMenu, setOpenMenu] = useState(null);
@@ -1675,12 +875,12 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         {/* ── 1. QUALITY / RESOLUTION button ───────────────────────────
                             Opens <QualityPicker>. Only shows if there's more than
                             one quality level available (state.qualityLevels). */}
-                        {state.qualityLevels.length > 0 && (
+                        {(state.qualityLevels.length > 0 || onSwitchQuality) && (
                             <div style={{ position: "relative" }}>
                                 <button onClick={() => toggleMenu("quality")} className="flux-icon-btn p-2" aria-label="Quality">
-                                    {state.activeQuality !== -1 ? <MdHighQuality size={iconTiny} color="var(--color-primary)" /> : <MdOutlineHighQuality size={iconTiny} color="#fff" />}
+                                    <MdOutlineHighQuality size={iconTiny} color="#fff" />
                                 </button>
-                                <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                                <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} onSwitchQuality={onSwitchQuality} />
                             </div>
                         )}
 
@@ -1701,10 +901,10 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                             Opens <SubtitlePicker>. Highlights (active state) when
                             a subtitle track is currently selected. */}
                         <div style={{ position: "relative" }}>
-                            <IconBtn onClick={() => toggleMenu("sub")} active={!!state.activeSubtitle} size="sm" label="Subtitles">
+                            <IconBtn onClick={() => toggleMenu("sub")} size="sm" label="Subtitles">
                                 <MdSubtitles size={iconTiny} />
                             </IconBtn>
-                            <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} />
+                            <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} mediaId={mediaId} />
                         </div>
 
                         {/* ── 4. DECODER badge (HW / HW+ / SW) ──────────────────────────
@@ -1756,42 +956,10 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                 )}
             </div>
 
-            {/* ── Center controls (desktop) ─────────────────────────────────── */}
-            {!isMobile && (
-                <div
-                    className="flex items-center justify-center gap-5"
-                    style={{ pointerEvents: controlsPhase === "ANIMATING_OUT" ? "none" : "auto" }}
-                    onClickCapture={onShowControls}
-                    onPointerDownCapture={onShowControls}>
-                    <IconBtn onClick={() => seek(-30)} label="Back 30s" size="md">
-                        <div className="flex flex-col items-center gap-0.5">
-                            <RotateCcw size={22} strokeWidth={1.8} />
-                            <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65 }}>30</span>
-                        </div>
-                    </IconBtn>
-                    <IconBtn onClick={() => seek(-10)} label="Back 10s" size="md">
-                        <div className="flex flex-col items-center gap-0.5">
-                            <SkipBack size={24} strokeWidth={1.8} />
-                            <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65 }}>10</span>
-                        </div>
-                    </IconBtn>
-                    <button type="button" onClick={() => actions.setPlaying(!state.playing)} className="flux-play-btn-desktop" aria-label={state.playing ? "Pause" : "Play"}>
-                        {state.playing ? <Pause size={30} strokeWidth={2} fill="currentColor" /> : <Play size={30} strokeWidth={2} fill="currentColor" style={{ marginLeft: 2 }} />}
-                    </button>
-                    <IconBtn onClick={() => seek(10)} label="Forward 10s" size="md">
-                        <div className="flex flex-col items-center gap-0.5">
-                            <SkipForward size={24} strokeWidth={1.8} />
-                            <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65 }}>10</span>
-                        </div>
-                    </IconBtn>
-                    <IconBtn onClick={() => seek(30)} label="Forward 30s" size="md">
-                        <div className="flex flex-col items-center gap-0.5">
-                            <RotateCcw size={22} strokeWidth={1.8} style={{ transform: "scaleX(-1)" }} />
-                            <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.65 }}>30</span>
-                        </div>
-                    </IconBtn>
-                </div>
-            )}
+            {/* Center controls (desktop) removed per request — PC no longer
+                shows a big center play/pause/skip cluster over the video.
+                Mobile's own center cluster (further down, near the seek bar)
+                is untouched. */}
 
             {/* ══════════════════════════════════════════════════════════════════
                 BOTTOM BAR
@@ -1833,20 +1001,32 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         </button>
                     )}
 
-                    {/* ── PLAYBACK cluster: skip-back / play-pause / skip-forward ───
-                        On mobile this is pinned to the exact horizontal center of
-                        the screen (position:absolute + translateX(-50%)) so it
-                        stays centered regardless of how wide the lock button or
-                        the right-side icon cluster happen to be. On desktop it's
-                        just a normal flex item (see the separate desktop center
-                        controls block above, which already centers itself). */}
-                    <div className="flex items-center gap-0.5" style={isMobile ? { position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" } : undefined}>
-                        <button type="button" onClick={() => seek(-10)} className={`flex flex-col items-center gap-0.5 flux-icon-btn ${isMobile ? "p-3" : "p-2"}`} aria-label="Back 10 seconds">
-                            <SkipBack size={iconSub} strokeWidth={1.8} />
-                        </button>
-                        {/* Play/Pause — now sits BETWEEN skip-back and skip-forward
-                            (previously was to the left of skip-back). */}
-                        {isMobile && (
+                    {/* ── PLAYBACK cluster: play-previous / play-pause / play-next ──
+                        SkipBack/SkipForward changed from ±10s seeking to
+                        play-previous/play-next per request — see
+                        useLibraryNav above for the actual next/prev logic
+                        (movie parts → next movie; episode → next episode →
+                        next season → next series; previous = last watched
+                        from history). Disabled (dimmed) when there's nothing
+                        to jump to. Mobile-only — desktop has no equivalent
+                        cluster under the seek bar anymore (removed per
+                        request, along with the old big center-of-video
+                        cluster above). Stays pinned to the exact horizontal
+                        center of the screen (position:absolute +
+                        translateX(-50%)) so it stays centered regardless of
+                        how wide the lock button or the right-side icon
+                        cluster happen to be. */}
+                    {isMobile && (
+                        <div className="flex items-center gap-0.5" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
+                            <button
+                                type="button"
+                                onClick={() => goToMedia(nav.prevMediaId)}
+                                disabled={!nav.prevMediaId}
+                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                style={{ opacity: nav.prevMediaId ? 1 : 0.35 }}
+                                aria-label="Play previous">
+                                <SkipBack size={iconSub} strokeWidth={1.8} />
+                            </button>
                             <button
                                 type="button"
                                 onClick={() => actions.setPlaying(!state.playing)}
@@ -1855,11 +1035,17 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                                 aria-label={state.playing ? "Pause" : "Play"}>
                                 {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
                             </button>
-                        )}
-                        <button type="button" onClick={() => seek(10)} className={`flex flex-col items-center gap-0.5 flux-icon-btn ${isMobile ? "p-3" : "p-2"}`} aria-label="Forward 10 seconds">
-                            <SkipForward size={iconSub} strokeWidth={1.8} />
-                        </button>
-                    </div>
+                            <button
+                                type="button"
+                                onClick={() => goToMedia(nav.nextMediaId)}
+                                disabled={!nav.nextMediaId}
+                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                style={{ opacity: nav.nextMediaId ? 1 : 0.35 }}
+                                aria-label="Play next">
+                                <SkipForward size={iconSub} strokeWidth={1.8} />
+                            </button>
+                        </div>
+                    )}
 
                     {/* ── Desktop-only volume/time, sits where the playback cluster
                         used to live before the mobile centering change above. ── */}
@@ -1874,6 +1060,12 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
 
                     {/* ── RIGHT-SIDE icon cluster (loop/speed/aspect/PiP/fullscreen) ── */}
                     <div className={`flex items-center shrink-0 ${isMobile ? "gap-0.5" : "gap-0.5"}`}>
+                        <div style={{ position: "relative" }}>
+                            <button onClick={() => toggleMenu("playlist")} className="flux-icon-btn p-2" aria-label="Playlist">
+                                <ListVideo size={iconTiny} color="#fff" />
+                            </button>
+                            <PlaylistPanel open={openMenu === "playlist"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} mediaId={mediaId} nav={nav} onNavigate={goToMedia} />
+                        </div>
                         {!isMobile && (
                             <IconBtn onClick={() => actions.cycleLoop()} active={state.loop !== "none"} size="sm" label="Loop" title={`Loop: ${state.loop}`}>
                                 <LoopIcon loop={state.loop} />

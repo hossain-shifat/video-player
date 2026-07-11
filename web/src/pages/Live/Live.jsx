@@ -532,7 +532,7 @@ function CategoryRow({ category, enabled }) {
     const rowRef = useRef(null);
     const { data, isLoading } = useQuery({
         queryKey: ["live", "channels", { category: category.name, page: 1, limit: ROW_LIMIT }],
-        queryFn: () => getLiveChannels({ category: category.name, page: 1, limit: ROW_LIMIT }),
+        queryFn: () => getLiveChannels({ category: category.name, page: 1, limit: ROW_LIMIT, workingOnly: true }),
         enabled,
         staleTime: 60 * 1000,
     });
@@ -581,7 +581,7 @@ function SearchGrid({ q, enabled }) {
 
     const { data, isLoading, isFetching, error } = useQuery({
         queryKey: ["live", "channels", { q, page }],
-        queryFn: () => getLiveChannels({ q, page, limit: PAGE_LIMIT }),
+        queryFn: () => getLiveChannels({ q, page, limit: PAGE_LIMIT, workingOnly: true }),
         enabled: enabled && !!q,
         staleTime: 60 * 1000,
     });
@@ -682,7 +682,7 @@ export default function Live() {
     const bannerCat = categories[0]?.name ?? null;
     const { data: bannerData } = useQuery({
         queryKey: ["live", "channels", { category: bannerCat, page: 1, limit: 12 }],
-        queryFn: () => getLiveChannels({ category: bannerCat || undefined, page: 1, limit: 12 }),
+        queryFn: () => getLiveChannels({ category: bannerCat || undefined, page: 1, limit: 12, workingOnly: true }),
         enabled: enabled && !!bannerCat && !featuredLoading && !hasSportsHero,
         staleTime: 60 * 1000,
     });

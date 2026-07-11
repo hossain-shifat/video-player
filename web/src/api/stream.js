@@ -1,5 +1,5 @@
 /**
- * stream.js — FLUX Web API
+ * stream.js — FLUX Web API (web/src/api/stream.js)
  *
  * Single-user self-hosted install — no auth tokens needed.
  */
@@ -105,4 +105,26 @@ export function stopSession(sessionId, clientId) {
         headers: { "X-Flux-Client": cid },
         keepalive: true,
     }).catch(() => {});
+}
+
+// ─── Media info fallback (NEW) ─────────────────────────────────────────────────
+/**
+ * getMediaInfoFallback — queries the mediaInfoStore cache (data/mediainfo.json)
+ * by media id. Used as a fallback language source when a live track list
+ * shows "und"/missing for an audio or subtitle track — this returns the same
+ * already-inferred { audioTracks, subtitleTracks } with real languageName
+ * fields, so the picker can patch in a name instead of showing a placeholder.
+ *
+ * @param {string} mediaId
+ * @returns {Promise<{audioTracks: Array, subtitleTracks: Array} | null>}
+ */
+export async function getMediaInfoFallback(mediaId) {
+    if (!mediaId) return null;
+    try {
+        const res = await fetch(`${BASE}/stream/mediainfo/${encodeURIComponent(mediaId)}`);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch {
+        return null;
+    }
 }

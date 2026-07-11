@@ -3,6 +3,10 @@
 /**
  * server.js (v2 — FLUX Streaming Engine)
  * Adds: HLS cleanup daemon, graceful shutdown, session cleanup on exit.
+ * Adds: /api/mediainfo bulk read endpoint (ffprobe data now auto-generated
+ * inline by scanner.js itself on every folder scan — no separate scan step
+ * needed here, it just happens for free whenever any folder gets scanned,
+ * e.g. the subtitle system's getAllCached() call below already triggers it).
  */
 
 require("dotenv").config();
@@ -22,6 +26,8 @@ const categoriesRouter = require("./routes/categories");
 const adminDashboardRouter = require("./routes/adminDashboard");
 const liveRouter = require("./routes/live");
 const epgRouter = require("./routes/epg");
+const mediaInfoRouter = require("./routes/mediainfo");
+const permissionsRouter = require("./routes/permissions");
 const epgScheduler = require("./utils/epgScheduler");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
@@ -87,6 +93,8 @@ app.use("/stream/start", streamStartRouter); // POST /stream/start/:id — auth-
 app.use("/api/library", libraryRouter);
 app.use("/api/media", mediaRouter);
 app.use("/api/metadata", metadataRouter);
+app.use("/api/mediainfo", mediaInfoRouter);
+app.use("/api/permissions", permissionsRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
@@ -191,6 +199,8 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    Media:   /api/media`);
     console.log(`    Live TV: /api/live/channels`);
     console.log(`    EPG:     /api/epg/now`);
+    console.log(`    MediaInfo: /api/mediainfo`);
+    console.log(`    Permissions: /api/permissions`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
@@ -205,6 +215,10 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     transcoderService.startSweeper();
 
     // ── Subtitle system ───────────────────────────────────────────────────────
+    // NOTE: getAllCached(folders) below scans every configured folder, which
+    // means scanner.js's built-in ffprobe auto-probe (see scanner.js) fires
+    // for every file automatically as a side effect of this call — that is
+    // what populates data/mediainfo.json on boot. No extra step needed here.
     try {
         await subtitleStore.init();
 

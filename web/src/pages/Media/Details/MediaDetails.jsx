@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router";
 import {
     Play,
-    Eye,
+    Bookmark,
+    BookmarkCheck,
     Heart,
     Star,
     Film,
@@ -26,9 +28,19 @@ import {
     ExternalLink,
     PlayCircle,
     ThumbsUp,
+    MoreVertical,
+    Share2,
+    X,
+    Loader2,
+    FileVideo,
+    Subtitles,
+    AudioLines,
+    HardDrive,
+    Link2,
 } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
 import { getMediaById } from "../../../api";
+import { api } from "../../../api/client";
 import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
 import MediaRow from "../../../Components/MediaRow";
 import MediaCard from "../../../Components/MediaCard";
@@ -155,7 +167,8 @@ function Badge({ children, className = "" }) {
 }
 function SectionHeading({ icon: Icon, children }) {
     return (
-        <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3 flex items-center gap-2">
+        <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3 flex items-center gap-2.5">
+            <span className="w-1 h-4 rounded-full bg-primary shrink-0" />
             {Icon && <Icon size={18} className="text-primary" />}
             {children}
         </h2>
@@ -173,7 +186,7 @@ function RatingBar({ rating }) {
             <div className="flex-1 h-1.5 bg-base-300 rounded-full overflow-hidden">
                 <div className="h-full bg-warning rounded-full" style={{ width: `${pct}%` }} />
             </div>
-            <span className="text-xs text-base-content/50 w-6 text-right">{pct}%</span>
+            <span className="text-xs text-base-content/80 w-6 text-right">{pct}%</span>
         </div>
     );
 }
@@ -188,7 +201,7 @@ function EpisodeRow({ ep, onPlay }) {
                 <img src={ep.still} alt={ep.title} className="w-20 h-12 object-cover rounded shrink-0" loading="lazy" />
             ) : (
                 <div className="w-20 h-12 bg-base-300 rounded shrink-0 flex items-center justify-center">
-                    <Play size={16} className="text-base-content/30 group-hover:text-primary transition-colors" />
+                    <Play size={16} className="text-base-content/62 group-hover:text-primary transition-colors" />
                 </div>
             )}
             <div className="flex-1 min-w-0">
@@ -196,16 +209,16 @@ function EpisodeRow({ ep, onPlay }) {
                     {ep.episode != null && <span className="text-primary mr-1.5">E{String(ep.episode).padStart(2, "0")}</span>}
                     {ep.title || ep.name}
                 </p>
-                {ep.overview && <p className="text-xs text-base-content/45 line-clamp-2 mt-0.5">{ep.overview}</p>}
+                {ep.overview && <p className="text-xs text-base-content/76 line-clamp-2 mt-0.5">{ep.overview}</p>}
             </div>
             <div className="flex items-center gap-2 shrink-0">
                 {ep.rating && (
-                    <span className="hidden sm:flex items-center gap-0.5 text-xs text-base-content/40">
+                    <span className="hidden sm:flex items-center gap-0.5 text-xs text-base-content/72">
                         <Star size={10} className="fill-warning text-warning" /> {ep.rating}
                     </span>
                 )}
-                {ep.runtime && <span className="text-xs text-base-content/40">{fmtRuntime(ep.runtime)}</span>}
-                <Play size={14} className="text-base-content/20 group-hover:text-primary transition-colors" />
+                {ep.runtime && <span className="text-xs text-base-content/72">{fmtRuntime(ep.runtime)}</span>}
+                <Play size={14} className="text-base-content/58 group-hover:text-primary transition-colors" />
             </div>
         </div>
     );
@@ -231,17 +244,17 @@ function SeasonsPanel({ seasons, onPlayEpisode }) {
                             {season.poster && <img src={season.poster} alt={season.name} className="w-10 h-14 object-cover rounded shrink-0" loading="lazy" />}
                             <div className="flex-1 min-w-0">
                                 <h3 className="font-semibold text-base-content">{season.name || `Season ${num}`}</h3>
-                                <p className="text-xs text-base-content/50 mt-0.5">
+                                <p className="text-xs text-base-content/80 mt-0.5">
                                     {season.episodeCount} episode{season.episodeCount !== 1 ? "s" : ""}
                                 </p>
-                                {season.overview && !isOpen && <p className="text-xs text-base-content/40 line-clamp-1 mt-0.5">{season.overview}</p>}
+                                {season.overview && !isOpen && <p className="text-xs text-base-content/72 line-clamp-1 mt-0.5">{season.overview}</p>}
                             </div>
-                            {isOpen ? <ChevronUp size={16} className="text-base-content/40 shrink-0" /> : <ChevronDown size={16} className="text-base-content/40 shrink-0" />}
+                            {isOpen ? <ChevronUp size={16} className="text-base-content/72 shrink-0" /> : <ChevronDown size={16} className="text-base-content/72 shrink-0" />}
                         </button>
 
                         {isOpen && (
                             <div className="px-2 pb-3 space-y-1 border-t border-white/5">
-                                {season.overview && <p className="text-xs text-base-content/45 px-2 py-2">{season.overview}</p>}
+                                {season.overview && <p className="text-xs text-base-content/76 px-2 py-2">{season.overview}</p>}
                                 {visibleEps.map((ep) => (
                                     <EpisodeRow key={ep.id || ep.episode} ep={ep} onPlay={onPlayEpisode} />
                                 ))}
@@ -281,10 +294,344 @@ function TrailerModal({ trailerKey, onClose }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onClose}>
-            <div className="w-full max-w-3xl aspect-video rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full max-w-3xl aspect-video rounded-2xl overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <iframe src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1`} title="Trailer" className="w-full h-full" allow="autoplay; fullscreen" allowFullScreen />
             </div>
         </div>
+    );
+}
+
+// ─── Floating action menu (HistoryCard-style: fade+scale, blurred dark panel) ─
+function MenuItem({ icon: Icon, label, onClick, iconClass = "text-white/76", textClass = "text-white/92", danger }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium cursor-pointer border-none bg-transparent text-left
+                        hover:bg-white/8 active:bg-white/12 transition-colors duration-100
+                        ${danger ? "text-error/80 hover:text-error" : textClass}`}>
+            <Icon size={14} strokeWidth={1.8} className={`shrink-0 ${danger ? "text-error/70" : iconClass}`} />
+            {label}
+        </button>
+    );
+}
+
+function FloatingActionMenu({ open, anchorRef, onClose, items }) {
+    const [visible, setVisible] = useState(false);
+    const [mounted, setMounted] = useState(false);
+    const [pos, setPos] = useState({ top: 0, left: 0 });
+    const menuRef = useRef(null);
+    const MENU_W = 208;
+
+    function close() {
+        setVisible(false);
+        setTimeout(() => setMounted(false), 150);
+    }
+
+    useEffect(() => {
+        if (open) {
+            if (anchorRef.current) {
+                const r = anchorRef.current.getBoundingClientRect();
+                let left = r.right - MENU_W;
+                let top = r.bottom + 6;
+                if (left < 8) left = 8;
+                if (left + MENU_W > window.innerWidth - 8) left = window.innerWidth - MENU_W - 8;
+                const estH = items.length * 42 + 16;
+                if (top + estH > window.innerHeight - 8) top = r.top - estH - 6;
+                setPos({ top, left });
+            }
+            setMounted(true);
+            const raf = requestAnimationFrame(() => setVisible(true));
+            return () => cancelAnimationFrame(raf);
+        } else if (mounted) {
+            close();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    useEffect(() => {
+        if (!mounted) return;
+        const handleClick = (e) => {
+            if (menuRef.current?.contains(e.target) || anchorRef.current?.contains(e.target)) return;
+            onClose();
+        };
+        const handleKey = (e) => e.key === "Escape" && onClose();
+        const handleScroll = () => onClose();
+        document.addEventListener("mousedown", handleClick);
+        document.addEventListener("keydown", handleKey);
+        window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+        window.addEventListener("resize", handleScroll, { passive: true });
+        return () => {
+            document.removeEventListener("mousedown", handleClick);
+            document.removeEventListener("keydown", handleKey);
+            window.removeEventListener("scroll", handleScroll, { capture: true });
+            window.removeEventListener("resize", handleScroll);
+        };
+    }, [mounted, onClose, anchorRef]);
+
+    if (!mounted) return null;
+
+    return createPortal(
+        <div
+            ref={menuRef}
+            role="menu"
+            style={{
+                position: "fixed",
+                top: pos.top,
+                left: pos.left,
+                width: MENU_W,
+                opacity: visible ? 1 : 0,
+                transform: visible ? "scale(1)" : "scale(0.95)",
+                transformOrigin: "top right",
+                transition: "opacity 150ms ease, transform 150ms ease",
+                zIndex: 100,
+            }}
+            className="rounded-xl bg-[oklch(15%_0.01_260/0.97)] backdrop-blur-md shadow-2xl border border-white/10 py-1.5 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}>
+            {items.map((it, i) => (
+                <MenuItem
+                    key={i}
+                    icon={it.icon}
+                    label={it.label}
+                    danger={it.danger}
+                    onClick={() => {
+                        it.onClick();
+                        onClose();
+                    }}
+                />
+            ))}
+        </div>,
+        document.body,
+    );
+}
+
+// ─── Info modal — renders raw mediainfo.json probe data ───────────────────────
+function InfoStat({ label, value, icon: Icon, iconClass = "text-base-content/72" }) {
+    if (value == null || value === "") return null;
+    return (
+        <div className="bg-base-300/60 rounded-lg p-3 flex flex-col gap-1 border border-white/5">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-base-content/72 font-semibold">
+                {Icon && <Icon size={11} className={iconClass} />}
+                {label}
+            </div>
+            <p className="text-sm font-semibold text-base-content leading-snug truncate">{value}</p>
+        </div>
+    );
+}
+
+const SUB_CODEC_NAMES = {
+    hdmv_pgs_subtitle: "PGS",
+    subrip: "SRT",
+    ass: "ASS",
+    ssa: "SSA",
+    webvtt: "VTT",
+    mov_text: "MP4 Text",
+    dvd_subtitle: "VobSub",
+    dvb_subtitle: "DVB",
+};
+function fmtSubCodec(codec) {
+    if (!codec) return null;
+    return SUB_CODEC_NAMES[codec.toLowerCase()] || codec.toUpperCase();
+}
+
+function InfoModal({ open, onClose, loading, data, title }) {
+    const [visible, setVisible] = useState(false);
+    const [mounted, setMounted] = useState(false);
+
+    useEffect(() => {
+        if (open) {
+            setMounted(true);
+            const raf = requestAnimationFrame(() => setVisible(true));
+            return () => cancelAnimationFrame(raf);
+        } else if (mounted) {
+            setVisible(false);
+            const t = setTimeout(() => setMounted(false), 180);
+            return () => clearTimeout(t);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    useEffect(() => {
+        if (!mounted) return;
+        const onKey = (e) => e.key === "Escape" && onClose();
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [mounted, onClose]);
+
+    if (!mounted) return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" style={{ opacity: visible ? 1 : 0, transition: "opacity 180ms ease" }} onClick={onClose}>
+            <div
+                className="w-full sm:w-[60vw] sm:min-w-[420px] sm:max-w-[820px] max-h-[85vh] flex flex-col bg-[oklch(15%_0.01_260)] rounded-2xl shadow-[0_24px_70px_-12px_rgba(0,0,0,0.65)] overflow-hidden"
+                style={{
+                    opacity: visible ? 1 : 0,
+                    transform: visible ? "scale(1) translateY(0)" : "scale(0.96) translateY(8px)",
+                    transition: "opacity 180ms ease, transform 180ms ease",
+                }}
+                onClick={(e) => e.stopPropagation()}>
+                {/* Header */}
+                <div className="relative shrink-0 px-6 py-5 bg-linear-to-br from-primary/15 via-base-300/40 to-transparent border-b border-white/8">
+                    <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
+                                <FileVideo size={18} className="text-primary" />
+                            </div>
+                            <div className="min-w-0">
+                                <h3 className="text-sm sm:text-base font-bold text-white truncate">{title || "Media Info"}</h3>
+                                <p className="text-[11px] text-white/72 mt-0.5">Technical stream details</p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={onClose}
+                            className="w-8 h-8 rounded-full border-none bg-white/5 hover:bg-white/15 flex items-center justify-center cursor-pointer shrink-0 transition-colors"
+                            aria-label="Close">
+                            <X size={15} className="text-white/88" />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Quick-glance summary strip */}
+                {!loading && data && (
+                    <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-6 py-2.5 bg-black/20 border-b border-white/8 text-[11px] text-white/70">
+                        {data.video?.resolution && (
+                            <span className="flex items-center gap-1.5">
+                                <Film size={12} className="text-primary" /> {data.video.codec} · {data.video.resolution}
+                            </span>
+                        )}
+                        {data.container?.duration && (
+                            <span className="flex items-center gap-1.5">
+                                <Clock size={12} className="text-orange-400" /> {data.container.duration}
+                            </span>
+                        )}
+                        {data.container?.size && (
+                            <span className="flex items-center gap-1.5">
+                                <HardDrive size={12} className="text-violet-400" /> {data.container.size}
+                            </span>
+                        )}
+                        {data.audioTracks?.length > 0 && (
+                            <span className="flex items-center gap-1.5">
+                                <AudioLines size={12} className="text-emerald-400" /> {data.audioTracks.length} audio
+                            </span>
+                        )}
+                        {data.subtitleTracks?.length > 0 && (
+                            <span className="flex items-center gap-1.5">
+                                <Subtitles size={12} className="text-secondary" /> {data.subtitleTracks.length} subtitle
+                            </span>
+                        )}
+                    </div>
+                )}
+
+                {/* Body */}
+                <div className="hs flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                    {loading && (
+                        <div className="flex flex-col items-center justify-center gap-3 py-20 text-white/72">
+                            <Loader2 size={24} className="animate-spin text-primary" />
+                            <span className="text-xs">Reading stream info…</span>
+                        </div>
+                    )}
+
+                    {!loading && !data && (
+                        <div className="flex flex-col items-center justify-center gap-3 py-20 text-white/72">
+                            <Info size={24} />
+                            <span className="text-xs">No probe data available for this file yet.</span>
+                        </div>
+                    )}
+
+                    {!loading && data && (
+                        <>
+                            {data.container && (
+                                <section>
+                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
+                                        <HardDrive size={12} className="text-blue-400" /> Container
+                                    </h4>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                                        <InfoStat label="Format" value={data.container.format} icon={FileVideo} iconClass="text-blue-400" />
+                                        <InfoStat label="Duration" value={data.container.duration} icon={Clock} iconClass="text-orange-400" />
+                                        <InfoStat label="Size" value={data.container.size} icon={HardDrive} iconClass="text-violet-400" />
+                                        <InfoStat label="Bitrate" value={data.container.bitrate} icon={BarChart2} iconClass="text-emerald-400" />
+                                    </div>
+                                </section>
+                            )}
+
+                            {data.video && (
+                                <section>
+                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
+                                        <Film size={12} className="text-primary" /> Video
+                                    </h4>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                                        <InfoStat label="Codec" value={data.video.profile ? `${data.video.codec} (${data.video.profile})` : data.video.codec} icon={Film} iconClass="text-primary" />
+                                        <InfoStat label="Resolution" value={data.video.resolution} icon={Hash} iconClass="text-pink-400" />
+                                        <InfoStat label="Aspect Ratio" value={data.video.aspectRatio} icon={Layers} iconClass="text-secondary" />
+                                        <InfoStat label="Frame Rate" value={data.video.frameRate} icon={PlayCircle} iconClass="text-accent" />
+                                        <InfoStat label="Bit Depth" value={data.video.bitDepth ? `${data.video.bitDepth}-bit` : null} icon={BarChart2} iconClass="text-emerald-400" />
+                                        <InfoStat label="Bitrate" value={data.video.bitrate} icon={BarChart2} iconClass="text-emerald-400" />
+                                    </div>
+                                </section>
+                            )}
+
+                            {data.audioTracks?.length > 0 && (
+                                <section>
+                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
+                                        <AudioLines size={12} className="text-emerald-400" /> Audio {data.audioTracks.length > 1 && `(${data.audioTracks.length})`}
+                                    </h4>
+                                    <div className="space-y-2">
+                                        {data.audioTracks.map((t, i) => (
+                                            <div key={i} className="bg-base-300/60 rounded-lg p-3 border border-white/5">
+                                                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+                                                    <span className="text-sm font-semibold text-white flex items-center gap-1.5">
+                                                        Track {i + 1} · {t.languageName || t.language}
+                                                        {t.default && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-primary/20 text-primary">Default</span>}
+                                                    </span>
+                                                    <span className="text-xs text-white/76 font-mono">{t.codec}</span>
+                                                    {t.channelLayout && (
+                                                        <span className="text-xs text-white/76">
+                                                            {t.channelLayout}
+                                                            {t.channels ? ` (${t.channels}ch)` : ""}
+                                                        </span>
+                                                    )}
+                                                    {t.sampleRate && <span className="text-xs text-white/76">{t.sampleRate}</span>}
+                                                    {t.bitrate && <span className="text-xs text-white/76">{t.bitrate}</span>}
+                                                </div>
+                                                {t.title && t.title !== t.languageName && <p className="text-[11px] text-white/45 mt-1.5 truncate">{t.title}</p>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </section>
+                            )}
+
+                            {data.subtitleTracks?.length > 0 && (
+                                <section>
+                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
+                                        <Subtitles size={12} className="text-secondary" /> Subtitles {data.subtitleTracks.length > 1 && `(${data.subtitleTracks.length})`}
+                                    </h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {data.subtitleTracks.map((t, i) => (
+                                            <span key={i} className="text-xs font-medium px-3 py-1.5 rounded-full bg-base-300/60 border border-white/5 text-white/88 flex items-center gap-1.5">
+                                                {t.languageName || t.language}
+                                                {fmtSubCodec(t.codec) && <span className="text-white/45 font-normal">· {fmtSubCodec(t.codec)}</span>}
+                                                {t.forced && <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-warning/20 text-warning">Forced</span>}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </section>
+                            )}
+                        </>
+                    )}
+                </div>
+
+                {/* Footer */}
+                {!loading && data && (
+                    <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-3.5 border-t border-white/8 bg-black/20">
+                        <span className="text-[11px] text-white/55">{data.probedAt ? `Probed ${fmtDate(data.probedAt)}` : "Stream analysis"}</span>
+                        <button onClick={onClose} className="btn btn-sm rounded-full border-none bg-white/10 hover:bg-white/18 text-white/88 px-5">
+                            Close
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>,
+        document.body,
     );
 }
 
@@ -303,12 +650,12 @@ function RatingsSection({ ratings, imdbId }) {
                             <Star size={15} className="text-[#01b4e4] fill-[#01b4e4]" />
                         </div>
                         <div>
-                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">TMDB</p>
+                            <p className="text-[10px] text-base-content/72 font-semibold uppercase tracking-wider">TMDB</p>
                             <p className="text-lg font-bold text-white leading-none">
                                 {tmdb}
-                                <span className="text-xs text-base-content/35 font-normal">/10</span>
+                                <span className="text-xs text-base-content/66 font-normal">/10</span>
                             </p>
-                            {tmdbVotes > 0 && <p className="text-[10px] text-base-content/35 mt-0.5">{fmtVotes(tmdbVotes)} votes</p>}
+                            {tmdbVotes > 0 && <p className="text-[10px] text-base-content/66 mt-0.5">{fmtVotes(tmdbVotes)} votes</p>}
                         </div>
                     </div>
                 )}
@@ -322,12 +669,12 @@ function RatingsSection({ ratings, imdbId }) {
                             <span className="text-[9px] font-black text-[#f5c518] leading-none">IMDb</span>
                         </div>
                         <div>
-                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">IMDb</p>
+                            <p className="text-[10px] text-base-content/72 font-semibold uppercase tracking-wider">IMDb</p>
                             <p className="text-lg font-bold text-white leading-none">
                                 {imdb}
-                                <span className="text-xs text-base-content/35 font-normal">/10</span>
+                                <span className="text-xs text-base-content/66 font-normal">/10</span>
                             </p>
-                            {imdbVotes && <p className="text-[10px] text-base-content/35 mt-0.5">{fmtVotes(parseInt(imdbVotes, 10))} votes</p>}
+                            {imdbVotes && <p className="text-[10px] text-base-content/66 mt-0.5">{fmtVotes(parseInt(imdbVotes, 10))} votes</p>}
                         </div>
                     </a>
                 )}
@@ -335,7 +682,7 @@ function RatingsSection({ ratings, imdbId }) {
                     <div className="flex items-center gap-3 bg-base-200 rounded-xl px-4 py-3 border border-white/5 min-w-7.5rem">
                         <div className="w-8 h-8 rounded-lg bg-[#fa320a]/10 flex items-center justify-center shrink-0 text-base leading-none">🍅</div>
                         <div>
-                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">Tomatometer</p>
+                            <p className="text-[10px] text-base-content/72 font-semibold uppercase tracking-wider">Tomatometer</p>
                             <p className="text-lg font-bold text-white leading-none">{rottenTomatoes}</p>
                         </div>
                     </div>
@@ -350,10 +697,10 @@ function RatingsSection({ ratings, imdbId }) {
                             </span>
                         </div>
                         <div>
-                            <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-wider">Metascore</p>
+                            <p className="text-[10px] text-base-content/72 font-semibold uppercase tracking-wider">Metascore</p>
                             <p className="text-lg font-bold text-white leading-none">
                                 {metascore}
-                                <span className="text-xs text-base-content/35 font-normal">/100</span>
+                                <span className="text-xs text-base-content/66 font-normal">/100</span>
                             </p>
                         </div>
                     </div>
@@ -374,7 +721,7 @@ function StarRating({ rating, max = 10 }) {
     return (
         <div className="flex items-center gap-0.5">
             {Array.from({ length: 5 }).map((_, i) => (
-                <Star key={i} size={13} className={i < stars ? "text-warning fill-warning" : "text-base-content/20 fill-base-content/10"} />
+                <Star key={i} size={13} className={i < stars ? "text-warning fill-warning" : "text-base-content/58 fill-base-content/45"} />
             ))}
         </div>
     );
@@ -393,10 +740,10 @@ function TrailersSection({ videos, onPlay }) {
                 </h2>
                 <div className="flex gap-1">
                     <button onClick={() => scroll(-1)} className="w-7 h-7 rounded-full bg-base-300 hover:bg-base-200 flex items-center justify-center transition-colors" aria-label="Scroll left">
-                        <ChevronLeft size={14} className="text-base-content/60" />
+                        <ChevronLeft size={14} className="text-base-content/84" />
                     </button>
                     <button onClick={() => scroll(1)} className="w-7 h-7 rounded-full bg-base-300 hover:bg-base-200 flex items-center justify-center transition-colors" aria-label="Scroll right">
-                        <ChevronRight size={14} className="text-base-content/60" />
+                        <ChevronRight size={14} className="text-base-content/84" />
                     </button>
                 </div>
             </div>
@@ -413,7 +760,7 @@ function TrailersSection({ videos, onPlay }) {
                                     <Play size={16} fill="white" className="text-white ml-0.5" />
                                 </div>
                             </div>
-                            <span className="absolute top-2 left-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/60 text-white/80">{v.type}</span>
+                            <span className="absolute top-2 left-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/60 text-white/92">{v.type}</span>
                         </div>
                         <div className="px-3 py-2">
                             <p className="text-xs font-medium text-base-content line-clamp-2 leading-tight">{v.name}</p>
@@ -426,11 +773,11 @@ function TrailersSection({ videos, onPlay }) {
 }
 
 // ─── Detail cell ──────────────────────────────────────────────────────────────
-function DetailCell({ label, value, icon: Icon, iconClass = "text-base-content/40", note }) {
+function DetailCell({ label, value, icon: Icon, iconClass = "text-base-content/72", note }) {
     if (value == null || value === "") return null;
     return (
-        <div className="bg-base-200 rounded-xl p-3 flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 text-xs text-base-content/45">
+        <div className="bg-base-200 rounded-xl p-3 flex flex-col gap-1 border border-white/5 transition-all duration-200 hover:border-primary/20 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20">
+            <div className="flex items-center gap-1.5 text-xs text-base-content/76">
                 {Icon && <Icon size={11} className={iconClass} />}
                 {label}
             </div>
@@ -453,16 +800,16 @@ function EpisodesAccordion({ season, seasonNum, onPlay }) {
                 {season.poster && <img src={season.poster} alt={season.name} className="w-10 h-14 object-cover rounded shrink-0" loading="lazy" />}
                 <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-base-content">{season.name || `Season ${seasonNum}`}</h3>
-                    <p className="text-xs text-base-content/50 mt-0.5">
+                    <p className="text-xs text-base-content/80 mt-0.5">
                         {eps.length} episode{eps.length !== 1 ? "s" : ""}
                     </p>
-                    {season.overview && <p className="text-xs text-base-content/40 line-clamp-2 mt-0.5">{season.overview}</p>}
+                    {season.overview && <p className="text-xs text-base-content/72 line-clamp-2 mt-0.5">{season.overview}</p>}
                 </div>
                 <button
                     onClick={() => setCollapsed((v) => !v)}
                     className="shrink-0 w-7 h-7 rounded-full hover:bg-base-300 flex items-center justify-center transition-colors cursor-pointer"
                     aria-label={collapsed ? "Expand" : "Collapse"}>
-                    {collapsed ? <ChevronDown size={16} className="text-base-content/40" /> : <ChevronUp size={16} className="text-base-content/40" />}
+                    {collapsed ? <ChevronDown size={16} className="text-base-content/72" /> : <ChevronUp size={16} className="text-base-content/72" />}
                 </button>
             </div>
             {!collapsed && (
@@ -506,6 +853,14 @@ export default function MediaDetails() {
     const [videoModalKey, setVideoModalKey] = useState(null);
     const [selectedSeasonNum, setSelectedSeasonNum] = useState(null);
     const episodesRef = useRef(null);
+
+    // ── Floating action menu + Info modal ──────────────────────────────────────
+    const [showActionMenu, setShowActionMenu] = useState(false);
+    const actionBtnRef = useRef(null);
+    const [showInfoModal, setShowInfoModal] = useState(false);
+    const [mediaInfoEntry, setMediaInfoEntry] = useState(null);
+    const [mediaInfoLoading, setMediaInfoLoading] = useState(false);
+    const [shareToast, setShareToast] = useState(false);
 
     // id from URL is already the raw base64url string — no encode/decode needed.
     // React Router passes :id exactly as typed in the URL.
@@ -700,14 +1055,90 @@ export default function MediaDetails() {
             episodesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 50);
     };
+
+    // Movies: the file itself. Series: prefer the currently open episode,
+    // else fall back to the first episode of the first season — mediaInfo
+    // (ffprobe) is only ever recorded per-file, never per-series.
+    const infoTargetId = !isSeries ? decodedId : ((activeSeason?.episodes || seasonEntries[0]?.[1]?.episodes || [])[0]?.id ?? null);
+
+    /**
+     * copyToClipboard — navigator.clipboard.writeText silently throws (or is
+     * undefined) on a non-secure origin. Self-hosted FLUX is almost always
+     * served over plain http:// on the local network, so on mobile Chrome
+     * neither navigator.share nor navigator.clipboard exist there — this is
+     * why "Share" looked broken. execCommand('copy') via a hidden textarea
+     * still works on http:// and is the real fix.
+     */
+    function copyToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        }
+        return new Promise((resolve, reject) => {
+            try {
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.top = "-1000px";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                const ok = document.execCommand("copy");
+                document.body.removeChild(ta);
+                ok ? resolve() : reject(new Error("execCommand copy failed"));
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
+    /**
+     * handleShare — navigator.share MUST fire synchronously inside the click
+     * handler (deferred calls get silently blocked by browsers), and only
+     * exists on secure origins. Falls back to copyToClipboard + toast when
+     * unavailable (the common case for a local-network http:// deployment).
+     */
+    const handleShare = () => {
+        const shareUrl = window.location.href;
+        const shareTitle = m?.title || item?.title || item?.name || "FLUX";
+        if (navigator.share && window.isSecureContext) {
+            navigator.share({ title: shareTitle, url: shareUrl }).catch(() => {});
+            return;
+        }
+        copyToClipboard(shareUrl)
+            .then(() => {
+                setShareToast(true);
+                setTimeout(() => setShareToast(false), 2200);
+            })
+            .catch(() => {});
+    };
+
+    /** handleShowInfo — lazily fetches the full mediaInfo dump once, caches the entry for this id */
+    const handleShowInfo = () => {
+        setShowInfoModal(true);
+        if (mediaInfoEntry || !infoTargetId) return;
+        setMediaInfoLoading(true);
+        api.get("/api/mediainfo")
+            .then((res) => {
+                setMediaInfoEntry(res?.mediaInfo?.[infoTargetId] ?? null);
+            })
+            .catch(() => setMediaInfoEntry(null))
+            .finally(() => setMediaInfoLoading(false));
+    };
+
+    // Re-fetch info if the target file changes while modal state was already resolved
+    useEffect(() => {
+        setMediaInfoEntry(null);
+    }, [infoTargetId]);
+
     if (loading) return <MediaDetailsSkeleton />;
 
     // ── Error ──────────────────────────────────────────────────────────────────
     if (error || !item) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4">
-                {isSeries ? <Tv size={48} className="text-base-content/20" /> : <Film size={48} className="text-base-content/20" />}
-                <p className="text-base-content/50">Media not found</p>
+                {isSeries ? <Tv size={48} className="text-base-content/58" /> : <Film size={48} className="text-base-content/58" />}
+                <p className="text-base-content/80">Media not found</p>
             </div>
         );
     }
@@ -718,27 +1149,27 @@ export default function MediaDetails() {
             {/* ── Backdrop + Hero ──────────────────────────────────────────── */}
             <div className="relative">
                 {/* Backdrop */}
-                <div className="absolute inset-x-0 top-0 h-80 sm:h-420px pointer-events-none" style={{ zIndex: 0 }}>
+                <div className="absolute inset-x-0 top-0 h-[42vh] min-h-[280px] max-h-[520px] sm:h-[48vh] sm:max-h-[560px] pointer-events-none" style={{ zIndex: 0 }}>
                     {backdrop && !imgError ? (
                         <img src={backdrop} alt={title} className="w-full h-full object-cover object-top" onError={() => setImgError(true)} />
                     ) : (
                         <div className="w-full h-full bg-linear-to-br from-primary/20 via-base-300 to-base-200" />
                     )}
-                    <div className="absolute inset-0 bg-linear-to-t from-base-100 via-base-100/70 to-transparent" />
-                    <div className="absolute inset-0 bg-linear-to-r from-base-100/90 via-base-100/30 to-transparent hidden sm:block" />
+                    <div className="absolute inset-0 bg-linear-to-t from-base-100 via-base-100/75 to-transparent" />
+                    <div className="absolute inset-0 bg-linear-to-r from-base-100/95 via-base-100/40 to-transparent hidden sm:block" />
                 </div>
 
                 {/* Hero content */}
-                <div className="relative px-4 sm:px-8 lg:px-12 pt-8 sm:pt-10 pb-8" style={{ zIndex: 1 }}>
-                    <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 max-w-5xl">
+                <div className="relative px-4 sm:px-6 md:px-8 lg:px-12 pt-6 sm:pt-10 pb-8" style={{ zIndex: 1 }}>
+                    <div className="flex flex-col sm:flex-row gap-5 sm:gap-8 max-w-6xl">
                         {/* ── Poster ──────────────────────────────────────── */}
-                        <div className="shrink-0 mx-auto sm:mx-0 w-36 sm:w-44 md:w-52">
-                            <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl ring-2 ring-white/10 bg-base-300">
+                        <div className="shrink-0 mx-auto sm:mx-0 w-32 xs:w-36 sm:w-44 md:w-52 lg:w-56">
+                            <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl bg-base-300 transition-transform duration-300">
                                 {poster ? (
                                     <img src={poster} alt={title} className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center">
-                                        {isSeries ? <Tv size={40} className="text-base-content/20" /> : <Film size={40} className="text-base-content/20" />}
+                                        {isSeries ? <Tv size={40} className="text-base-content/58" /> : <Film size={40} className="text-base-content/58" />}
                                     </div>
                                 )}
                             </div>
@@ -750,9 +1181,9 @@ export default function MediaDetails() {
                                         <div className="flex items-center gap-1">
                                             <Star size={13} className="text-warning fill-warning" />
                                             <span className="text-sm font-bold text-base-content">{rating.toFixed(1)}</span>
-                                            <span className="text-xs text-base-content/40">/ 10</span>
+                                            <span className="text-xs text-base-content/72">/ 10</span>
                                         </div>
-                                        {m?.votes && <span className="text-[10px] text-base-content/35">{fmtVotes(m.votes)} votes</span>}
+                                        {m?.votes && <span className="text-[10px] text-base-content/66">{fmtVotes(m.votes)} votes</span>}
                                     </div>
                                     <RatingBar rating={rating} />
                                 </div>
@@ -767,7 +1198,7 @@ export default function MediaDetails() {
                                     {isAnime ? <Clapperboard size={11} /> : isSeries ? <Tv size={11} /> : <Film size={11} />}
                                     {isAnime ? "Anime" : isSeries ? "Series" : "Movie"}
                                 </Badge>
-                                {m?.status && <Badge className="bg-base-300 text-base-content/55">{m.status}</Badge>}
+                                {m?.status && <Badge className="bg-base-300 text-base-content/82">{m.status}</Badge>}
                                 {partNum != null && (
                                     <Badge className="bg-secondary/20 text-secondary">
                                         <Layers size={11} /> Part {partNum}
@@ -782,46 +1213,46 @@ export default function MediaDetails() {
 
                             {/* Title */}
                             {activeSeason && (
-                                <button onClick={() => setSelectedSeasonNum(null)} className="text-xs text-base-content/40 hover:text-primary transition-colors mb-1 flex items-center gap-1">
+                                <button onClick={() => setSelectedSeasonNum(null)} className="text-xs text-base-content/72 hover:text-primary transition-colors mb-1 flex items-center gap-1">
                                     <ChevronLeft size={12} />
                                     {m?.title || item?.title || item?.name}
                                 </button>
                             )}
-                            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-base-content leading-tight mb-1">
+                            <h1 className="text-2xl sm:text-3xl lg:text-4xl xl:text-[2.75rem] font-bold text-white leading-tight mb-1 tracking-tight">
                                 {activeSeason ? (
                                     <>
-                                        {m?.title || item?.title || item?.name} <span className="text-base-content/50">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
+                                        {m?.title || item?.title || item?.name} <span className="text-white/75">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
                                     </>
                                 ) : (
                                     title
                                 )}
                             </h1>
-                            {originalTitle && <p className="text-xs text-base-content/35 mb-2 font-medium">{originalTitle}</p>}
-                            {tagline && <p className="text-sm text-base-content/50 italic mb-3">{tagline}</p>}
+                            {originalTitle && <p className="text-xs text-base-content/66 mb-2 font-medium">{originalTitle}</p>}
+                            {tagline && <p className="text-sm text-base-content/80 italic mb-3">{tagline}</p>}
 
                             {/* Meta row */}
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3 text-sm text-base-content/65">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3 text-sm text-base-content/86">
                                 {(releaseDateFmt || year) && (
                                     <span className="flex items-center gap-1">
-                                        <Calendar size={13} className="shrink-0 text-base-content/40" />
+                                        <Calendar size={13} className="shrink-0 text-base-content/72" />
                                         {releaseDateFmt ?? year}
                                     </span>
                                 )}
                                 {runtime && (
                                     <span className="flex items-center gap-1">
-                                        <Clock size={13} className="shrink-0 text-base-content/40" />
+                                        <Clock size={13} className="shrink-0 text-base-content/72" />
                                         {runtime}
                                     </span>
                                 )}
                                 {heroLang && (
                                     <span className="flex items-center gap-1">
-                                        <Globe size={13} className="shrink-0 text-base-content/40" />
+                                        <Globe size={13} className="shrink-0 text-base-content/72" />
                                         {heroLang}
                                     </span>
                                 )}
                                 {isSeries && m?.totalSeasons && (
                                     <span className="flex items-center gap-1">
-                                        <Tv size={13} className="shrink-0 text-base-content/40" />
+                                        <Tv size={13} className="shrink-0 text-base-content/72" />
                                         {m.totalSeasons} {m.totalSeasons === 1 ? "season" : "seasons"}
                                         {m?.totalEpisodes && ` · ${m.totalEpisodes} episodes`}
                                     </span>
@@ -856,7 +1287,9 @@ export default function MediaDetails() {
                             {genres.length > 0 && (
                                 <div className="flex flex-wrap gap-1.5 mb-5">
                                     {genres.map((g) => (
-                                        <span key={g} className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-base-300 text-base-content/65 border border-white/5">
+                                        <span
+                                            key={g}
+                                            className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-base-300 text-base-content/86 border border-white/5 hover:border-primary/30 hover:text-base-content transition-colors">
                                             {g}
                                         </span>
                                     ))}
@@ -864,40 +1297,52 @@ export default function MediaDetails() {
                             )}
 
                             {/* Action buttons */}
-                            <div className="flex flex-wrap items-center gap-2 mb-5">
+                            <div className="flex flex-nowrap items-center gap-2 mb-5 overflow-x-auto -mx-1 px-1 pb-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                                 {/* Play button — movies only (series use the episode list below) */}
                                 {!isSeries && (
-                                    <button onClick={handlePlayMovie} className="btn btn-primary btn-sm sm:btn-md gap-2 px-6 rounded-full border-none">
+                                    <button
+                                        onClick={handlePlayMovie}
+                                        className="btn btn-primary btn-sm sm:btn-md gap-2 px-6 rounded-full border-none shadow-lg shadow-primary/25 hover:shadow-primary/40 hover:scale-[1.03] transition-all shrink-0">
                                         <Play size={16} fill="currentColor" />
                                         {resumePos ? "Resume" : "Play"}
                                     </button>
                                 )}
 
                                 {trailerKey && (
-                                    <button onClick={() => setShowTrailer(true)} className="btn btn-sm sm:btn-md btn-outline gap-2 rounded-full">
+                                    <button onClick={() => setShowTrailer(true)} className="btn btn-sm sm:btn-md btn-outline gap-2 rounded-full shrink-0">
                                         <Play size={14} /> Trailer
                                     </button>
                                 )}
 
                                 <button
                                     onClick={() => toggleWatchlist(decodedId, { name: title, poster, type: mediaType })}
-                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline transition-colors ${watchlisted ? "text-accent border-accent bg-accent/10" : "text-base-content/60"}`}
+                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors ${watchlisted ? "text-accent border-accent bg-accent/10" : "text-base-content/84"}`}
                                     title={watchlisted ? "Remove from Watchlist" : "Add to Watchlist"}>
-                                    <Eye size={17} />
+                                    {watchlisted ? <BookmarkCheck size={17} fill="currentColor" /> : <Bookmark size={17} />}
                                 </button>
 
                                 <button
                                     onClick={() => toggleFavourite(decodedId, { name: title, poster, type: mediaType })}
-                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline transition-colors ${favourited ? "text-error border-error bg-error/10" : "text-base-content/60"}`}
+                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors ${favourited ? "text-error border-error bg-error/10" : "text-base-content/84"}`}
                                     title={favourited ? "Remove from Favourites" : "Add to Favourites"}>
                                     <Heart size={17} fill={favourited ? "currentColor" : "none"} />
+                                </button>
+
+                                <button
+                                    ref={actionBtnRef}
+                                    onClick={() => setShowActionMenu((v) => !v)}
+                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors cursor-pointer ${showActionMenu ? "text-primary border-primary bg-primary/10" : "text-base-content/84"}`}
+                                    title="More options"
+                                    aria-haspopup="menu"
+                                    aria-expanded={showActionMenu}>
+                                    <MoreVertical size={17} />
                                 </button>
                             </div>
 
                             {/* Overview — always full, toggle only if > 500 chars */}
                             {overview && (
                                 <div>
-                                    <p className="text-sm sm:text-base text-base-content/70 leading-relaxed">{overview}</p>
+                                    <p className="text-sm sm:text-base text-base-content/88 leading-relaxed">{overview}</p>
                                 </div>
                             )}
                         </div>
@@ -912,7 +1357,7 @@ export default function MediaDetails() {
                     <section className="w-full">
                         <SectionHeading icon={Tv}>
                             Seasons
-                            <span className="ml-1 text-sm font-normal text-base-content/40">({seasonEntries.length})</span>
+                            <span className="ml-1 text-sm font-normal text-base-content/72">({seasonEntries.length})</span>
                         </SectionHeading>
                         <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                             {seasonEntries.map(([num, season]) => {
@@ -955,8 +1400,8 @@ export default function MediaDetails() {
                 {isSeries && activeSeason && (
                     <section ref={episodesRef} className="w-full scroll-mt-20">
                         <SectionHeading icon={Clapperboard}>
-                            {m?.title || item?.title || item?.name} <span className="font-normal text-base-content/50">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
-                            <span className="ml-1 text-sm font-normal text-base-content/40">· {(activeSeason.episodes || []).length} ep</span>
+                            {m?.title || item?.title || item?.name} <span className="font-normal text-base-content/80">({activeSeason.name || `Season ${selectedSeasonNum}`})</span>
+                            <span className="ml-1 text-sm font-normal text-base-content/72">· {(activeSeason.episodes || []).length} ep</span>
                         </SectionHeading>
                         <EpisodesAccordion season={activeSeason} seasonNum={selectedSeasonNum} onPlay={handlePlayEpisode} />
                     </section>
@@ -1007,7 +1452,7 @@ export default function MediaDetails() {
                 {m && (
                     <section className="w-full">
                         <SectionHeading icon={Info}>Details</SectionHeading>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                             <DetailCell icon={Calendar} iconClass="text-blue-400" label={releaseDateLabel} value={releaseDateFmt || (year ? String(year) : null)} />
                             <DetailCell icon={Globe} iconClass="text-emerald-400" label="Language" value={primaryLangDisplay} note={audioLabel} />
                             <DetailCell icon={Clock} iconClass="text-orange-400" label="Runtime" value={runtime} />
@@ -1030,6 +1475,28 @@ export default function MediaDetails() {
             {/* ── Trailer modal ─────────────────────────────────────────────── */}
             {showTrailer && trailerKey && <TrailerModal trailerKey={trailerKey} onClose={() => setShowTrailer(false)} />}
             {videoModalKey && <TrailerModal trailerKey={videoModalKey} onClose={() => setVideoModalKey(null)} />}
+
+            {/* ── Floating 3-dot menu ───────────────────────────────────────── */}
+            <FloatingActionMenu
+                open={showActionMenu}
+                anchorRef={actionBtnRef}
+                onClose={() => setShowActionMenu(false)}
+                items={[
+                    { icon: Share2, label: "Share", onClick: handleShare },
+                    { icon: Info, label: "Info", onClick: handleShowInfo },
+                ]}
+            />
+
+            {/* ── Media info modal ──────────────────────────────────────────── */}
+            <InfoModal open={showInfoModal} onClose={() => setShowInfoModal(false)} loading={mediaInfoLoading} data={mediaInfoEntry} title={title} />
+
+            {/* ── Share toast (clipboard fallback confirmation) ──────────────── */}
+            {shareToast && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-100 flex items-center gap-2 px-4 py-2.5 rounded-full bg-[oklch(15%_0.01_260/0.97)] backdrop-blur-md shadow-2xl border border-white/10">
+                    <Link2 size={14} className="text-primary shrink-0" />
+                    <span className="text-xs font-medium text-white/92">Link copied to clipboard</span>
+                </div>
+            )}
         </div>
     );
 }

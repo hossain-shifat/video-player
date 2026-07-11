@@ -17,7 +17,17 @@
 
 const express = require("express");
 const router = express.Router();
-const { streamVideo, serveHLSFile, startTranscode, stopSession, listSessions, streamSubtitle, streamEmbeddedSubtitle, pingSessionHandler } = require("../controllers/streamController");
+const {
+    streamVideo,
+    serveHLSFile,
+    startTranscode,
+    stopSession,
+    listSessions,
+    streamSubtitle,
+    streamEmbeddedSubtitle,
+    pingSessionHandler,
+    getMediaInfoById,
+} = require("../controllers/streamController");
 
 // No auth — single-user LAN install
 router.get("/video/:id", streamVideo);
@@ -37,5 +47,10 @@ router.get("/sessions", listSessions);
 // Subtitles — NOTE: embedded route MUST be registered before the wildcard :encodedPath route
 router.get("/subtitle/embedded/:encodedVideo/:streamIndex", streamEmbeddedSubtitle);
 router.get("/subtitle/:encodedPath", streamSubtitle);
+
+// NEW: mediaInfoStore lookup by id — the same cached data persisted to
+// data/mediainfo.json. Used as a fallback language source wherever a live
+// probe/response is missing a real audio/subtitle language name.
+router.get("/mediainfo/:id", getMediaInfoById);
 
 module.exports = router;
