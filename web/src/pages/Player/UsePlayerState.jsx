@@ -61,6 +61,14 @@ const initialState = {
     // VideoCore/PlayerPage's on-demand quality-switch (new session at that resolution),
     // not an hls.js level change within the same manifest.
     activeQuality: -1, // -1 = auto
+    // Seek-bar top-right toggle: false = show total duration, true = show
+    // remaining time. Deliberately real shared state, not local component
+    // state — SeekTimeRow lives inside the part of PlayerControls that
+    // fully unmounts whenever controls auto-hide, so local state there gets
+    // wiped on every single tap. Living here (this hook's Provider is up in
+    // PlayerPage, which does NOT unmount on controls visibility) means it
+    // only resets when it's actually supposed to — a genuinely new video.
+    showRemainingTime: false,
     audioTracks: [], // [{ index, id, name, lang, default }]
     activeAudioTrack: 0,
     buffered: null, // TimeRanges
@@ -150,6 +158,7 @@ export const A = {
     SET_LOCAL_SUBTITLE_FILE: "SET_LOCAL_SUBTITLE_FILE",
     SET_QUALITY_LEVELS: "SET_QUALITY_LEVELS",
     SET_ACTIVE_QUALITY: "SET_ACTIVE_QUALITY",
+    TOGGLE_REMAINING_TIME: "TOGGLE_REMAINING_TIME",
     SET_REQUESTED_QUALITY: "SET_REQUESTED_QUALITY",
     SET_AUDIO_TRACKS: "SET_AUDIO_TRACKS",
     SET_ACTIVE_AUDIO_TRACK: "SET_ACTIVE_AUDIO_TRACK",
@@ -240,6 +249,8 @@ function playerReducer(state, action) {
             return { ...state, requestedQuality: action.payload };
         case A.SET_ACTIVE_QUALITY:
             return { ...state, activeQuality: action.payload };
+        case A.TOGGLE_REMAINING_TIME:
+            return { ...state, showRemainingTime: !state.showRemainingTime };
         case A.SET_AUDIO_TRACKS:
             return { ...state, audioTracks: action.payload };
         case A.SET_ACTIVE_AUDIO_TRACK:
@@ -352,6 +363,7 @@ export function PlayerProvider({ children }) {
     const setLocalSubtitleFile = useCallback((v) => dispatch({ type: A.SET_LOCAL_SUBTITLE_FILE, payload: v }), []);
     const setQualityLevels = useCallback((v) => dispatch({ type: A.SET_QUALITY_LEVELS, payload: v }), []);
     const setActiveQuality = useCallback((v) => dispatch({ type: A.SET_ACTIVE_QUALITY, payload: v }), []);
+    const toggleRemainingTime = useCallback(() => dispatch({ type: A.TOGGLE_REMAINING_TIME }), []);
     const setRequestedQuality = useCallback((v) => dispatch({ type: A.SET_REQUESTED_QUALITY, payload: v }), []);
     const setAudioTracks = useCallback((v) => dispatch({ type: A.SET_AUDIO_TRACKS, payload: v }), []);
     const setActiveAudioTrack = useCallback((v) => dispatch({ type: A.SET_ACTIVE_AUDIO_TRACK, payload: v }), []);
@@ -407,6 +419,7 @@ export function PlayerProvider({ children }) {
             setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
+            toggleRemainingTime,
             setRequestedQuality,
             setAudioTracks,
             setActiveAudioTrack,
@@ -461,6 +474,7 @@ export function PlayerProvider({ children }) {
             setLocalSubtitleFile,
             setQualityLevels,
             setActiveQuality,
+            toggleRemainingTime,
             setRequestedQuality,
             setAudioTracks,
             setActiveAudioTrack,

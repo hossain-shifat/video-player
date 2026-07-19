@@ -3,9 +3,6 @@ import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router";
 import {
     Play,
-    Bookmark,
-    BookmarkCheck,
-    Heart,
     Star,
     Film,
     Tv,
@@ -29,13 +26,6 @@ import {
     PlayCircle,
     ThumbsUp,
     MoreVertical,
-    Share2,
-    X,
-    Loader2,
-    FileVideo,
-    Subtitles,
-    AudioLines,
-    HardDrive,
     Link2,
 } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
@@ -48,6 +38,7 @@ import SimilarMedia from "../../../Components/SimilarMedia";
 import { assets } from "../../../assets/assets";
 import CastAndCrew from "../../../Components/CastAndCrew";
 import Reviews from "../../../Components/Reviews";
+import FloatingActionMenu from "../../../Components/FloatingActionMenu";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -301,340 +292,6 @@ function TrailerModal({ trailerKey, onClose }) {
     );
 }
 
-// ─── Floating action menu (HistoryCard-style: fade+scale, blurred dark panel) ─
-function MenuItem({ icon: Icon, label, onClick, iconClass = "text-white/76", textClass = "text-white/92", danger }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium cursor-pointer border-none bg-transparent text-left
-                        hover:bg-white/8 active:bg-white/12 transition-colors duration-100
-                        ${danger ? "text-error/80 hover:text-error" : textClass}`}>
-            <Icon size={14} strokeWidth={1.8} className={`shrink-0 ${danger ? "text-error/70" : iconClass}`} />
-            {label}
-        </button>
-    );
-}
-
-function FloatingActionMenu({ open, anchorRef, onClose, items }) {
-    const [visible, setVisible] = useState(false);
-    const [mounted, setMounted] = useState(false);
-    const [pos, setPos] = useState({ top: 0, left: 0 });
-    const menuRef = useRef(null);
-    const MENU_W = 208;
-
-    function close() {
-        setVisible(false);
-        setTimeout(() => setMounted(false), 150);
-    }
-
-    useEffect(() => {
-        if (open) {
-            if (anchorRef.current) {
-                const r = anchorRef.current.getBoundingClientRect();
-                let left = r.right - MENU_W;
-                let top = r.bottom + 6;
-                if (left < 8) left = 8;
-                if (left + MENU_W > window.innerWidth - 8) left = window.innerWidth - MENU_W - 8;
-                const estH = items.length * 42 + 16;
-                if (top + estH > window.innerHeight - 8) top = r.top - estH - 6;
-                setPos({ top, left });
-            }
-            setMounted(true);
-            const raf = requestAnimationFrame(() => setVisible(true));
-            return () => cancelAnimationFrame(raf);
-        } else if (mounted) {
-            close();
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
-
-    useEffect(() => {
-        if (!mounted) return;
-        const handleClick = (e) => {
-            if (menuRef.current?.contains(e.target) || anchorRef.current?.contains(e.target)) return;
-            onClose();
-        };
-        const handleKey = (e) => e.key === "Escape" && onClose();
-        const handleScroll = () => onClose();
-        document.addEventListener("mousedown", handleClick);
-        document.addEventListener("keydown", handleKey);
-        window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-        window.addEventListener("resize", handleScroll, { passive: true });
-        return () => {
-            document.removeEventListener("mousedown", handleClick);
-            document.removeEventListener("keydown", handleKey);
-            window.removeEventListener("scroll", handleScroll, { capture: true });
-            window.removeEventListener("resize", handleScroll);
-        };
-    }, [mounted, onClose, anchorRef]);
-
-    if (!mounted) return null;
-
-    return createPortal(
-        <div
-            ref={menuRef}
-            role="menu"
-            style={{
-                position: "fixed",
-                top: pos.top,
-                left: pos.left,
-                width: MENU_W,
-                opacity: visible ? 1 : 0,
-                transform: visible ? "scale(1)" : "scale(0.95)",
-                transformOrigin: "top right",
-                transition: "opacity 150ms ease, transform 150ms ease",
-                zIndex: 100,
-            }}
-            className="rounded-xl bg-[oklch(15%_0.01_260/0.97)] backdrop-blur-md shadow-2xl border border-white/10 py-1.5 overflow-hidden"
-            onClick={(e) => e.stopPropagation()}>
-            {items.map((it, i) => (
-                <MenuItem
-                    key={i}
-                    icon={it.icon}
-                    label={it.label}
-                    danger={it.danger}
-                    onClick={() => {
-                        it.onClick();
-                        onClose();
-                    }}
-                />
-            ))}
-        </div>,
-        document.body,
-    );
-}
-
-// ─── Info modal — renders raw mediainfo.json probe data ───────────────────────
-function InfoStat({ label, value, icon: Icon, iconClass = "text-base-content/72" }) {
-    if (value == null || value === "") return null;
-    return (
-        <div className="bg-base-300/60 rounded-lg p-3 flex flex-col gap-1 border border-white/5">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-base-content/72 font-semibold">
-                {Icon && <Icon size={11} className={iconClass} />}
-                {label}
-            </div>
-            <p className="text-sm font-semibold text-base-content leading-snug truncate">{value}</p>
-        </div>
-    );
-}
-
-const SUB_CODEC_NAMES = {
-    hdmv_pgs_subtitle: "PGS",
-    subrip: "SRT",
-    ass: "ASS",
-    ssa: "SSA",
-    webvtt: "VTT",
-    mov_text: "MP4 Text",
-    dvd_subtitle: "VobSub",
-    dvb_subtitle: "DVB",
-};
-function fmtSubCodec(codec) {
-    if (!codec) return null;
-    return SUB_CODEC_NAMES[codec.toLowerCase()] || codec.toUpperCase();
-}
-
-function InfoModal({ open, onClose, loading, data, title }) {
-    const [visible, setVisible] = useState(false);
-    const [mounted, setMounted] = useState(false);
-
-    useEffect(() => {
-        if (open) {
-            setMounted(true);
-            const raf = requestAnimationFrame(() => setVisible(true));
-            return () => cancelAnimationFrame(raf);
-        } else if (mounted) {
-            setVisible(false);
-            const t = setTimeout(() => setMounted(false), 180);
-            return () => clearTimeout(t);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
-
-    useEffect(() => {
-        if (!mounted) return;
-        const onKey = (e) => e.key === "Escape" && onClose();
-        document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
-    }, [mounted, onClose]);
-
-    if (!mounted) return null;
-
-    return createPortal(
-        <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" style={{ opacity: visible ? 1 : 0, transition: "opacity 180ms ease" }} onClick={onClose}>
-            <div
-                className="w-full sm:w-[60vw] sm:min-w-[420px] sm:max-w-[820px] max-h-[85vh] flex flex-col bg-[oklch(15%_0.01_260)] rounded-2xl shadow-[0_24px_70px_-12px_rgba(0,0,0,0.65)] overflow-hidden"
-                style={{
-                    opacity: visible ? 1 : 0,
-                    transform: visible ? "scale(1) translateY(0)" : "scale(0.96) translateY(8px)",
-                    transition: "opacity 180ms ease, transform 180ms ease",
-                }}
-                onClick={(e) => e.stopPropagation()}>
-                {/* Header */}
-                <div className="relative shrink-0 px-6 py-5 bg-linear-to-br from-primary/15 via-base-300/40 to-transparent border-b border-white/8">
-                    <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
-                                <FileVideo size={18} className="text-primary" />
-                            </div>
-                            <div className="min-w-0">
-                                <h3 className="text-sm sm:text-base font-bold text-white truncate">{title || "Media Info"}</h3>
-                                <p className="text-[11px] text-white/72 mt-0.5">Technical stream details</p>
-                            </div>
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="w-8 h-8 rounded-full border-none bg-white/5 hover:bg-white/15 flex items-center justify-center cursor-pointer shrink-0 transition-colors"
-                            aria-label="Close">
-                            <X size={15} className="text-white/88" />
-                        </button>
-                    </div>
-                </div>
-
-                {/* Quick-glance summary strip */}
-                {!loading && data && (
-                    <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-6 py-2.5 bg-black/20 border-b border-white/8 text-[11px] text-white/70">
-                        {data.video?.resolution && (
-                            <span className="flex items-center gap-1.5">
-                                <Film size={12} className="text-primary" /> {data.video.codec} · {data.video.resolution}
-                            </span>
-                        )}
-                        {data.container?.duration && (
-                            <span className="flex items-center gap-1.5">
-                                <Clock size={12} className="text-orange-400" /> {data.container.duration}
-                            </span>
-                        )}
-                        {data.container?.size && (
-                            <span className="flex items-center gap-1.5">
-                                <HardDrive size={12} className="text-violet-400" /> {data.container.size}
-                            </span>
-                        )}
-                        {data.audioTracks?.length > 0 && (
-                            <span className="flex items-center gap-1.5">
-                                <AudioLines size={12} className="text-emerald-400" /> {data.audioTracks.length} audio
-                            </span>
-                        )}
-                        {data.subtitleTracks?.length > 0 && (
-                            <span className="flex items-center gap-1.5">
-                                <Subtitles size={12} className="text-secondary" /> {data.subtitleTracks.length} subtitle
-                            </span>
-                        )}
-                    </div>
-                )}
-
-                {/* Body */}
-                <div className="hs flex-1 overflow-y-auto px-6 py-5 space-y-6">
-                    {loading && (
-                        <div className="flex flex-col items-center justify-center gap-3 py-20 text-white/72">
-                            <Loader2 size={24} className="animate-spin text-primary" />
-                            <span className="text-xs">Reading stream info…</span>
-                        </div>
-                    )}
-
-                    {!loading && !data && (
-                        <div className="flex flex-col items-center justify-center gap-3 py-20 text-white/72">
-                            <Info size={24} />
-                            <span className="text-xs">No probe data available for this file yet.</span>
-                        </div>
-                    )}
-
-                    {!loading && data && (
-                        <>
-                            {data.container && (
-                                <section>
-                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
-                                        <HardDrive size={12} className="text-blue-400" /> Container
-                                    </h4>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                                        <InfoStat label="Format" value={data.container.format} icon={FileVideo} iconClass="text-blue-400" />
-                                        <InfoStat label="Duration" value={data.container.duration} icon={Clock} iconClass="text-orange-400" />
-                                        <InfoStat label="Size" value={data.container.size} icon={HardDrive} iconClass="text-violet-400" />
-                                        <InfoStat label="Bitrate" value={data.container.bitrate} icon={BarChart2} iconClass="text-emerald-400" />
-                                    </div>
-                                </section>
-                            )}
-
-                            {data.video && (
-                                <section>
-                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
-                                        <Film size={12} className="text-primary" /> Video
-                                    </h4>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                                        <InfoStat label="Codec" value={data.video.profile ? `${data.video.codec} (${data.video.profile})` : data.video.codec} icon={Film} iconClass="text-primary" />
-                                        <InfoStat label="Resolution" value={data.video.resolution} icon={Hash} iconClass="text-pink-400" />
-                                        <InfoStat label="Aspect Ratio" value={data.video.aspectRatio} icon={Layers} iconClass="text-secondary" />
-                                        <InfoStat label="Frame Rate" value={data.video.frameRate} icon={PlayCircle} iconClass="text-accent" />
-                                        <InfoStat label="Bit Depth" value={data.video.bitDepth ? `${data.video.bitDepth}-bit` : null} icon={BarChart2} iconClass="text-emerald-400" />
-                                        <InfoStat label="Bitrate" value={data.video.bitrate} icon={BarChart2} iconClass="text-emerald-400" />
-                                    </div>
-                                </section>
-                            )}
-
-                            {data.audioTracks?.length > 0 && (
-                                <section>
-                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
-                                        <AudioLines size={12} className="text-emerald-400" /> Audio {data.audioTracks.length > 1 && `(${data.audioTracks.length})`}
-                                    </h4>
-                                    <div className="space-y-2">
-                                        {data.audioTracks.map((t, i) => (
-                                            <div key={i} className="bg-base-300/60 rounded-lg p-3 border border-white/5">
-                                                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-                                                    <span className="text-sm font-semibold text-white flex items-center gap-1.5">
-                                                        Track {i + 1} · {t.languageName || t.language}
-                                                        {t.default && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-primary/20 text-primary">Default</span>}
-                                                    </span>
-                                                    <span className="text-xs text-white/76 font-mono">{t.codec}</span>
-                                                    {t.channelLayout && (
-                                                        <span className="text-xs text-white/76">
-                                                            {t.channelLayout}
-                                                            {t.channels ? ` (${t.channels}ch)` : ""}
-                                                        </span>
-                                                    )}
-                                                    {t.sampleRate && <span className="text-xs text-white/76">{t.sampleRate}</span>}
-                                                    {t.bitrate && <span className="text-xs text-white/76">{t.bitrate}</span>}
-                                                </div>
-                                                {t.title && t.title !== t.languageName && <p className="text-[11px] text-white/45 mt-1.5 truncate">{t.title}</p>}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </section>
-                            )}
-
-                            {data.subtitleTracks?.length > 0 && (
-                                <section>
-                                    <h4 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-white/80 mb-2.5">
-                                        <Subtitles size={12} className="text-secondary" /> Subtitles {data.subtitleTracks.length > 1 && `(${data.subtitleTracks.length})`}
-                                    </h4>
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {data.subtitleTracks.map((t, i) => (
-                                            <span key={i} className="text-xs font-medium px-3 py-1.5 rounded-full bg-base-300/60 border border-white/5 text-white/88 flex items-center gap-1.5">
-                                                {t.languageName || t.language}
-                                                {fmtSubCodec(t.codec) && <span className="text-white/45 font-normal">· {fmtSubCodec(t.codec)}</span>}
-                                                {t.forced && <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-warning/20 text-warning">Forced</span>}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </section>
-                            )}
-                        </>
-                    )}
-                </div>
-
-                {/* Footer */}
-                {!loading && data && (
-                    <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-3.5 border-t border-white/8 bg-black/20">
-                        <span className="text-[11px] text-white/55">{data.probedAt ? `Probed ${fmtDate(data.probedAt)}` : "Stream analysis"}</span>
-                        <button onClick={onClose} className="btn btn-sm rounded-full border-none bg-white/10 hover:bg-white/18 text-white/88 px-5">
-                            Close
-                        </button>
-                    </div>
-                )}
-            </div>
-        </div>,
-        document.body,
-    );
-}
-
 // ─── Ratings section ──────────────────────────────────────────────────────────
 function RatingsSection({ ratings, imdbId }) {
     if (!ratings) return null;
@@ -841,7 +498,7 @@ export default function MediaDetails() {
     const { id } = useParams();
     const navigate = useNavigate();
 
-    const { isInWatchlist, toggleWatchlist, isFavourite, toggleFavourite, getResume, movies, series, anime } = useApi();
+    const { getResume, movies, series, anime } = useApi();
 
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -856,10 +513,8 @@ export default function MediaDetails() {
 
     // ── Floating action menu + Info modal ──────────────────────────────────────
     const [showActionMenu, setShowActionMenu] = useState(false);
+    const [watched, setWatched] = useState(false);
     const actionBtnRef = useRef(null);
-    const [showInfoModal, setShowInfoModal] = useState(false);
-    const [mediaInfoEntry, setMediaInfoEntry] = useState(null);
-    const [mediaInfoLoading, setMediaInfoLoading] = useState(false);
     const [shareToast, setShareToast] = useState(false);
 
     // id from URL is already the raw base64url string — no encode/decode needed.
@@ -971,8 +626,6 @@ export default function MediaDetails() {
     const reviews = Array.isArray(m?.reviews) ? m.reviews : [];
     const videos = Array.isArray(m?.videos) ? m.videos : [];
 
-    const watchlisted = isInWatchlist(decodedId);
-    const favourited = isFavourite(decodedId);
     const overviewLong = overview && overview.length > 220;
 
     const parsedLangs = item?.parsed?.languages;
@@ -1060,76 +713,6 @@ export default function MediaDetails() {
     // else fall back to the first episode of the first season — mediaInfo
     // (ffprobe) is only ever recorded per-file, never per-series.
     const infoTargetId = !isSeries ? decodedId : ((activeSeason?.episodes || seasonEntries[0]?.[1]?.episodes || [])[0]?.id ?? null);
-
-    /**
-     * copyToClipboard — navigator.clipboard.writeText silently throws (or is
-     * undefined) on a non-secure origin. Self-hosted FLUX is almost always
-     * served over plain http:// on the local network, so on mobile Chrome
-     * neither navigator.share nor navigator.clipboard exist there — this is
-     * why "Share" looked broken. execCommand('copy') via a hidden textarea
-     * still works on http:// and is the real fix.
-     */
-    function copyToClipboard(text) {
-        if (navigator.clipboard && window.isSecureContext) {
-            return navigator.clipboard.writeText(text);
-        }
-        return new Promise((resolve, reject) => {
-            try {
-                const ta = document.createElement("textarea");
-                ta.value = text;
-                ta.style.position = "fixed";
-                ta.style.top = "-1000px";
-                ta.style.opacity = "0";
-                document.body.appendChild(ta);
-                ta.focus();
-                ta.select();
-                const ok = document.execCommand("copy");
-                document.body.removeChild(ta);
-                ok ? resolve() : reject(new Error("execCommand copy failed"));
-            } catch (err) {
-                reject(err);
-            }
-        });
-    }
-
-    /**
-     * handleShare — navigator.share MUST fire synchronously inside the click
-     * handler (deferred calls get silently blocked by browsers), and only
-     * exists on secure origins. Falls back to copyToClipboard + toast when
-     * unavailable (the common case for a local-network http:// deployment).
-     */
-    const handleShare = () => {
-        const shareUrl = window.location.href;
-        const shareTitle = m?.title || item?.title || item?.name || "FLUX";
-        if (navigator.share && window.isSecureContext) {
-            navigator.share({ title: shareTitle, url: shareUrl }).catch(() => {});
-            return;
-        }
-        copyToClipboard(shareUrl)
-            .then(() => {
-                setShareToast(true);
-                setTimeout(() => setShareToast(false), 2200);
-            })
-            .catch(() => {});
-    };
-
-    /** handleShowInfo — lazily fetches the full mediaInfo dump once, caches the entry for this id */
-    const handleShowInfo = () => {
-        setShowInfoModal(true);
-        if (mediaInfoEntry || !infoTargetId) return;
-        setMediaInfoLoading(true);
-        api.get("/api/mediainfo")
-            .then((res) => {
-                setMediaInfoEntry(res?.mediaInfo?.[infoTargetId] ?? null);
-            })
-            .catch(() => setMediaInfoEntry(null))
-            .finally(() => setMediaInfoLoading(false));
-    };
-
-    // Re-fetch info if the target file changes while modal state was already resolved
-    useEffect(() => {
-        setMediaInfoEntry(null);
-    }, [infoTargetId]);
 
     if (loading) return <MediaDetailsSkeleton />;
 
@@ -1315,20 +898,6 @@ export default function MediaDetails() {
                                 )}
 
                                 <button
-                                    onClick={() => toggleWatchlist(decodedId, { name: title, poster, type: mediaType })}
-                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors ${watchlisted ? "text-accent border-accent bg-accent/10" : "text-base-content/84"}`}
-                                    title={watchlisted ? "Remove from Watchlist" : "Add to Watchlist"}>
-                                    {watchlisted ? <BookmarkCheck size={17} fill="currentColor" /> : <Bookmark size={17} />}
-                                </button>
-
-                                <button
-                                    onClick={() => toggleFavourite(decodedId, { name: title, poster, type: mediaType })}
-                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors ${favourited ? "text-error border-error bg-error/10" : "text-base-content/84"}`}
-                                    title={favourited ? "Remove from Favourites" : "Add to Favourites"}>
-                                    <Heart size={17} fill={favourited ? "currentColor" : "none"} />
-                                </button>
-
-                                <button
                                     ref={actionBtnRef}
                                     onClick={() => setShowActionMenu((v) => !v)}
                                     className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors cursor-pointer ${showActionMenu ? "text-primary border-primary bg-primary/10" : "text-base-content/84"}`}
@@ -1476,19 +1045,20 @@ export default function MediaDetails() {
             {showTrailer && trailerKey && <TrailerModal trailerKey={trailerKey} onClose={() => setShowTrailer(false)} />}
             {videoModalKey && <TrailerModal trailerKey={videoModalKey} onClose={() => setVideoModalKey(null)} />}
 
-            {/* ── Floating 3-dot menu ───────────────────────────────────────── */}
+            {/* ── Floating 3-dot menu — same component/design/items as MediaCard & HistoryCard ── */}
             <FloatingActionMenu
                 open={showActionMenu}
                 anchorRef={actionBtnRef}
                 onClose={() => setShowActionMenu(false)}
-                items={[
-                    { icon: Share2, label: "Share", onClick: handleShare },
-                    { icon: Info, label: "Info", onClick: handleShowInfo },
-                ]}
+                media={{ id: decodedId, title, poster, type: mediaType }}
+                watched={watched}
+                onToggleWatched={() => setWatched((v) => !v)}
+                infoId={infoTargetId}
+                onCopyFallback={() => {
+                    setShareToast(true);
+                    setTimeout(() => setShareToast(false), 2200);
+                }}
             />
-
-            {/* ── Media info modal ──────────────────────────────────────────── */}
-            <InfoModal open={showInfoModal} onClose={() => setShowInfoModal(false)} loading={mediaInfoLoading} data={mediaInfoEntry} title={title} />
 
             {/* ── Share toast (clipboard fallback confirmation) ──────────────── */}
             {shareToast && (

@@ -30,7 +30,7 @@ function getBufferedPct(buffered, duration, currentTime) {
  * SeekBar — premium seek bar with buffered visualization,
  * hover timestamp tooltip, animated thumb, and smooth scrubbing.
  */
-const SeekBar = memo(function SeekBar({ videoRef }) {
+const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
     const { state, actions } = usePlayerState();
     const barRef = useRef(null);
     const thumbRef = useRef(null);
@@ -54,11 +54,17 @@ const SeekBar = memo(function SeekBar({ videoRef }) {
         (clientX) => {
             const t = getTimeFromClientX(clientX);
             if (!isFinite(t) || isNaN(t)) return;
-            // Direct DOM mutation for zero-latency feel during drag
-            if (videoRef.current) videoRef.current.currentTime = t;
+            // FIX: t here is always an ABSOLUTE position (state.duration is
+            // the real full-file length). But if a quality-switch session
+            // restart is currently loaded, the video element's own
+            // currentTime is relative to THAT session's timeline (see
+            // VideoCore.jsx's handleTimeUpdate comment for the full why) —
+            // assigning the raw absolute t directly would seek to the wrong
+            // spot the same way the original restore bug did.
+            if (videoRef.current) videoRef.current.currentTime = Math.max(0, t - (sessionTimeOffsetRef?.current || 0));
             actions.setCurrentTime(t);
         },
-        [getTimeFromClientX, videoRef, actions],
+        [getTimeFromClientX, videoRef, actions, sessionTimeOffsetRef],
     );
 
     const getClientX = (e) => e.touches?.[0]?.clientX ?? e.clientX;
@@ -151,7 +157,7 @@ const SeekBar = memo(function SeekBar({ videoRef }) {
             {/* Track */}
             <div ref={barRef} className={`flux-seek-track ${isDragging ? "dragging" : ""}`}>
                 {/* Buffered */}
-                <div className="flux-seek-buffered" style={{ width: `${bufferedPct}%` }} />
+                <div className="flux-seek-buffered" style={{ width: `${bufferedPct}%`, transition: "width 400ms ease-out" }} />
                 {/* Played */}
                 <div className="flux-seek-played" style={{ width: `${playedPct}%` }} />
             </div>

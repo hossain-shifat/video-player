@@ -10,7 +10,25 @@ function historyHeaders(clientId) {
 // URL from the mediaId so history links survive server restarts.
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-export function useProgress({ mediaId, clientId, name, type, poster, videoRef, playing, mediaDuration, getToken, streamUrl, activeSubtitle, onHistoryLoaded, hlsRef, knownResumePosition }) {
+export function useProgress({
+    mediaId,
+    clientId,
+    name,
+    type,
+    poster,
+    videoRef,
+    playing,
+    mediaDuration,
+    getToken,
+    streamUrl,
+    activeSubtitle,
+    onHistoryLoaded,
+    hlsRef,
+    knownResumePosition,
+    actions,
+    suppressTimeUpdateRef,
+    sessionTimeOffsetRef,
+}) {
     const [resumePoint, setResumePoint] = useState(() => (knownResumePosition != null && knownResumePosition > 10 ? { position: knownResumePosition } : null));
     const [showResumeDialog, setShowResumeDialog] = useState(() => knownResumePosition != null && knownResumePosition > 10);
     // NEW: true while deferredSeek is polling for the target segment to become
@@ -45,6 +63,21 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             let attempts = 0;
             const MAX_ATTEMPTS = 75; // 75 × 200ms = 15s max wait
 
+            // FIX (resume shows 0:00 climbing up, not 17:09 — same bug the
+            // quality-switch path already had and fixed): this used to only
+            // ever set the raw video.currentTime once the poll below
+            // actually landed, up to 15s later. Nothing here ever touched
+            // state.currentTime (what the seek bar/time text actually
+            // render), so the displayed position was driven by native
+            // timeupdate the entire wait — ticking up from 0:00, 0:01,
+            // 0:02... instead of showing 17:09 immediately. Setting it here,
+            // optimistically, and blocking native timeupdate from
+            // overwriting it (suppressTimeUpdateRef) until the real seek
+            // lands, mirrors PlayerPage.jsx's already-proven quality-switch
+            // fix exactly.
+            actions?.setCurrentTime?.(targetSec);
+            if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = true;
+
             // Tell hls.js to start buffering from the target position immediately.
             // This makes the seekable range grow to include targetSec quickly
             // instead of waiting for segments [0 ... targetSec] to load one by one.
@@ -56,6 +89,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
                 if (!video) {
                     clearInterval(seekPollRef.current);
                     setIsSeekingToResume(false);
+                    if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = false;
                     onSeekLanded?.();
                     return;
                 }
@@ -74,11 +108,14 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
                     clearInterval(seekPollRef.current);
                     video.currentTime = targetSec;
                     setIsSeekingToResume(false);
+                    // Real position has landed — safe to let native
+                    // timeupdate drive state.currentTime again from here.
+                    if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = false;
                     onSeekLanded?.();
                 }
             }, 200);
         },
-        [videoRef, hlsRef],
+        [videoRef, hlsRef, actions, suppressTimeUpdateRef],
     );
 
     // FIX (Report-28): videoRef.current is null at hook mount because <VideoCore>
@@ -90,11 +127,18 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         const video = videoRef.current;
         if (!video) return;
         const onTimeUpdate = () => {
-            lastTimeRef.current = video.currentTime;
+            // FIX: same absolute-vs-relative issue as the display fix —
+            // video.currentTime is relative to whichever session is
+            // currently loaded (0 for fresh/resume, session-relative after a
+            // quality-switch restart). Saving the raw relative value here
+            // would silently corrupt this video's saved watch position for
+            // NEXT time, even though the on-screen time looked correct this
+            // session.
+            lastTimeRef.current = video.currentTime + (sessionTimeOffsetRef?.current || 0);
         };
         // FIX: save immediately after user seeks to any position
         const onSeeked = () => {
-            saveProgressRef.current?.(video.currentTime);
+            saveProgressRef.current?.(video.currentTime + (sessionTimeOffsetRef?.current || 0));
         };
         video.addEventListener("timeupdate", onTimeUpdate);
         video.addEventListener("seeked", onSeeked);
@@ -102,7 +146,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             video.removeEventListener("timeupdate", onTimeUpdate);
             video.removeEventListener("seeked", onSeeked);
         };
-    }, [streamUrl, videoRef]); // streamUrl flip null→url triggers re-run
+    }, [streamUrl, videoRef, sessionTimeOffsetRef]); // streamUrl flip null→url triggers re-run
 
     // FIX: stable stream URL — never use ephemeral HLS session URL
     const stableStreamUrl = mediaId ? `${BASE}/stream/video/${encodeURIComponent(mediaId)}` : null;
@@ -275,15 +319,23 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
             setResumeDialogFading(false);
             return undefined;
         }
+        console.log("[RESUME] timer armed at", new Date().toISOString(), "— will fire in 4000ms");
         setResumeDialogFading(false);
         dialogFadeTimer.current = setTimeout(() => {
+            console.log("[RESUME] 4000ms elapsed — fading out at", new Date().toISOString());
             setResumeDialogFading(true);
             // Let the fade transition (250-300ms, handled in the component
             // via resumeDialogFading) play out before actually removing it
             // from layout.
-            setTimeout(() => setShowResumeDialog(false), 300);
-        }, 6000);
-        return () => clearTimeout(dialogFadeTimer.current);
+            setTimeout(() => {
+                console.log("[RESUME] fade complete — setShowResumeDialog(false)");
+                setShowResumeDialog(false);
+            }, 300);
+        }, 4000); // FIX: was 4500, request specified exactly 4s
+        return () => {
+            console.log("[RESUME] timer cleared/restarted at", new Date().toISOString());
+            clearTimeout(dialogFadeTimer.current);
+        };
     }, [showResumeDialog]);
 
     // ── onReadyToSeek ─────────────────────────────────────────────────────────
@@ -417,6 +469,18 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mediaId, mediaDuration, buildPayload, scopedClientId, videoRef]);
 
+    // Manual dismiss (new X close button in PlayerControls) — immediate, no
+    // fade wait like the natural 6s timeout above. Same end state either way
+    // (showResumeDialog=false, permanently, until next real video load) so
+    // nothing about the "never reappears on touch" guarantee changes —
+    // showResumeDialog is only ever set true once, by the initial load
+    // effect above; nothing here or in the timeout path ever flips it back.
+    const dismissResumeDialog = useCallback(() => {
+        clearTimeout(dialogFadeTimer.current);
+        setResumeDialogFading(false);
+        setShowResumeDialog(false);
+    }, []);
+
     return {
         resumePoint,
         showResumeDialog,
@@ -425,6 +489,7 @@ export function useProgress({ mediaId, clientId, name, type, poster, videoRef, p
         handleResume,
         autoResume,
         handleStartOver,
+        dismissResumeDialog,
         onReadyToSeek,
         // Exposed so other callers (e.g. PlayerPage's on-demand quality
         // switch) can seek to an ARBITRARY target position using the exact

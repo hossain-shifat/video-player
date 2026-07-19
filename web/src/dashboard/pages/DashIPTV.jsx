@@ -9,6 +9,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, Component } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
+import Hls from "hls.js";
 import {
     Tv,
     Satellite,
@@ -27,6 +28,7 @@ import {
     ChevronLeft,
     ChevronRight,
     Info,
+    Image as ImageIcon,
     Pencil,
     FileText,
     CheckCircle2,
@@ -48,10 +50,14 @@ import {
     getLiveChannelsFlat,
     getLiveCategories,
     checkLiveStreamStatus,
+    startLiveBulkCheck,
+    getLiveBulkCheckStatus,
     getActiveLiveChannels,
     markLiveChannelActive,
     unmarkLiveChannelActive,
     updateLiveChannel,
+    updateActiveLiveChannel,
+    uploadActiveLiveLogo,
     deleteLiveChannel,
 } from "../../api/live";
 import { safeChannel, safeSource } from "../../utils/fallbacks";
@@ -232,27 +238,150 @@ function Pagination({ pagination, onPageChange }) {
 
 function Modal({ onClose, title, icon: Icon, children }) {
     return createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
             <div
-                className="relative w-[min(28rem,90vw)] max-h-[85vh] bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
-                style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)" }}
+                className="relative w-[min(28rem,96vw)] max-h-[92vh] sm:max-h-[85vh] bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
+                style={{ boxShadow: "0 20px 50px rgba(0,0,0,0.45)" }}
                 onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between px-5 py-4 border-b border-base-content/8 shrink-0">
-                    <div className="flex items-center gap-2.5">
+                <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 sm:py-4 border-b border-base-content/8 shrink-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
                         {Icon && (
                             <span className="w-8 h-8 rounded-md bg-primary/15 flex items-center justify-center shrink-0">
                                 <Icon size={16} className="text-primary" />
                             </span>
                         )}
-                        <h3 className="text-sm font-bold text-white">{title}</h3>
+                        <h3 className="text-sm font-bold text-white truncate">{title}</h3>
                     </div>
                     <button
                         onClick={onClose}
-                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer border-none">
+                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer border-none shrink-0">
                         <X size={14} />
                     </button>
                 </div>
-                <div className="p-5 space-y-4 overflow-y-auto flex-1">{children}</div>
+                <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">{children}</div>
+            </div>
+        </div>,
+        document.body,
+    );
+}
+
+// ─── Player Modal — "Play" action opens this instead of a raw new-tab <a> ─────
+// A bare <a href={m3u8} target="_blank"> just downloads/404s in most browsers
+// (Chrome/Firefox can't natively play HLS). This attaches hls.js so the admin
+// can actually preview the stream, and treats 404/503/timeout as retryable
+// network errors instead of a dead end.
+function PlayerModal({ channel, onClose }) {
+    const videoRef = useRef(null);
+    const hlsRef = useRef(null);
+    const retriesRef = useRef(0);
+    const [status, setStatus] = useState("loading"); // loading | playing | error
+    const [errorMsg, setErrorMsg] = useState("");
+
+    useEffect(() => {
+        let destroyed = false;
+        const video = videoRef.current;
+        if (!video || !channel?.url) return;
+
+        setStatus("loading");
+        setErrorMsg("");
+        retriesRef.current = 0;
+
+        function fail(msg) {
+            if (destroyed) return;
+            setStatus("error");
+            setErrorMsg(msg);
+        }
+
+        if (Hls.isSupported()) {
+            const hls = new Hls({
+                maxBufferLength: 30,
+                manifestLoadingMaxRetry: 4,
+                manifestLoadingRetryDelay: 1000,
+                levelLoadingMaxRetry: 4,
+                fragLoadingMaxRetry: 6,
+                fragLoadingRetryDelay: 1000,
+            });
+            hlsRef.current = hls;
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (destroyed) return;
+                setStatus("playing");
+                video.play().catch(() => {});
+            });
+
+            hls.on(Hls.Events.ERROR, (_evt, data) => {
+                if (destroyed || !data.fatal) return;
+                const code = data.response?.code;
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    // 404 / 503 / timeout — retry a few times (backend may be
+                    // rate-limiting or the CDN edge is briefly flaky) before
+                    // surfacing a hard error.
+                    if (retriesRef.current < 3) {
+                        retriesRef.current += 1;
+                        setTimeout(() => !destroyed && hls.startLoad(), 1200);
+                        return;
+                    }
+                    fail(code ? `Stream unreachable — HTTP ${code}` : `Network error — ${data.details}`);
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    hls.recoverMediaError();
+                } else {
+                    fail(data.details || "Playback failed");
+                }
+            });
+
+            hls.loadSource(channel.url);
+            hls.attachMedia(video);
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            // Safari / iOS — native HLS
+            video.src = channel.url;
+            const onLoaded = () => !destroyed && setStatus("playing");
+            const onErr = () => fail("Stream unreachable — playback failed");
+            video.addEventListener("loadedmetadata", onLoaded);
+            video.addEventListener("error", onErr);
+            video.play().catch(() => {});
+        } else {
+            fail("HLS playback not supported in this browser");
+        }
+
+        return () => {
+            destroyed = true;
+            if (hlsRef.current) {
+                hlsRef.current.destroy();
+                hlsRef.current = null;
+            }
+            video.removeAttribute("src");
+            video.load();
+        };
+    }, [channel?.url]);
+
+    if (!channel) return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-sm" onClick={onClose}>
+            <div className="relative w-full max-w-3xl bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-4 py-3 border-b border-base-content/8 shrink-0">
+                    <h3 className="text-sm font-bold text-white truncate pr-2">{channel.name || "Preview"}</h3>
+                    <button
+                        onClick={onClose}
+                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer border-none shrink-0">
+                        <X size={14} />
+                    </button>
+                </div>
+                <div className="relative w-full bg-black aspect-video">
+                    <video ref={videoRef} controls autoPlay playsInline className="w-full h-full" />
+                    {status === "loading" && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <Loader2 size={28} className="text-white/70 animate-spin" />
+                        </div>
+                    )}
+                    {status === "error" && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/85 px-4 text-center">
+                            <AlertCircle size={24} className="text-error" />
+                            <p className="text-xs text-white/70">{errorMsg}</p>
+                        </div>
+                    )}
+                </div>
+                <div className="px-4 py-2 text-[10px] text-white/35 truncate border-t border-base-content/8 shrink-0">{channel.url}</div>
             </div>
         </div>,
         document.body,
@@ -294,7 +423,7 @@ function RowActions({ onInfo, onEdit, onRefresh, onDelete, refreshing }) {
 }
 
 // ─── Channel table (shared by the Active tab and the Channels tab) ────────────
-function ChannelsTable({ list, loading, pageOffset, emptyTitle, emptySub, getStatus, recheckOne, activeIds, onToggleActive, onInfo, onEdit, onHide }) {
+function ChannelsTable({ list, loading, pageOffset, emptyTitle, emptySub, getStatus, recheckOne, activeIds, onToggleActive, onInfo, onEdit, onHide, onPlay }) {
     return (
         <table className="table w-full text-sm">
             <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
@@ -373,31 +502,29 @@ function ChannelsTable({ list, loading, pageOffset, emptyTitle, emptySub, getSta
                                     <span className="badge badge-sm badge-ghost text-[10px]">{ch.category}</span>
                                 </td>
                                 <td className="px-3 py-3">
-                                    <WorkingStatusBadge status={getStatus(ch.url)} />
+                                    <WorkingStatusBadge status={getStatus(ch)} />
                                 </td>
                                 <td className="pl-3 pr-4 py-3 text-right">
-                                    <div className="flex items-center justify-end gap-0.5 flex-wrap">
+                                    <div className="flex items-center justify-end gap-0.5 flex-nowrap">
                                         <button
                                             onClick={() => onToggleActive(ch)}
                                             title={isFav ? "Remove from Active" : "Mark Active"}
-                                            className={`w-7 h-7 rounded-md flex items-center justify-center border-none transition-colors cursor-pointer ${
+                                            className={`w-7 h-7 rounded-md flex items-center justify-center border-none transition-colors cursor-pointer shrink-0 ${
                                                 isFav ? "text-warning hover:bg-warning/10" : "text-white/70 hover:bg-white/8 hover:text-white"
                                             }`}>
                                             <Star size={12} fill={isFav ? "currentColor" : "none"} />
                                         </button>
-                                        <a
-                                            href={ch.url}
-                                            target="_blank"
-                                            rel="noreferrer"
+                                        <button
+                                            onClick={() => onPlay(ch)}
                                             title="Play"
-                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 hover:bg-white/8 hover:text-white transition-colors">
+                                            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer shrink-0">
                                             <Play size={12} />
-                                        </a>
+                                        </button>
                                         <button
                                             onClick={() => recheckOne(ch.url)}
                                             title="Recheck status"
                                             className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
-                                            <RotateCw size={12} className={getStatus(ch.url) === "checking" ? "animate-spin" : ""} />
+                                            <RotateCw size={12} className={getStatus(ch) === "checking" ? "animate-spin" : ""} />
                                         </button>
                                         <button
                                             onClick={() => onInfo(ch)}
@@ -503,7 +630,8 @@ function DashIPTVInner() {
     const [channelQ, setChannelQ] = useState("");
     const [sourceQ, setSourceQ] = useState("");
     const [channelPage, setChannelPage] = useState(1);
-    const [channelSort, setChannelSort] = useState("name");
+    const [channelSort, setChannelSort] = useState("status"); // auto-detect: working channels float to top
+    const [playChannel, setPlayChannel] = useState(null); // channel obj for the Play preview modal
     const [categoryFilter, setCategoryFilter] = useState("all");
 
     const [refreshingId, setRefreshingId] = useState(null);
@@ -531,6 +659,55 @@ function DashIPTVInner() {
     const [editChCategory, setEditChCategory] = useState("");
     const [editChCountry, setEditChCountry] = useState("");
     const [confirmHideChannel, setConfirmHideChannel] = useState(null);
+
+    // ── Active-tab CRUD (separate from the Channels-tab edit above — this
+    // one writes only to active_live.json via updateActiveLiveChannel) ──────
+    const [editActiveChannel, setEditActiveChannel] = useState(null);
+    const [activeEditForm, setActiveEditForm] = useState({ name: "", logo: "", category: "", country: "", group: "", url: "" });
+    const [activeLogoFile, setActiveLogoFile] = useState(null);
+    const activeLogoInputRef = useRef(null);
+
+    function openEditActiveModal(ch) {
+        setEditActiveChannel(ch);
+        setActiveEditForm({
+            name: ch.name || "",
+            logo: ch.logo || "",
+            category: ch.category || "",
+            country: ch.country || "",
+            group: ch.group || "",
+            url: ch.url || "",
+        });
+        setActiveLogoFile(null);
+    }
+    function closeEditActiveModal() {
+        setEditActiveChannel(null);
+        setActiveLogoFile(null);
+        editActiveMutation.reset();
+        uploadActiveLogoMutation.reset();
+    }
+    const editActiveMutation = useMutation({
+        mutationFn: ({ id, data }) => updateActiveLiveChannel(id, data),
+        onSuccess: () => {
+            invalidateChannelState();
+            showToast("Active channel updated");
+            closeEditActiveModal();
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Failed to update channel", "error"),
+    });
+    const uploadActiveLogoMutation = useMutation({
+        mutationFn: ({ id, file }) => uploadActiveLiveLogo(id, file),
+        onSuccess: (res) => {
+            const url = res?.data?.logo ?? res?.logo;
+            if (url) setActiveEditForm((f) => ({ ...f, logo: url }));
+            setActiveLogoFile(null);
+            invalidateChannelState();
+            showToast("Logo uploaded");
+        },
+        onError: (err) => showToast(err?.response?.data?.message || err.message || "Logo upload failed", "error"),
+    });
+    function saveActiveChannelEdit() {
+        editActiveMutation.mutate({ id: editActiveChannel.id, data: activeEditForm });
+    }
 
     const {
         data: activeChannelsData,
@@ -616,7 +793,7 @@ function DashIPTVInner() {
         hideChannelMutation.mutate(ch.id);
     }
 
-    const { queueCheck, getStatus, recheckOne } = useStreamStatusQueue();
+    const { getStatus, recheckOne } = useStreamStatusQueue();
 
     // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -663,7 +840,7 @@ function DashIPTVInner() {
     // Star/Edit/Delete click below silently targets `undefined` instead of
     // the actual channel (backend still "succeeds" against a bogus id, so it
     // looks like the button does nothing since nothing visibly changes).
-    const channels = (channelsData?.data?.channels ?? []).map((c) => (c ? { ...safeChannel(c), id: c.id } : null)).filter(Boolean);
+    const channels = (channelsData?.data?.channels ?? []).map((c) => (c ? { ...safeChannel(c), id: c.id, streamStatus: c.streamStatus || "unknown" } : null)).filter(Boolean);
     const pagination = channelsData?.data?.pagination ?? null;
 
     // Sources: client-side filter fine, typically < 100 rows
@@ -673,11 +850,44 @@ function DashIPTVInner() {
         return sources.filter((s) => s.name.toLowerCase().includes(q) || s.location.toLowerCase().includes(q));
     }, [sources, sourceQ]);
 
-    // Auto-check stream status for visible channel page (Channels tab) or the active list (Active tab)
-    useEffect(() => {
-        if (activeTab === "channel" && channels.length) queueCheck(channels.map((c) => c.url));
-        if (activeTab === "active" && activeChannels.length) queueCheck(activeChannels.map((c) => c.url));
-    }, [activeTab, channels, activeChannels, queueCheck]);
+    // Status shown in the table: prefer a manual, in-flight/just-finished
+    // live probe (getStatus from useStreamStatusQueue) for THIS row, else
+    // fall back to the server-persisted streamStatus that already came back
+    // with the channel list (set by the backend's auto/scheduled bulk check).
+    // No auto-probing on mount/page-change anymore — that was firing dozens
+    // of concurrent live checks on every tab switch, which is both why the
+    // badge always showed "checking"/"pending" and a likely contributor to
+    // server-side crashes under load.
+    const channelStatus = useCallback((ch) => (getStatus(ch.url) !== "idle" ? getStatus(ch.url) : ch.streamStatus || "unknown"), [getStatus]);
+
+    // ── Reload (bulk recheck) ───────────────────────────────────────────────
+    const [bulkChecking, setBulkChecking] = useState(false);
+    async function reloadWorkingStatus() {
+        if (bulkChecking) return;
+        setBulkChecking(true);
+        try {
+            await startLiveBulkCheck();
+            showToast("Rechecking all channels…");
+            // Poll until the server-side bulk job finishes, then pull fresh streamStatus
+            const poll = setInterval(async () => {
+                try {
+                    const { data } = await getLiveBulkCheckStatus();
+                    if (!data?.running) {
+                        clearInterval(poll);
+                        setBulkChecking(false);
+                        refetchChannels();
+                        showToast("Working status updated");
+                    }
+                } catch {
+                    clearInterval(poll);
+                    setBulkChecking(false);
+                }
+            }, 2000);
+        } catch (err) {
+            setBulkChecking(false);
+            showToast(err?.response?.data?.message || err.message || "Failed to start recheck", "error");
+        }
+    }
 
     // Category pills — real list from /api/live/categories
     const { data: categoriesData } = useQuery({
@@ -902,19 +1112,31 @@ function DashIPTVInner() {
                     })}
                 </div>
 
-                {/* Search */}
-                <div className="flex items-center gap-2 bg-base-300 rounded-md px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors w-full sm:w-72 shrink-0">
-                    <Search size={15} className="text-white/35 shrink-0" />
-                    <input
-                        type="text"
-                        placeholder={activeTab === "channel" ? "Search channels, country, group…" : activeTab === "active" ? "Search active channels…" : "Search source name, location…"}
-                        value={activeSearch}
-                        onChange={(e) => setActiveSearch(e.target.value)}
-                        className="flex-1 w-full bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
-                    />
-                    {activeSearch && (
-                        <button onClick={() => setActiveSearch("")} className="rounded-md text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer shrink-0">
-                            <X size={14} />
+                {/* Search + Reload */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <div className="flex items-center gap-2 bg-base-300 rounded-md px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors w-full sm:w-72 shrink-0">
+                        <Search size={15} className="text-white/35 shrink-0" />
+                        <input
+                            type="text"
+                            placeholder={activeTab === "channel" ? "Search channels, country, group…" : activeTab === "active" ? "Search active channels…" : "Search source name, location…"}
+                            value={activeSearch}
+                            onChange={(e) => setActiveSearch(e.target.value)}
+                            className="flex-1 w-full bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
+                        />
+                        {activeSearch && (
+                            <button onClick={() => setActiveSearch("")} className="rounded-md text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer shrink-0">
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
+                    {(activeTab === "channel" || activeTab === "active") && (
+                        <button
+                            onClick={reloadWorkingStatus}
+                            disabled={bulkChecking}
+                            title="Recheck working status for every channel"
+                            className="h-10 px-3 rounded-md flex items-center gap-1.5 text-xs font-bold text-white/70 bg-base-300 border border-white/8 hover:bg-white/8 hover:text-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
+                            <RefreshCw size={13} className={bulkChecking ? "animate-spin" : ""} />
+                            <span className="hidden sm:inline">Reload</span>
                         </button>
                     )}
                 </div>
@@ -958,13 +1180,14 @@ function DashIPTVInner() {
                             pageOffset={0}
                             emptyTitle={activeQ ? "No active channels match your search" : "No channels marked active yet"}
                             emptySub={activeQ ? "" : "Tap the star on a channel in the Channels tab to pin it here."}
-                            getStatus={getStatus}
+                            getStatus={channelStatus}
                             recheckOne={recheckOne}
                             activeIds={activeIds}
                             onToggleActive={toggleActiveChannel}
                             onInfo={setInfoChannel}
-                            onEdit={openEditChannelModal}
+                            onEdit={openEditActiveModal}
                             onHide={setConfirmHideChannel}
+                            onPlay={setPlayChannel}
                         />
                     ) : activeTab === "channel" ? (
                         <ChannelsTable
@@ -973,13 +1196,14 @@ function DashIPTVInner() {
                             pageOffset={(channelPage - 1) * PAGE_SIZE}
                             emptyTitle={channelQ ? "No channels match your search" : "No channels yet"}
                             emptySub={channelQ ? "" : "Add a playlist source to populate channels."}
-                            getStatus={getStatus}
+                            getStatus={channelStatus}
                             recheckOne={recheckOne}
                             activeIds={activeIds}
                             onToggleActive={toggleActiveChannel}
                             onInfo={setInfoChannel}
                             onEdit={openEditChannelModal}
                             onHide={setConfirmHideChannel}
+                            onPlay={setPlayChannel}
                         />
                     ) : (
                         <table className="table w-full text-sm">
@@ -1177,7 +1401,7 @@ function DashIPTVInner() {
             {/* Source Info Modal */}
             {infoSource && (
                 <Modal onClose={() => setInfoSource(null)} title="Source Info" icon={Info}>
-                    <div className="space-y-3 text-sm">
+                    <div className="divide-y divide-base-content/8">
                         {[
                             ["Name", infoSource.name],
                             ["Type", infoSource.type === "url" ? "URL" : "File"],
@@ -1188,9 +1412,12 @@ function DashIPTVInner() {
                             ["Added", fmtDate(infoSource.date)],
                             ...(infoSource.status === "error" && infoSource.error ? [["Error", infoSource.error]] : []),
                         ].map(([label, value]) => (
-                            <div key={label} className="space-y-0.5">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">{label}</p>
-                                <p className="text-sm text-white/85 break-all">{value ?? "—"}</p>
+                            <div key={label} className="flex items-start justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
+                                <span className="text-xs font-semibold text-white/45 shrink-0">{label}</span>
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                    <span className="text-sm text-white/85 text-right break-all">{value ?? "—"}</span>
+                                    {label === "Location" && value && <CopyIconBtn text={value} title="Copy location" />}
+                                </span>
                             </div>
                         ))}
                     </div>
@@ -1251,21 +1478,21 @@ function DashIPTVInner() {
             {/* Channel Info Modal */}
             {infoChannel && (
                 <Modal onClose={() => setInfoChannel(null)} title="Channel Info" icon={Info}>
-                    <div className="space-y-3 text-sm">
+                    <div className="divide-y divide-base-content/8">
                         {[
                             ["Name", infoChannel.name],
                             ["Country", infoChannel.country],
                             ["Group", infoChannel.group],
                             ["Category", infoChannel.category],
-                            ["Working Status", getStatus(infoChannel.url)],
+                            ["Working Status", channelStatus(infoChannel)],
                             ["Stream URL", infoChannel.url],
                         ].map(([label, value]) => (
-                            <div key={label} className="space-y-0.5">
-                                <div className="flex items-center justify-between gap-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">{label}</p>
-                                    {label === "Stream URL" && <CopyIconBtn text={value} title="Copy stream URL" />}
-                                </div>
-                                <p className="text-sm text-white/85 break-all">{value ?? "—"}</p>
+                            <div key={label} className="flex items-start justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
+                                <span className="text-xs font-semibold text-white/45 shrink-0">{label}</span>
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                    <span className="text-sm text-white/85 text-right break-all">{value ?? "—"}</span>
+                                    {label === "Stream URL" && value && <CopyIconBtn text={value} title="Copy stream URL" />}
+                                </span>
                             </div>
                         ))}
                     </div>
@@ -1320,6 +1547,159 @@ function DashIPTVInner() {
                             className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
                             {editChannelMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
                             {editChannelMutation.isPending ? "Saving…" : "Save Changes"}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Edit Active Channel Modal — CRUD scoped to active_live.json only,
+                separate from the Channels-tab "Edit Channel" modal above. */}
+            {editActiveChannel && (
+                <Modal onClose={closeEditActiveModal} title="Edit Active Channel" icon={Pencil}>
+                    {(editActiveMutation.error || uploadActiveLogoMutation.error) && (
+                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                            <AlertTriangle size={13} className="shrink-0" />
+                            <span>
+                                {editActiveMutation.error?.response?.data?.message ||
+                                    editActiveMutation.error?.message ||
+                                    uploadActiveLogoMutation.error?.response?.data?.message ||
+                                    uploadActiveLogoMutation.error?.message}
+                            </span>
+                        </div>
+                    )}
+
+                    {/* Logo */}
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Logo</label>
+                        <div className="flex items-center gap-3">
+                            <div className="w-14 h-14 rounded-lg bg-base-100 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
+                                {activeEditForm.logo ? <img src={activeEditForm.logo} alt="" className="w-full h-full object-contain" /> : <ImageIcon size={18} className="text-white/25" />}
+                            </div>
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                                <input
+                                    type="text"
+                                    placeholder="Logo URL"
+                                    value={activeEditForm.logo}
+                                    onChange={(e) => setActiveEditForm((f) => ({ ...f, logo: e.target.value }))}
+                                    className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                                />
+                                <input
+                                    ref={activeLogoInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0] || null;
+                                        setActiveLogoFile(file);
+                                        if (file) uploadActiveLogoMutation.mutate({ id: editActiveChannel.id, file });
+                                    }}
+                                />
+                                <button
+                                    onClick={() => activeLogoInputRef.current?.click()}
+                                    disabled={uploadActiveLogoMutation.isPending}
+                                    className="text-xs font-bold text-primary hover:text-primary/80 transition-colors border-none bg-transparent cursor-pointer flex items-center gap-1.5 disabled:opacity-40">
+                                    {uploadActiveLogoMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                                    {uploadActiveLogoMutation.isPending ? "Uploading to imgbb…" : "Upload image"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Channel Name</label>
+                        <input
+                            type="text"
+                            value={activeEditForm.name}
+                            onChange={(e) => setActiveEditForm((f) => ({ ...f, name: e.target.value }))}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                        />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Category</label>
+                            <input
+                                type="text"
+                                value={activeEditForm.category}
+                                onChange={(e) => setActiveEditForm((f) => ({ ...f, category: e.target.value }))}
+                                className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Country</label>
+                            <input
+                                type="text"
+                                value={activeEditForm.country}
+                                onChange={(e) => setActiveEditForm((f) => ({ ...f, country: e.target.value }))}
+                                className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                            />
+                        </div>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Group</label>
+                        <input
+                            type="text"
+                            value={activeEditForm.group}
+                            onChange={(e) => setActiveEditForm((f) => ({ ...f, group: e.target.value }))}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                        />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Stream URL</label>
+                        <input
+                            type="text"
+                            value={activeEditForm.url}
+                            onChange={(e) => setActiveEditForm((f) => ({ ...f, url: e.target.value }))}
+                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full font-mono text-xs"
+                        />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                        <button
+                            onClick={closeEditActiveModal}
+                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
+                            Cancel
+                        </button>
+                        <button
+                            onClick={saveActiveChannelEdit}
+                            disabled={!activeEditForm.name.trim() || editActiveMutation.isPending}
+                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
+                            {editActiveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                            {editActiveMutation.isPending ? "Saving…" : "Save Changes"}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+
+            {/* Play Preview Modal — plays the .m3u8 in-place via hls.js */}
+            {playChannel && <PlayerModal channel={playChannel} onClose={() => setPlayChannel(null)} />}
+
+            {/* Confirm Delete Source Modal — state existed (set by the Sources-tab
+                trash icon) but no modal was ever rendered for it, so clicking
+                Delete silently set state and nothing appeared. */}
+            {confirmDeleteSource && (
+                <Modal onClose={() => setConfirmDeleteSource(null)} title="Delete Source" icon={Trash2}>
+                    <p className="text-sm text-white/75">
+                        Remove <span className="font-bold text-white">{confirmDeleteSource.name}</span>? All channels ingested from this source are removed too. This can't be undone — you'd need to
+                        re-add the playlist to get them back.
+                    </p>
+                    {deleteMutation.error && (
+                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
+                            <AlertTriangle size={13} className="shrink-0" />
+                            <span>{deleteMutation.error?.response?.data?.message || deleteMutation.error?.message}</span>
+                        </div>
+                    )}
+                    <div className="flex justify-end gap-2 pt-1">
+                        <button
+                            onClick={() => setConfirmDeleteSource(null)}
+                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
+                            Cancel
+                        </button>
+                        <button
+                            onClick={() => deleteMutation.mutate(confirmDeleteSource.id)}
+                            disabled={deleteMutation.isPending}
+                            className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
+                            {deleteMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                            {deleteMutation.isPending ? "Deleting…" : "Delete"}
                         </button>
                     </div>
                 </Modal>

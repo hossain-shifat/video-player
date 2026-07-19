@@ -31,10 +31,9 @@ const INIT_PHASE = {
 
 // ─── PlayerInner (inside PlayerProvider) ─────────────────────────────────────
 
-function PlayerInner({ mediaId, knownResumePosition }) {
+function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
     const navigate = useNavigate();
     const isMobile = useIsMobile();
-    const containerRef = useRef(null);
     const videoRef = useRef(null);
     const hideTimer = useRef(null);
     const sessionIdRef = useRef(null);
@@ -51,9 +50,73 @@ function PlayerInner({ mediaId, knownResumePosition }) {
     // this is a mid-playback stream swap, not a fresh video load, and must
     // never trigger the resume dialog or INIT_PHASE reset logic.
     const qualitySwitchStateRef = useRef(null);
+    // FIX (quality switch: video genuinely restarts from 0:00, not just a
+    // display glitch): the backend correctly seeks the SOURCE file via -ss
+    // when starting a quality-switch session (see transcoderService.js —
+    // it even preserves absolute PTS via -copyts specifically so this
+    // works). But VideoCore.jsx forces `hls.startPosition = 0` on every
+    // MANIFEST_PARSED (an established fix for a DIFFERENT problem — see its
+    // own comment) — which normalizes THIS NEW session's timeline to start
+    // counting from 0 regardless of the segments' real absolute PTS. So a
+    // quality-switch session that server-seeked to real position ~1029s has
+    // its OWN video.currentTime start at 0 (representing that ~1029s point),
+    // while a fresh/resume session (which starts from real position 0) has
+    // video.currentTime=0 ALSO mean real position 0 — same number, totally
+    // different meaning depending on which kind of session is active. This
+    // ref holds "what absolute time does THIS session's 0 actually
+    // represent" — 0 for fresh/resume sessions, the aligned segment-boundary
+    // time for a quality-switch restart. VideoCore's timeupdate, SeekBar's
+    // manual-seek assignment, and useProgress's watch-position save all need
+    // to add/subtract this to convert between "what the user sees" (always
+    // absolute) and "what the video element's own currentTime actually is"
+    // (relative to whichever session is currently loaded).
+    const sessionTimeOffsetRef = useRef(0);
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
+
+    // FIX (giving up on reverse-engineering hls.js's internal timeline):
+    // repeated attempts to reconstruct "what does this session's own 0
+    // actually mean in absolute terms" (via a formula, then via calibrating
+    // off video.currentTime once a seek lands) kept failing in ways I
+    // couldn't diagnose further without live devtools access. This is a
+    // completely different, much simpler strategy: after a quality-switch
+    // restart, STOP asking video.currentTime what the position is at all.
+    // Track it ourselves with a plain wall-clock — { baseTime: real Date.now()
+    // ms, baseX: the displayed position at that moment }. Every tick (see the
+    // ticker effect below), advance baseX by real elapsed time while
+    // actually playing. This can never "jump to 0" or misread hls.js
+    // internals, because it never asks hls.js anything.
+    const manualClockRef = useRef({ active: false, baseTime: 0, baseX: 0 });
+    const playingRef = useRef(false);
+    const bufferingRef = useRef(false);
+    useEffect(() => {
+        playingRef.current = state.playing;
+    }, [state.playing]);
+    useEffect(() => {
+        bufferingRef.current = state.isBuffering;
+    }, [state.isBuffering]);
+    // Ticks every 200ms — while manualClockRef is active and actually
+    // playing (not paused/buffering), advances the displayed position by
+    // real elapsed time. Freezes (but keeps resyncing its own baseTime) the
+    // rest of the time so resuming play never causes a jump.
+    useEffect(() => {
+        const id = setInterval(() => {
+            const clock = manualClockRef.current;
+            if (!clock.active) return;
+            const now = Date.now();
+            if (!playingRef.current || bufferingRef.current) {
+                clock.baseTime = now; // resync so a later resume doesn't jump
+                return;
+            }
+            const elapsed = (now - clock.baseTime) / 1000;
+            const x = clock.baseX + elapsed;
+            clock.baseTime = now;
+            clock.baseX = x;
+            actions.setCurrentTime(x);
+        }, 200);
+        return () => clearInterval(id);
+    }, [actions]);
 
     // ── Mobile init state machine (per explicit spec) ───────────────────────────
     // IDLE → LOADING_MEDIA → METADATA_READY → BUFFERING → SEEKING (resume only)
@@ -103,6 +166,17 @@ function PlayerInner({ mediaId, knownResumePosition }) {
     useEffect(() => {
         sessionIdRef.current = sessionId;
     }, [sessionId]);
+
+    // Suppresses VideoCore's handleTimeUpdate → actions.setCurrentTime while
+    // a quality-switch restore is in flight. Without this, the freshly
+    // attached <video> element's own real (not-yet-seeked) timeupdate events
+    // keep reporting ~0 and immediately overwrite the optimistic
+    // setCurrentTime(pending.time) below every single tick, for however long
+    // deferredSeek's poll takes to actually land the seek — which is exactly
+    // why the seek bar/time text sat at 00:00 despite the underlying seek
+    // being correct the whole time. Same race the audio-track watchdog had
+    // against deliberate seeks elsewhere in this codebase, same fix shape.
+    const suppressTimeUpdateRef = useRef(false);
 
     // ── Overlay state ─────────────────────────────────────────────────────────
     const [overlayState, setOverlayState] = useState({
@@ -327,16 +401,18 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         return () => clearInterval(interval);
     }, [sessionId]);
 
-    // ── Cleanup on unmount ────────────────────────────────────────────────────
+    // ── Cleanup on unmount (per-video, fires on every switch AND true exit) ──
+    // FIX: this used to ALSO call document.exitFullscreen() + orientation
+    // unlock right here. Since PlayerInner remounts on every media switch
+    // (key={mediaId}), that meant fullscreen got exited and orientation
+    // unlocked on every single switch — the exact two-step "flips to
+    // portrait, then auto-switches back to landscape" bug. stopSession
+    // correctly belongs here (this video's backend transcode session really
+    // does need stopping on every switch); fullscreen/orientation lifecycle
+    // now belongs to PlayerShell, which only unmounts on true exit.
     useEffect(() => {
         return () => {
             if (sessionIdRef.current) stopSession(sessionIdRef.current, clientIdRef.current);
-            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-            try {
-                screen.orientation?.unlock?.();
-            } catch {
-                // Unsupported — fail silently per doc section 2.
-            }
         };
     }, []);
 
@@ -349,6 +425,17 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         setStreamUrl(null);
         setSessionId(null);
         setPreparingStream(false);
+        // FIX (subtitle picker shows nothing checked, but a subtitle still
+        // renders): state.activeSubtitle lives in PlayerProvider's context,
+        // which correctly no longer remounts per media switch — but nothing
+        // ever cleared it between videos. The PREVIOUS video's subtitle
+        // stayed active (and kept rendering) until the new video's own
+        // history-load async callback eventually overwrote it — meanwhile
+        // the Picker lists the NEW video's own tracks, none of which match
+        // that stale leftover URL, so nothing showed as checked.
+        actions.setActiveSubtitle(null);
+        sessionTimeOffsetRef.current = 0;
+        manualClockRef.current = { active: false, baseTime: 0, baseX: 0 };
         advancePhase(INIT_PHASE.LOADING_MEDIA);
 
         (async () => {
@@ -427,28 +514,9 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         };
     }, [mediaId]);
 
-    // ── Immediate landscape lock on mount (mobile only) ──────────────────────
-    // screen.orientation.lock() requires fullscreen on Android Chrome — but
-    // containerRef.current is null while the loading screen is showing.
-    // Solution: fullscreen document.documentElement (always available) → then
-    // lock landscape. Fires synchronously inside the navigation-gesture stack
-    // so the browser allows it without an extra tap.
-    useEffect(() => {
-        if (!isMobile) return;
-        const lock = async () => {
-            try {
-                if (!document.fullscreenElement) {
-                    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
-                }
-                await screen.orientation?.lock?.("landscape");
-            } catch (_) {
-                // iOS Safari / desktop / gesture-policy — fail silently.
-            }
-        };
-        lock();
-        // Unlock + exitFullscreen handled by existing unmount cleanup (~line 330).
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
+    // Tracks whether landscape has EVER actually engaged this mount. Once
+    // true, later media switches must NOT re-call screen.orientation.lock()
+    // at all — doing so (even redundantly, to the same orientation) was
     // ── Orientation + Fullscreen orchestration (mobile init pipeline) ─────────
     // Runs exactly once SEEK_COMPLETE is reached (resume seek finished, or
     // immediately for a fresh video with no seek stage at all — see the
@@ -482,6 +550,15 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         const proceedToFullscreenReady = () => advancePhase(INIT_PHASE.FULLSCREEN_READY);
 
         if (!container || document.fullscreenElement) {
+            // containerRef now belongs to the stable PlayerShell wrapper (not
+            // recreated per video), so fullscreen/orientation state is no
+            // longer interrupted by a media switch — screen.orientation.type
+            // is a reliable, non-racy read here. Only re-locks if genuinely
+            // not landscape (e.g. the previous video had a manual portrait
+            // override) and there's no override in effect for THIS video.
+            if (isMobile && !isPortraitOverride && !screen.orientation?.type?.startsWith("landscape")) {
+                screen.orientation?.lock?.("landscape").catch(() => {});
+            }
             proceedToFullscreenReady();
             return;
         }
@@ -507,20 +584,10 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         fullscreenStageStarted.current = false;
     }, [mediaId]);
 
-    // ── Orientation unlock on unmount ──────────────────────────────────────────
-    // Doc requirement: "Portrait mode should only be restored when the user
-    // exits the player / playback ends and the player is closed." A plain
-    // unmount cleanup (no deps churn mid-session) is exactly that — fires
-    // once when leaving the player, not on every phase transition.
-    useEffect(() => {
-        return () => {
-            try {
-                screen.orientation?.unlock?.();
-            } catch {
-                // Unsupported — fail silently.
-            }
-        };
-    }, []);
+    // Orientation unlock-on-exit now lives in PlayerShell (below), which only
+    // unmounts when actually leaving the player — this component remounts on
+    // every media switch (key={mediaId} on the outer wrapper), so a cleanup
+    // effect here would incorrectly unlock orientation on every switch too.
 
     // ── FULLSCREEN_READY → FIRST_FRAME_READY → PLAYING ────────────────────────
     // Keep phase advance for pipeline consistency; play is now triggered
@@ -667,6 +734,15 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         activeSubtitle: state.activeSubtitle, // NEW: save subtitle pref to history
         hlsRef, // NEW: hls instance for accurate resume seek via startLoad
         knownResumePosition, // NEW: instant resume-dialog hint from MediaDetails, avoids waiting on this hook's own history fetch before showing the dialog
+        // FIX (resume showed 0:00 climbing up instead of the real saved
+        // position): deferredSeek needs these to optimistically update the
+        // displayed time immediately and block native timeupdate from
+        // overwriting it while the seek is still polling — same mechanism
+        // the quality-switch path already used, just never wired through
+        // to the resume-dialog path before.
+        actions,
+        suppressTimeUpdateRef,
+        sessionTimeOffsetRef,
         onHistoryLoaded: (entry) => {
             // Restore subtitle preference from history
             if (!entry?.subtitlePref) {
@@ -730,10 +806,51 @@ function PlayerInner({ mediaId, knownResumePosition }) {
     // src/api/stream.js to confirm the exact signature — if this 401s or the
     // quality param doesn't reach the backend, that file's resolvePlayback
     // signature is different from assumed and needs adjusting here.
+    // Maps a quality label (as sent by the picker / backend qualityLadder)
+    // to a pixel height, for matching against state.qualityLevels (built
+    // from hls.levels in MANIFEST_PARSED). "4k" isn't parseInt-friendly
+    // (would read as 4), everything else is.
+    const qualityLabelToHeight = useCallback((label) => {
+        if (!label) return null;
+        if (label === "4k") return 2160;
+        const n = parseInt(label, 10);
+        return Number.isFinite(n) ? n : null;
+    }, []);
+
     const switchQuality = useCallback(
         async (targetQuality) => {
             if (!mediaId || !targetQuality) return;
             const video = videoRef.current;
+
+            // ── Seamless path (YouTube-style) ───────────────────────────────
+            // If the CURRENT manifest already lists a rendition at this
+            // height (i.e. this session's HLS master.m3u8 is a real
+            // multi-quality ladder, not a single-rendition stream), switch
+            // to it via hls.nextLevel — HLS.js keeps playing whatever's
+            // already buffered at the OLD level and only switches which
+            // rendition the NEXT fragment loads from, seamlessly, at
+            // whatever currentTime playback is already at. No new backend
+            // session, no buffer flush, no deferredSeek, no restore race —
+            // the entire class of "quality switch resets to 0:00" bugs
+            // simply doesn't apply to this path because nothing ever tears
+            // down or reloads.
+            const targetHeight = qualityLabelToHeight(targetQuality);
+            const matchingLevel = (state.qualityLevels || []).find((l) => l.height === targetHeight);
+            if (matchingLevel && hlsRef.current) {
+                console.log("[QUALITY] Seamless native switch — level", matchingLevel.index, `(${matchingLevel.label})`, "at currentTime", video?.currentTime);
+                actions.setActiveQuality(matchingLevel.index);
+                actions.setRequestedQuality(targetQuality);
+                return;
+            }
+
+            // ── Fallback path: session restart ──────────────────────────────
+            // No matching rendition in the current manifest — this session
+            // was transcoded as a single fixed quality (ENABLE_MULTI_QUALITY
+            // off, or the backend chose not to ladder this particular
+            // media). Only option here is a genuinely new backend session
+            // at the requested quality, so fall back to the proven
+            // save-position → new-session → deferredSeek-restore flow.
+            console.log("[QUALITY] No matching rendition in current manifest — falling back to session restart. Save Position:", video?.currentTime);
             qualitySwitchStateRef.current = {
                 time: video?.currentTime || 0,
                 playing: !!video && !video.paused,
@@ -743,6 +860,7 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                 subtitle: state.activeSubtitle,
             };
             try {
+                console.log("[QUALITY] Creating New Stream");
                 // Pass seekSec so the new session's ffmpeg starts encoding
                 // near where we actually are, not from 0:00 — without this,
                 // the restore-seek below would jump forward past whatever
@@ -754,9 +872,32 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                     setSessionId(playback.sessionId);
                     sessionIdRef.current = playback.sessionId;
                     setStreamUrl(playback.hlsUrl);
+                    // FIX (video actually restarts from 0:00 after a quality
+                    // switch): the backend DOES seek its source read via -ss
+                    // to roughly this position (that's what seekSec above is
+                    // for) — but VideoCore.jsx forces hls.startPosition = 0
+                    // on every load, which normalizes THIS session's own
+                    // timeline to start counting from 0 regardless of the
+                    // segments' real absolute PTS. So this session's own
+                    // video.currentTime=0 actually MEANS real position
+                    // playback.startSegment * playback.segmentDuration, not
+                    // real position 0. Seeking to the raw absolute time
+                    // (qualitySwitchStateRef.current.time) here would be
+                    // asking for a position way beyond anything this brand
+                    // new session has buffered — exactly why it looked like
+                    // a full restart. Store both the offset (for
+                    // timeupdate/manual-seek correction elsewhere) and the
+                    // actual RELATIVE seek target the video element should
+                    // be told to go to.
+                    const sessionOffset = (playback.startSegment || 0) * (playback.segmentDuration || 4);
+                    qualitySwitchStateRef.current.sessionOffset = sessionOffset;
+                    qualitySwitchStateRef.current.seekTarget = Math.max(0, qualitySwitchStateRef.current.time - sessionOffset);
                 } else {
                     setStreamUrl(playback.streamUrl);
+                    qualitySwitchStateRef.current.sessionOffset = 0;
+                    qualitySwitchStateRef.current.seekTarget = qualitySwitchStateRef.current.time;
                 }
+                actions.setRequestedQuality(targetQuality);
                 // VideoCore's existing [streamUrl] effect tears down and
                 // rebuilds hls.js for the new URL, then fires onReadyToSeek
                 // same as it does for the very first load — handleReadyToSeek
@@ -767,10 +908,22 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                 qualitySwitchStateRef.current = null;
             }
         },
-        [mediaId, state.activeSubtitle],
+        [mediaId, state.activeSubtitle, state.qualityLevels, qualityLabelToHeight, actions],
     );
 
+    const handledReadyForUrlRef = useRef(null);
+
     const handleReadyToSeek = useCallback(() => {
+        // Defensive idempotency guard: if this streamUrl already had its
+        // ready-to-seek signal handled once, ignore any further fire for the
+        // SAME url (e.g. a phantom/internal HLS.js retry re-parsing the
+        // manifest). Without this, a second fire would find
+        // qualitySwitchStateRef already null (consumed by the first, correct
+        // fire below) and incorrectly fall through to the fresh-video/resume
+        // path, which can reset the just-restored displayed position.
+        if (handledReadyForUrlRef.current === streamUrl) return;
+        handledReadyForUrlRef.current = streamUrl;
+
         // Quality-switch restore path: if a quality switch is pending, this
         // ready signal is from the NEW-quality session finishing its initial
         // buffer, not a fresh video load. Restore captured state directly and
@@ -781,24 +934,53 @@ function PlayerInner({ mediaId, knownResumePosition }) {
         if (pending) {
             qualitySwitchStateRef.current = null;
             const video = videoRef.current;
-            // FIX: a plain `video.currentTime = pending.time` here was the
-            // actual cause of "quality switch restarts from 0:00" — the new
-            // session's manifest isn't seekable to that position the instant
-            // this fires (same reason the ORIGINAL resume flow below needs
-            // deferredSeek's poll-until-seekable + hls.startLoad(target)
-            // instead of a one-shot assignment). Reusing that exact same
-            // proven mechanism here instead of a weaker one-off version.
+            // FIX: was missing an immediate `actions.setCurrentTime(pending.time)`
+            // here. video.currentTime only actually gets set once deferredSeek's
+            // poll below confirms the new session's manifest is seekable to that
+            // position — that can take a couple seconds (or worse, up to its full
+            // 15s ceiling on a slow transcode start). Until it lands, the ONLY
+            // thing driving the displayed seek bar / time text (state.currentTime)
+            // is the native timeupdate event, which — on the freshly attached
+            // video element — is still firing from 0 while waiting. So the real
+            // playback position was always correct once landed, but the UI number
+            // sat at 0:00 for however long the poll took. Setting it here,
+            // immediately, using the value captured the instant the switch was
+            // requested, makes the seek bar/time correct right away instead of
+            // waiting on the async seek to catch up.
+            actions.setCurrentTime(pending.time);
+            // Manual clock takes over displaying x from here — it never
+            // reads video.currentTime, so it can't be wrong about what
+            // hls.js's internal timeline means. suppressTimeUpdateRef stays
+            // true for the rest of this session (see below) so native
+            // timeupdate never fights with it.
+            manualClockRef.current = { active: true, baseTime: Date.now(), baseX: pending.time };
+            // Block handleTimeUpdate from ever driving state.currentTime for
+            // the rest of this quality-switched session — the manual clock
+            // above is now the sole source of truth for x. (handleTimeUpdate
+            // still updates state.buffered regardless, unaffected by this.)
+            suppressTimeUpdateRef.current = true;
+            // The actual video element still needs a real seek so the
+            // CONTENT is correct — pending.seekTarget (computed in
+            // switchQuality) is our best estimate of where that is in this
+            // session's own timeline. Its precision no longer matters for
+            // what's DISPLAYED (the manual clock owns that now); it only
+            // affects which frames are actually playing.
             if (video) {
-                console.log(`[PlayerPage] Quality-switch restore: seeking to ${pending.time.toFixed(1)}s via deferredSeek`);
-                progressProps.deferredSeek(pending.time, () => {
+                console.log(`[QUALITY] Restoring: display=${pending.time} (manual clock engaged, seek target=${pending.seekTarget})`);
+                progressProps.deferredSeek(pending.seekTarget, () => {
                     video.playbackRate = pending.playbackRate;
                     if (pending.volume != null) video.volume = pending.volume;
                     if (pending.muted != null) video.muted = pending.muted;
+                    console.log("[QUALITY] Underlying video seek settled at:", video.currentTime, "— display is independently tracked by the manual clock now.");
                     if (pending.playing) video.play().catch(() => {});
+                    // NOTE: suppressTimeUpdateRef intentionally stays true —
+                    // it is NOT cleared here anymore. The manual clock is
+                    // the permanent x source for this session.
                 });
             }
             return;
         }
+        console.log("[QUALITY] handleReadyToSeek: no pending quality-switch state — falling into fresh-video/resume-dialog path", { streamUrl, showResumeDialog: progressProps.showResumeDialog });
         advancePhase(INIT_PHASE.METADATA_READY);
         advancePhase(INIT_PHASE.BUFFERING);
         if (progressProps.showResumeDialog) {
@@ -814,7 +996,7 @@ function PlayerInner({ mediaId, knownResumePosition }) {
             // but with zero work to do, so it resolves immediately.
             progressProps.onReadyToSeek?.(() => advancePhase(INIT_PHASE.SEEK_COMPLETE));
         }
-    }, [progressProps, advancePhase]);
+    }, [progressProps, advancePhase, streamUrl]);
 
     const handleResumeWithAutoplay = useCallback(() => {
         progressProps.handleResume?.(() => actions.setPlaying(true));
@@ -918,7 +1100,7 @@ function PlayerInner({ mediaId, knownResumePosition }) {
 
     // ── Player ────────────────────────────────────────────────────────────────
     return (
-        <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
+        <>
             {/* Video core */}
             {streamUrl && (
                 <VideoCore
@@ -927,6 +1109,8 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                     onVideoClick={toggleControls}
                     mediaDuration={mediaDurationRef.current}
                     onReadyToSeek={handleReadyToSeek}
+                    suppressTimeUpdateRef={suppressTimeUpdateRef}
+                    sessionTimeOffsetRef={sessionTimeOffsetRef}
                     onHlsCreated={(hls) => {
                         hlsRef.current = hls;
                     }}
@@ -956,7 +1140,9 @@ function PlayerInner({ mediaId, knownResumePosition }) {
             {/* Screen lock */}
             <PlayerLock />
 
-            {/* Controls UI */}
+            {/* Controls UI — resume dialog now lives inside PlayerControls
+                (moved from here per request); pass the data/handlers it
+                needs through as props. */}
             <PlayerControls
                 mediaInfo={mediaInfo}
                 videoRef={videoRef}
@@ -968,44 +1154,14 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                 isPortraitOverride={isPortraitOverride}
                 onSwitchQuality={switchQuality}
                 mediaId={mediaId}
+                showResumeDialog={progressProps.showResumeDialog}
+                resumeDialogFading={progressProps.resumeDialogFading}
+                resumePoint={progressProps.resumePoint}
+                onResume={handleResumeWithAutoplay}
+                onStartOver={handleStartOverWithAutoplay}
+                onDismissResumeDialog={progressProps.dismissResumeDialog}
+                sessionTimeOffsetRef={sessionTimeOffsetRef}
             />
-
-            {/* Resume dialog — auto-fades after 6s of no interaction (pure UI
-                hide, no playback side effect — see useProgress's
-                dialogFadeTimer). Manual Resume/Start Over cancels the timer
-                and acts immediately, same as before. */}
-            {progressProps.showResumeDialog && (
-                <div
-                    className="absolute inset-0 z-60 flex items-end justify-center pb-28 px-4 pointer-events-none"
-                    style={{
-                        opacity: progressProps.resumeDialogFading ? 0 : 1,
-                        transition: "opacity 280ms ease",
-                    }}>
-                    <div
-                        className="pointer-events-auto flex items-center gap-3 px-5 py-4
-                                    rounded-2xl bg-black/80 backdrop-blur-md border border-white/15
-                                    shadow-2xl max-w-sm w-full">
-                        <div className="flex-1 min-w-0">
-                            <p className="text-white text-sm font-semibold leading-tight">Resume watching?</p>
-                            <p className="text-white/50 text-xs mt-0.5">
-                                Paused at {Math.floor((progressProps.resumePoint?.position || 0) / 60)}m {Math.floor((progressProps.resumePoint?.position || 0) % 60)}s
-                            </p>
-                        </div>
-                        <button
-                            onClick={handleStartOverWithAutoplay}
-                            className="px-3 py-1.5 rounded-lg bg-white/10 text-white/70 text-xs
-                                       hover:bg-white/20 transition-colors shrink-0">
-                            Start Over
-                        </button>
-                        <button
-                            onClick={handleResumeWithAutoplay}
-                            className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs
-                                       font-semibold hover:bg-red-500 transition-colors shrink-0">
-                            Resume
-                        </button>
-                    </div>
-                </div>
-            )}
 
             {/* Waiting for stream to reach resume point — distinct from the
                 generic buffering spinner below so the user understands why
@@ -1041,6 +1197,84 @@ function PlayerInner({ mediaId, knownResumePosition }) {
                     </div>
                 </div>
             )}
+        </>
+    );
+}
+
+// ─── PlayerShell — stable across media switches ──────────────────────────────
+// FIX (root cause of the portrait/landscape flip on every media switch):
+// PlayerInner is keyed by mediaId (key={mediaId} below) so its internal
+// per-video state resets cleanly — but that also fully unmounted/remounted
+// PlayerInner's own containerRef div on every switch. Removing that div from
+// the document forces the browser to exit fullscreen (fullscreenElement was
+// just deleted), which drops the orientation lock — screen flips to
+// portrait, then the new PlayerInner's own re-lock brings it back to
+// landscape a moment later. Two-step flip, every single switch.
+//
+// PlayerShell owns containerRef and the actual fullscreen div instead — it
+// has NO key, so it never unmounts on a media switch, only when actually
+// leaving the player (navigating away). PlayerInner now receives
+// containerRef as a prop and no longer creates its own or renders its own
+// outer div, so switching media never touches the real fullscreen element at
+// all anymore.
+function PlayerShell({ mediaId, knownResumePosition }) {
+    const isMobile = useIsMobile();
+    const containerRef = useRef(null);
+
+    // ── Immediate landscape lock — fires ONCE per player session, not once
+    // per video. screen.orientation.lock() requires fullscreen on Android
+    // Chrome — but containerRef.current is null before first paint, so this
+    // fullscreens document.documentElement (always available) first.
+    useEffect(() => {
+        if (!isMobile) return;
+        let engaged = false;
+        const lock = async () => {
+            try {
+                if (!document.fullscreenElement) {
+                    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+                }
+                await screen.orientation?.lock?.("landscape");
+                engaged = true;
+            } catch (_) {
+                // iOS Safari / desktop / gesture-policy — fail silently.
+                // Cross-page navigation often lacks the "transient user
+                // activation" some browsers require for fullscreen/lock —
+                // the fallback below catches this on the person's first tap.
+            }
+        };
+        lock();
+        // FIX (player opens in portrait, never rotates): if the silent
+        // attempt above gets rejected (missing transient activation is the
+        // common case right after a fresh navigation), it used to just give
+        // up forever — player would sit in portrait until manually rotated.
+        // A genuine tap anywhere on the player IS real user activation, so
+        // retry once on the first pointerdown if not yet engaged.
+        const retryOnFirstTap = () => {
+            if (engaged) return;
+            lock();
+        };
+        document.addEventListener("pointerdown", retryOnFirstTap, { once: true });
+        return () => document.removeEventListener("pointerdown", retryOnFirstTap);
+    }, [isMobile]);
+
+    // ── Orientation unlock + fullscreen exit — ONLY on true unmount (leaving
+    // the player), since PlayerShell itself is never remounted by a media
+    // switch. This is the piece that used to live inside PlayerInner and
+    // fire on every switch instead.
+    useEffect(() => {
+        return () => {
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            try {
+                screen.orientation?.unlock?.();
+            } catch {
+                // Unsupported — fail silently.
+            }
+        };
+    }, []);
+
+    return (
+        <div ref={containerRef} className="fixed inset-0 bg-black select-none overflow-hidden" style={{ touchAction: "none" }}>
+            <PlayerInner key={mediaId} mediaId={mediaId} knownResumePosition={knownResumePosition} containerRef={containerRef} />
         </div>
     );
 }
@@ -1054,7 +1288,7 @@ export default function PlayerPage() {
     const knownResumePosition = location.state?.knownResumePosition ?? null;
     return (
         <PlayerProvider>
-            <PlayerInner key={mediaId} mediaId={mediaId} knownResumePosition={knownResumePosition} />
+            <PlayerShell mediaId={mediaId} knownResumePosition={knownResumePosition} />
         </PlayerProvider>
     );
 }

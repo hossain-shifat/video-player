@@ -59,6 +59,10 @@ import {
 } from "lucide-react";
 import { usePlayerState } from "./UsePlayerState";
 import { formatTime, DECODER_LABELS, ALL_QUICK_ITEMS, QUICK_KEYS_WITH_SIDEBAR } from "./playerConstants";
+import { api } from "../../api/client";
+import { getOrCreateClientId } from "../../api/stream";
+import { useQuery, useQueries } from "@tanstack/react-query";
+import { getLiveChannels } from "../../api/live";
 
 // Backend base URL — used by the mediainfo.json fallback fetch (see
 // SubtitlePicker) when a live track's language name is missing.
@@ -88,12 +92,13 @@ function useOrientation() {
  * auto-closes or fades on its own. This component has zero timers tied to
  * controlsPhase; the ONLY way it closes is the parent setting open=false.
  *
- * Rendered via createPortal(..., document.body) — REQUIRED. PlayerControls
- * is normally rendered inside a wrapper (in PlayerPage.jsx) that fades to
- * opacity:0 after 3s of inactivity. Without the portal, this component is a
- * normal DOM descendant of that wrapper, and CSS opacity on a parent visually
- * dims the WHOLE subtree at paint time — position:fixed only escapes layout,
- * not that opacity cascade. So even though this component's own `visible`
+ * Rendered via createPortal(..., document.fullscreenElement || document.body)
+ * — REQUIRED. PlayerControls is normally rendered inside a wrapper (in
+ * PlayerPage.jsx) that fades to opacity:0 after 3s of inactivity. Without the
+ * portal, this component is a normal DOM descendant of that wrapper, and CSS
+ * opacity on a parent visually dims the WHOLE subtree at paint time —
+ * position:fixed only escapes layout, not that opacity cascade. So even
+ * though this component's own `visible`
  * state never changed, it looked like it was "auto-fading after 3s": it was
  * actually just inheriting the controls layer's own fade. The portal moves
  * it to document.body, fully outside that wrapper, so it's now visually and
@@ -220,7 +225,7 @@ export default function VideoSidebar({ open, onClose, title, children }) {
                         }}>
                         <ArrowLeft size={14} color="#fff" strokeWidth={2.5} />
                     </button>
-                    <span style={{ color: "#fff", fontSize: 16, fontWeight: 700 }}>{title}</span>
+                    <span style={{ color: "#fff", fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}>{title}</span>
                 </div>
                 {/* Scrollable body — flex:1 + minHeight:0 is required for the
                     overflow to actually constrain inside a flex column (without
@@ -233,7 +238,17 @@ export default function VideoSidebar({ open, onClose, title, children }) {
                 </div>
             </div>
         </div>,
-        document.body,
+        // FIX: was hardcoded document.body. LivePlayerPage's useLandscapeLock
+        // calls containerRef.current.requestFullscreen() on mobile (real
+        // Fullscreen API, not just a CSS/layout trick) — and per spec, only
+        // the fullscreen element's own subtree actually paints while native
+        // fullscreen is active. A portal to document.body sits outside that
+        // subtree, so this drawer was opening (state changed fine, no error)
+        // but was invisible the whole time on mobile Live. document.body is
+        // still correct everywhere else (VOD doesn't engage real Fullscreen
+        // API the same way on mobile), so fall back to it whenever nothing
+        // is actually in native fullscreen.
+        document.fullscreenElement || document.body,
     );
 }
 
@@ -384,6 +399,173 @@ function fmtRuntime(mins) {
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// Uppercases a 2-3 letter language code into a short badge label. Best-effort —
+// falls back to the raw value uppercased if it's not in the map.
+const LANG_BADGE = { hi: "HI", en: "EN", ta: "TA", te: "TE", ml: "ML", kn: "KN", bn: "BN", pa: "PA", mr: "MR", gu: "GU", ja: "JA", ko: "KO", zh: "ZH", es: "ES", fr: "FR", de: "DE" };
+
+/**
+ * Landscape still for a library item — NEVER a poster (posters are portrait,
+ * per request this whole panel is landscape thumbnails only). Prefers a
+ * precomputed still/thumbnail field if the item already carries one (movies
+ * may not; episodes already do via `ep.still` elsewhere in this file).
+ * Otherwise falls back to the same on-demand ffmpeg frame-extraction endpoint
+ * HistoryCard-style components use (api.thumbnailUrl) at a fixed offset
+ * chosen to land past any black/logo intro on most files. Adjust FALLBACK_
+ * STILL_SEC if 120s is consistently wrong for your library.
+ */
+const FALLBACK_STILL_SEC = 120;
+// FIX (resolution not showing in the sidebar list): channel rows never
+// displayed resolution at all. Backend channel objects don't reliably carry
+// a dedicated resolution field (LiveCategory.jsx's quality filter sends
+// "quality" as a search param, but individual channel results don't echo it
+// back) — so this falls back to the same name-token parsing
+// LivePlayerPage.jsx's extractNameMeta already does ("HD"/"4K"/"1080p" etc
+// in the channel's raw name), preferring ch.resolution/ch.quality first in
+// case the backend ever does start sending one.
+const RES_TOKEN_RE = /(4k|uhd|2160p?|fhd|1080[ip]?|hd|720p?|sd|480[ip]?|576[ip]?)/i;
+function resolutionFromChannel(ch) {
+    if (ch?.resolution) return ch.resolution;
+    if (ch?.quality) return ch.quality;
+    const m = (ch?.name || "").match(RES_TOKEN_RE);
+    if (!m) return null;
+    const t = m[1].toLowerCase();
+    if (t === "4k" || t === "uhd" || t.startsWith("2160")) return "4K";
+    if (t === "fhd" || t.startsWith("1080")) return "1080p";
+    if (t === "hd" || t.startsWith("720")) return "HD";
+    if (t === "sd" || t.startsWith("480") || t.startsWith("576")) return "SD";
+    return null;
+}
+// FIX: movie-only usages (MovieRow, NowPlayingCard, nextPart) now prefer the
+// TMDB backdrop (landscape, same field SeriesAccordion already uses via
+// seriesStill) over the ffmpeg-extracted still. Series/anime are untouched —
+// they never call this, they use `seriesStill` / `ep.still` directly.
+function stillUrl(m) {
+    if (!m) return null;
+    return m.metadata?.backdrop || m.backdrop || m.still || m.thumbnail || api.thumbnailUrl(m.id, FALLBACK_STILL_SEC, getOrCreateClientId());
+}
+
+/**
+ * Resolution / source / codec / audio-language chips for a library item —
+ * colorized per type (not a single flat gray) so they scan at a glance.
+ * ASSUMPTION (no filename-parser schema was available to confirm exact field
+ * names): reads m.parsed.{resolution,source,codec,languages} with a couple of
+ * reasonable fallback field names, and silently omits any chip whose data
+ * isn't present rather than showing "undefined". If your parser uses
+ * different field names, this is the one place to fix them.
+ */
+function MediaBadges({ m, className = "" }) {
+    const p = m?.parsed || {};
+    const resolution = p.resolution || m?.resolution || null;
+    const source = p.source || p.edition || null; // e.g. "BluRay", "WEB-DL"
+    const codec = p.codec || p.videoCodec || null; // e.g. "x264", "HEVC"
+    const languages = Array.isArray(p.languages) && p.languages.length ? p.languages : null;
+    const audioLabel = languages ? languages.map((l) => LANG_BADGE[l?.toLowerCase()] || l?.toUpperCase()).join("+") : p.audio || null;
+
+    if (!resolution && !source && !codec && !audioLabel) return null;
+
+    return (
+        <div className={`flex items-center gap-1 flex-wrap ${className}`}>
+            {resolution && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md border border-base-content/20 text-[10px] font-semibold tracking-wide text-base-content/65">
+                    <MonitorPlay size={10} />
+                    {resolution}
+                </span>
+            )}
+            {codec && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md border border-base-content/20 text-[10px] font-semibold tracking-wide text-base-content/65">
+                    <Film size={10} />
+                    {codec}
+                </span>
+            )}
+            {audioLabel && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md border border-base-content/20 text-[10px] font-semibold tracking-wide text-base-content/65">
+                    <Music2 size={10} />
+                    {audioLabel}
+                </span>
+            )}
+            {source && <span className="px-1.5 py-[3px] rounded-md border border-base-content/20 text-[10px] font-semibold tracking-wide text-base-content/65">{source}</span>}
+        </div>
+    );
+}
+
+// One movie row in the "More Movies" list — landscape still + title + badges.
+// Polished pass: softer rounded corners, subtle ring for definition against
+// dark backgrounds, gentle hover lift + thumbnail zoom, faint bottom-gradient
+// on the still for a touch of depth (matches the premium/streaming-app look
+// requested) instead of a flat, purely-functional row.
+function MovieRow({ m, onPlay }) {
+    const still = stillUrl(m);
+    const title = m?.metadata?.title || m?.parsed?.title || m?.name;
+    return (
+        <button
+            onClick={() => onPlay(m.id)}
+            className="w-full flex items-center gap-3 p-1.5 rounded-xl group hover:bg-base-300/40 hover:shadow-md active:scale-[0.99] transition-all duration-150 text-left">
+            <div className="relative w-28 h-16 rounded-lg shrink-0 overflow-hidden ring-1 ring-white/10 shadow-sm">
+                {still ? (
+                    <img src={still} alt={title} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110" loading="lazy" />
+                ) : (
+                    <div className="w-full h-full bg-base-300 flex items-center justify-center">
+                        <Film size={18} className="text-base-content/30" />
+                    </div>
+                )}
+                {/* Subtle bottom gradient for depth — same treatment used across
+                    the redesigned playlist thumbnails. */}
+                <div className="absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
+                {/* Play badge — same circular-badge language as NowPlayingCard's
+                    corner indicator, so the two components read as one system
+                    instead of two different treatments. Hidden until hover. */}
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/20">
+                    <div className="w-7 h-7 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                        <Play size={13} className="text-black translate-x-[1px]" fill="currentColor" />
+                    </div>
+                </div>
+            </div>
+            <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold text-base-content/90 truncate">{title}</p>
+                <MediaBadges m={m} className="mt-1.5" />
+            </div>
+        </button>
+    );
+}
+
+/**
+ * "Now Playing" card — MOVIES ONLY. Series/anime use their full accordion
+ * (moved to the top of the list, same accordion the show already renders
+ * with — see PlaylistPanel) instead of a separate condensed card, per
+ * explicit request. Landscape still, never a poster.
+ * Polished pass: soft gradient accent background + ring (replacing the flat
+ * solid border), and a small corner play-badge on the thumbnail itself —
+ * this replaces the "● Now Playing" text label that was removed earlier
+ * with a quieter visual cue that doesn't cost any vertical space.
+ */
+function NowPlayingCard({ m }) {
+    const still = stillUrl(m);
+    const title = m?.metadata?.title || m?.parsed?.title || m?.name;
+    return (
+        <div className="flex items-center gap-3 p-1.5 rounded-xl bg-gradient-to-r from-primary/15 via-primary/5 to-transparent ring-1 ring-primary/25 mb-2">
+            <div className="relative w-28 h-16 rounded-lg shrink-0 overflow-hidden ring-1 ring-primary/30 shadow-sm">
+                {still ? (
+                    <img src={still} alt={title} className="w-full h-full object-cover" loading="lazy" />
+                ) : (
+                    <div className="w-full h-full bg-base-300 flex items-center justify-center">
+                        <Play size={18} className="text-primary/60" />
+                    </div>
+                )}
+                <div className="absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+                {/* Small corner play-badge — quiet "this is playing" cue that
+                    doesn't need its own text row. */}
+                <div className="absolute bottom-1 right-1 w-4 h-4 rounded-full bg-primary flex items-center justify-center shadow">
+                    <Play size={8} className="text-primary-content" fill="currentColor" />
+                </div>
+            </div>
+            <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-base-content truncate">{title}</p>
+                <MediaBadges m={m} className="mt-1.5" />
+            </div>
+        </div>
+    );
+}
+
 function EpisodeRow({ ep, isActive, onPlay }) {
     return (
         <div className={`flex items-center gap-3 p-2 rounded-lg group transition-colors cursor-pointer ${isActive ? "bg-primary/10" : "hover:bg-base-300"}`} onClick={() => ep.id && onPlay(ep.id)}>
@@ -409,46 +591,51 @@ function EpisodeRow({ ep, isActive, onPlay }) {
     );
 }
 
+// One accordion PER SERIES (not per season) — clicking the header opens/
+// closes the whole show. Inside, all episodes across all seasons render as
+// one flat list, with a plain-text "---- Season 02 ----" divider marking
+// where each season's episodes begin — no nested per-season accordion.
 function SeriesAccordion({ series, defaultOpen = false, currentEpisodeId, onNavigate }) {
     const seasonEntries = Object.entries(series.seasons || {}).sort(([a], [b]) => Number(a) - Number(b));
-    const defaultSeasonNum = seasonEntries.find(([, s]) => (s.episodes || []).some((e) => e.id === currentEpisodeId))?.[0] ?? seasonEntries[0]?.[0] ?? null;
-    const [openSeason, setOpenSeason] = useState(defaultOpen ? defaultSeasonNum : null);
-    const seriesPoster = series.metadata?.poster;
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    // FIX: was series.still || series.metadata?.poster — poster is portrait,
+    // wrong aspect for this landscape header slot. metadata.backdrop is the
+    // TMDB backdrop (landscape) — falls back to poster only if no backdrop
+    // exists at all, so something still shows rather than nothing. Episode
+    // thumbnails inside (EpisodeRow's ep.still) are untouched.
+    const seriesStill = series.metadata?.backdrop || series.backdrop || series.metadata?.poster;
+    const totalEpisodes = seasonEntries.reduce((sum, [, s]) => sum + (s.episodeCount ?? (s.episodes || []).length), 0);
 
     return (
-        <div className="space-y-2 pb-2">
-            {/* No separate series title/poster label here anymore — the
-                season header below now includes the series name directly
-                ("Title • Season-N"), so this was just showing the same
-                info twice. */}
-            {seasonEntries.map(([num, season]) => {
-                const isOpen = openSeason === num;
-                const eps = season.episodes || [];
-                const seasonImg = season.poster || seriesPoster;
-                return (
-                    <div key={num} className="bg-base-200 rounded-xl overflow-hidden border border-white/5">
-                        <button className="w-full flex items-center gap-3 p-4 hover:bg-base-300/50 transition-colors text-left" onClick={() => setOpenSeason(isOpen ? null : num)}>
-                            {seasonImg && <img src={seasonImg} alt={season.name} className="w-10 h-14 object-cover rounded shrink-0" loading="lazy" />}
-                            <div className="flex-1 min-w-0">
-                                <h3 className="font-semibold text-base-content">
-                                    <span className="text-sm">{series.title}</span> <span className="text-base-content/40 font-normal">•</span> <span className="text-sm">Season-{num}</span>
-                                </h3>
-                                <p className="text-xs text-base-content/50 mt-0.5">
-                                    {season.episodeCount ?? eps.length} episode{(season.episodeCount ?? eps.length) !== 1 ? "s" : ""}
-                                </p>
-                            </div>
-                            {isOpen ? <ChevronUp size={16} className="text-base-content/40 shrink-0" /> : <ChevronDown size={16} className="text-base-content/40 shrink-0" />}
-                        </button>
-                        {isOpen && (
-                            <div className="px-2 py-3 space-y-1 border-t border-white/5">
-                                {eps.map((ep) => (
-                                    <EpisodeRow key={ep.id || ep.episode} ep={ep} isActive={ep.id === currentEpisodeId} onPlay={onNavigate} />
-                                ))}
-                            </div>
-                        )}
+        <div className="bg-base-200 rounded-xl overflow-hidden border border-white/5 mb-2">
+            <button className="w-full flex items-center gap-3 p-0.5 hover:bg-base-300/50 transition-colors text-left" onClick={() => setIsOpen(!isOpen)}>
+                {seriesStill ? (
+                    <img src={seriesStill} alt={series.title} className="w-28 h-16 object-cover rounded shrink-0" loading="lazy" />
+                ) : (
+                    <div className="w-28 h-16 bg-base-300 rounded shrink-0 flex items-center justify-center">
+                        <Tv size={18} className="text-base-content/30" />
                     </div>
-                );
-            })}
+                )}
+                <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-semibold text-base-content truncate">{series.title}</h3>
+                    <p className="text-xs text-base-content/50 mt-0.5">
+                        {seasonEntries.length} season{seasonEntries.length !== 1 ? "s" : ""} • {totalEpisodes} episode{totalEpisodes !== 1 ? "s" : ""}
+                    </p>
+                </div>
+                {isOpen ? <ChevronUp size={16} className="text-base-content/40 shrink-0" /> : <ChevronDown size={16} className="text-base-content/40 shrink-0" />}
+            </button>
+            {isOpen && (
+                <div className="px-2 py-3 space-y-1 border-t border-white/5">
+                    {seasonEntries.map(([num, season]) => (
+                        <div key={num}>
+                            <div className="text-center text-[11px] font-semibold text-base-content/35 tracking-wide py-2">---- Season {String(num).padStart(2, "0")} ----</div>
+                            {(season.episodes || []).map((ep) => (
+                                <EpisodeRow key={ep.id || ep.episode} ep={ep} isActive={ep.id === currentEpisodeId} onPlay={onNavigate} />
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
@@ -462,51 +649,477 @@ export function PlaylistPanel({ open, onClose, isMobile, controlsPhase, mediaId,
         );
     }
 
-    const { currentType, nextPart, otherMovies, seriesList, animeList, activeSeriesInfo, activeBucketKey } = nav;
+    const { currentType, currentMovie, nextPart, otherMovies, seriesList, animeList, activeSeriesInfo, activeBucketKey } = nav;
 
-    return (
-        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Playlist" side="bottom">
+    // Active show first, same list otherwise unchanged — this is what puts
+    // its accordion (which already merges multiple seasons into ONE
+    // accordion, divided by "Title • Season-N" headers, not separate
+    // accordions per season) at the top instead of a separate condensed card.
+    const orderedSeriesList =
+        activeBucketKey === "series" && activeSeriesInfo
+            ? [seriesList.find((s) => s.id === activeSeriesInfo.series.id), ...seriesList.filter((s) => s.id !== activeSeriesInfo.series.id)].filter(Boolean)
+            : seriesList;
+    const orderedAnimeList =
+        activeBucketKey === "anime" && activeSeriesInfo
+            ? [animeList.find((s) => s.id === activeSeriesInfo.series.id), ...animeList.filter((s) => s.id !== activeSeriesInfo.series.id)].filter(Boolean)
+            : animeList;
+
+    // FIX (desktop: playlist overflows off the top of the screen): the
+    // desktop popup (PopupMenu, side="top") has no height cap of its own —
+    // with enough movies/episodes it just grows past the top of the
+    // viewport. Mobile already scrolls fine inside VideoSidebar's own
+    // bottom-sheet container, so this only wraps content on desktop.
+    // Scrollbar hidden per request (cross-browser: -webkit-scrollbar,
+    // scrollbarWidth, msOverflowStyle) — scrolling still works via wheel/
+    // trackpad/drag, just no visible track.
+    const content = (
+        <>
             {currentType === "movie" && (
-                <div className="space-y-1.5 px-2">
-                    {/* Movie continuation — only when the CURRENT item has a
-                        next part available (e.g. watching Chapter 1, Chapter 2 exists) */}
-                    {nextPart && (
-                        <button onClick={() => onNavigate(nextPart.id)} className="w-full text-left px-3 py-2.5 rounded-lg bg-primary/10 hover:bg-primary/15 transition-colors">
-                            <div className="text-[13px] font-medium text-primary truncate">
-                                {nextPart.metadata?.title || nextPart.parsed?.title} — Part {nextPart.parsed?.part}
+                <div className="px-2">
+                    {/* Now Playing — movies only; series/anime use their full
+                        accordion moved to the top instead (see below). */}
+                    <NowPlayingCard m={currentMovie} />
+
+                    <div className="space-y-2">
+                        {/* Movie continuation — only when the CURRENT item has a
+                            next part available (e.g. watching Chapter 1, Chapter 2 exists).
+                            Same landscape-still + badges treatment as everything else now,
+                            placed directly under Now Playing so Part 1 → Part 2 reads as
+                            one adjacent pair, not a separate plain-text row. */}
+                        {nextPart && (
+                            <button
+                                onClick={() => onNavigate(nextPart.id)}
+                                className="w-full flex items-center gap-3 p-1.5 rounded-xl bg-gradient-to-r from-primary/15 via-primary/5 to-transparent ring-1 ring-primary/20 hover:ring-primary/35 transition-all text-left">
+                                <div className="relative w-28 h-16 rounded-lg shrink-0 overflow-hidden ring-1 ring-primary/25 shadow-sm">
+                                    {stillUrl(nextPart) ? (
+                                        <img src={stillUrl(nextPart)} alt="" className="w-full h-full object-cover" loading="lazy" />
+                                    ) : (
+                                        <div className="w-full h-full bg-base-300 flex items-center justify-center">
+                                            <Film size={18} className="text-primary/40" />
+                                        </div>
+                                    )}
+                                    <div className="absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-[10px] font-bold text-primary tracking-wide uppercase mb-0.5">Part {nextPart.parsed?.part} • Continue</div>
+                                    <p className="text-[13px] font-medium text-primary truncate">{nextPart.metadata?.title || nextPart.parsed?.title}</p>
+                                    <MediaBadges m={nextPart} className="mt-1.5" />
+                                </div>
+                            </button>
+                        )}
+                        {otherMovies.length > 0 && (
+                            <div className="flex items-center gap-2 px-2 pt-2 pb-0.5">
+                                <span className="text-[11px] font-semibold text-base-content/40 uppercase tracking-wider">More Movies</span>
+                                <div className="flex-1 h-px bg-base-content/10" />
                             </div>
-                            <div className="text-[11px] text-primary/60 mt-0.5">Continue</div>
-                        </button>
-                    )}
-                    {otherMovies.map((m) => (
-                        <button key={m.id} onClick={() => onNavigate(m.id)} className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-base-300/30 transition-colors">
-                            <span className="text-[13px] text-base-content/85 truncate block">{m.metadata?.title || m.parsed?.title || m.name}</span>
-                        </button>
-                    ))}
+                        )}
+                        {otherMovies.map((m) => (
+                            <MovieRow key={m.id} m={m} onPlay={onNavigate} />
+                        ))}
+                    </div>
                 </div>
             )}
 
-            {currentType === "series" &&
-                seriesList.map((s) => (
-                    <SeriesAccordion
-                        key={s.id}
-                        series={s}
-                        defaultOpen={s.id === activeSeriesInfo?.series.id}
-                        currentEpisodeId={s.id === activeSeriesInfo?.series.id ? mediaId : null}
-                        onNavigate={onNavigate}
-                    />
-                ))}
+            {(currentType === "series" || currentType === "anime") && (
+                <div className="px-2">
+                    {currentType === "series" &&
+                        orderedSeriesList.map((s) => (
+                            <SeriesAccordion
+                                key={s.id}
+                                series={s}
+                                defaultOpen={s.id === activeSeriesInfo?.series.id}
+                                currentEpisodeId={s.id === activeSeriesInfo?.series.id ? mediaId : null}
+                                onNavigate={onNavigate}
+                            />
+                        ))}
 
-            {currentType === "anime" &&
-                animeList.map((s) => (
-                    <SeriesAccordion
-                        key={s.id}
-                        series={s}
-                        defaultOpen={s.id === activeSeriesInfo?.series.id}
-                        currentEpisodeId={s.id === activeSeriesInfo?.series.id ? mediaId : null}
-                        onNavigate={onNavigate}
+                    {currentType === "anime" &&
+                        orderedAnimeList.map((s) => (
+                            <SeriesAccordion
+                                key={s.id}
+                                series={s}
+                                defaultOpen={s.id === activeSeriesInfo?.series.id}
+                                currentEpisodeId={s.id === activeSeriesInfo?.series.id ? mediaId : null}
+                                onNavigate={onNavigate}
+                            />
+                        ))}
+                </div>
+            )}
+        </>
+    );
+
+    return (
+        <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Playlist" side="bottom">
+            {isMobile ? (
+                content
+            ) : (
+                <>
+                    <style>{`
+                        .flux-playlist-scroll::-webkit-scrollbar { display: none; }
+                    `}</style>
+                    <div className="flux-playlist-scroll" style={{ maxHeight: "min(70vh, 560px)", overflowY: "auto", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                        {content}
+                    </div>
+                </>
+            )}
+        </MenuShell>
+    );
+}
+
+/**
+ * LiveChannelsPanel — Live TV's equivalent of PlaylistPanel. Completely
+ * separate data source (channel list, not the VOD library), reusing the
+ * exact same API function + call shape Live.jsx already uses
+ * (getLiveChannels with page/limit/workingOnly/all) — nothing about how
+ * that data is fetched is reinvented here.
+ *
+ * Shows the OTHER channels (current one excluded), with a "Show active
+ * only" toggle up top that flips the `all` flag on the SAME getLiveChannels
+ * call, exactly like Live.jsx's "Active Only" / "All Channel" toggle does —
+ * not a separate endpoint.
+ */
+// Same pref Live.jsx reads (Settings → Live tab "Hide non-working channels"),
+// default false — matching Live.jsx exactly rather than guessing a
+// different default that could return an empty list if channels haven't
+// been through a recent health check.
+function getLiveWorkingOnlyPref() {
+    try {
+        const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+        return prefs.liveWorkingOnly === true;
+    } catch {
+        return false;
+    }
+}
+
+// FIX (crash risk with 27,000+ non-active channels): the old single fetch
+// used a flat `limit: 100` for BOTH modes — capped active channels at 100
+// (fine today, not once the library grows) and would try to reason about
+// the same shape for "all channels" too. Active channels are a small,
+// curated set (today: 35) so one generous-limit fetch is plenty and never
+// needs pagination. "All channels" is 27,000+ — that MUST page in on
+// scroll (same IntersectionObserver + accumulated-pages pattern
+// LiveCategory.jsx already uses), or the browser tries to render/hold tens
+// of thousands of rows at once.
+const PANEL_PAGE_LIMIT = 40; // per-fetch page size in "all channels" mode
+const PANEL_ACTIVE_LIMIT = 200; // one-shot limit for "active only" mode — headroom above the current ~35 for future growth
+
+export function LiveChannelsPanel({ open, onClose, isMobile, controlsPhase, currentChannelUrl, onSwitchChannel }) {
+    // FIX (channels not loading): this used to call a separate
+    // `getActiveLiveChannels()` function for "show active only" — but
+    // Live.jsx (the known-working reference) never calls that endpoint at
+    // all. It gets the exact same "Active Only" vs "All Channel" behavior
+    // from the SAME getLiveChannels(...) call everywhere (CategoryRow,
+    // SearchGrid, the banner query), just by passing `all: mode === "all"`.
+    // Mirroring that here — one query fn, `all` flag flips the filter —
+    // instead of a second endpoint that wasn't returning data.
+    const [showActiveOnly, setShowActiveOnly] = useState(true);
+
+    // Accumulated page numbers fetched so far, infinite-scroll style.
+    // Active-only mode never needs more than page 1 (small dataset, high
+    // limit) — this only actually grows in "all channels" mode.
+    const [pages, setPages] = useState([1]);
+    useEffect(() => {
+        setPages([1]);
+    }, [showActiveOnly, open]);
+
+    const queryKeyBase = ["live", "channels", "panel", { workingOnly: getLiveWorkingOnlyPref(), all: !showActiveOnly }];
+
+    // useQueries (not .map(useQuery)) — `pages` grows over time, and calling
+    // useQuery inside .map() would change the hook count between renders.
+    // Same reasoning as LiveCategory.jsx's identical pageQueries setup.
+    const pageQueries = useQueries({
+        queries: pages.map((p) => ({
+            queryKey: [...queryKeyBase, p],
+            queryFn: () =>
+                getLiveChannels({
+                    page: p,
+                    limit: showActiveOnly ? PANEL_ACTIVE_LIMIT : PANEL_PAGE_LIMIT,
+                    workingOnly: getLiveWorkingOnlyPref(),
+                    all: !showActiveOnly,
+                }),
+            enabled: open,
+            staleTime: 30 * 1000,
+            keepPreviousData: true,
+        })),
+    });
+
+    const isLoadingFirst = pageQueries[0]?.isLoading;
+    const isFetchingMore = pageQueries.some((q) => q.isFetching) && pages.length > 1;
+    const channelList = pageQueries.flatMap((pq) => pq.data?.channels ?? []);
+    // Real total from the API (e.g. 35 active / 27,000+ all) — NOT
+    // channelList.length, which is only however many pages have loaded so
+    // far. This is what the header badge shows.
+    const total = pageQueries[0]?.data?.total ?? channelList.length;
+    const pageLimit = showActiveOnly ? PANEL_ACTIVE_LIMIT : PANEL_PAGE_LIMIT;
+    const totalPages = pageQueries[0]?.data?.totalPages ?? Math.max(1, Math.ceil(total / pageLimit));
+    // Active-only never paginates (one generous-limit fetch already covers
+    // it) — only "all channels" mode ever has more pages to load.
+    const hasMore = !showActiveOnly && pages.length < totalPages;
+
+    // Infinite-scroll sentinel — loads the next page of "all channels" as
+    // the user scrolls near the bottom, same pattern as LiveCategory.jsx.
+    const sentinelRef = useRef(null);
+    useEffect(() => {
+        if (!sentinelRef.current || !hasMore || isFetchingMore || isLoadingFirst) return;
+        const el = sentinelRef.current;
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting) {
+                    setPages((prev) => (prev.length < totalPages ? [...prev, prev.length + 1] : prev));
+                }
+            },
+            { rootMargin: "400px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [hasMore, isFetchingMore, isLoadingFirst, totalPages]);
+
+    const loading = isLoadingFirst;
+
+    // FIX: current channel used to be filtered OUT entirely. Per request it
+    // now stays in the list, pinned to the very top — just its status dot
+    // switches to primary color as the "this one's playing" cue, no extra
+    // active/highlighted row class needed. Note: in "all channels" mode this
+    // only pins it once its page has actually loaded — deliberately NOT
+    // fetching every page up front just to locate it, which would defeat
+    // the whole point of paginating a 27,000+ channel list.
+    // FIX (click plays whatever was already playing, not the tapped
+    // channel): channel objects can come in two shapes in this codebase —
+    // regular getLiveChannels results use {url, name, cleanName, logo}, but
+    // "active"/fallback channel objects elsewhere (Live.jsx's
+    // fallbackChannel) use {streamUrl, channelName, channelLogo}. Everything
+    // here only ever read the first shape — in the second shape ch.url is
+    // undefined, switchChannel built a channel with no url, and
+    // LivePlayerPage's effect guard (`if (!channel?.url) return`) silently
+    // no-ops, leaving the OLD stream running. Reading both shapes everywhere
+    // a channel's url/name/logo is used closes that gap.
+    const chUrl = (ch) => ch.url || ch.streamUrl;
+    const currentChannel = channelList.find((ch) => chUrl(ch) === currentChannelUrl) || null;
+    const restChannels = channelList.filter((ch) => chUrl(ch) !== currentChannelUrl);
+
+    // FIX (category-wise, not A-Z): group the rest by ch.category instead of
+    // one flat alphabetical list — same grouping key Live.jsx/LiveCategory.jsx
+    // already show per-channel (ch.category), just used here to bucket
+    // instead of only label. Order follows first-appearance across loaded
+    // pages (backend order), not a re-sort.
+    const categoryOrder = [];
+    const categoryMap = new Map();
+    for (const ch of restChannels) {
+        const cat = ch.category || "General";
+        if (!categoryMap.has(cat)) {
+            categoryMap.set(cat, []);
+            categoryOrder.push(cat);
+        }
+        categoryMap.get(cat).push(ch);
+    }
+
+    // One row — shared by the pinned current-channel row and every grouped
+    // row below it. `isCurrent` only recolors the status dot to primary;
+    // no separate highlighted/active row style per request.
+    function ChannelRow({ ch, isCurrent }) {
+        const name = ch.cleanName || ch.name || ch.channelName || "Channel";
+        const logo = ch.logo || ch.channelLogo;
+        const working = ch.streamStatus === "working";
+        const dotClass = isCurrent ? "bg-primary" : working ? "bg-success" : "bg-base-content/20";
+        const resLabel = resolutionFromChannel(ch);
+        return (
+            <button
+                onClick={() => {
+                    onSwitchChannel?.(ch);
+                    onClose?.();
+                }}
+                className="w-full flex items-center gap-3 p-1.5 hover:bg-base-300/40 transition-colors text-left border-b border-white/5 last:border-b-0">
+                {/* FIX: logo now fully covers the card (object-cover, no
+                    padding) instead of floating contained inside it — matches
+                    the "logo should be covered by the card" request. */}
+                <div className="relative w-28 h-16 rounded-lg shrink-0 bg-black/20 flex items-center justify-center overflow-hidden ring-1 ring-white/10">
+                    {logo ? <img src={logo} alt={name} className="w-full h-full object-cover" loading="lazy" /> : <Tv size={18} className="text-base-content/20" />}
+                    <span className={`absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                    {resLabel && (
+                        <span
+                            className="absolute top-1 left-1 text-[9px] font-bold px-1 rounded"
+                            style={{
+                                background: resLabel === "4K" ? "rgba(255,200,50,0.85)" : resLabel === "SD" ? "rgba(255,255,255,0.25)" : "rgba(229,62,62,0.85)",
+                                color: resLabel === "4K" ? "#000" : "#fff",
+                            }}>
+                            {resLabel}
+                        </span>
+                    )}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-base-content/85 truncate">{name}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                        {ch.category && ch.category !== "General" && <span className="text-[11px] text-base-content/40 truncate">{ch.category}</span>}
+                        {ch.current?.title && <span className="text-[11px] text-base-content/40 truncate">▶ {ch.current.title}</span>}
+                    </div>
+                </div>
+            </button>
+        );
+    }
+
+    return (
+        <MenuShell
+            isMobile={isMobile}
+            controlsPhase={controlsPhase}
+            open={open}
+            onClose={onClose}
+            title={
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                    Playlist
+                    {/* FIX: badge now shows the real API `total` (e.g. 35
+                        active / 27,000+ all channels), not channelList.length
+                        — which is only however many pages have loaded so far
+                        and would visibly change as you scroll otherwise. */}
+                    {total > 0 && (
+                        <span
+                            style={{
+                                fontSize: 11,
+                                fontWeight: 700,
+                                lineHeight: 1,
+                                padding: "3px 8px",
+                                borderRadius: 999,
+                                background: "var(--color-primary)",
+                                color: "#fff",
+                            }}>
+                            {total}
+                        </span>
+                    )}
+                </span>
+            }
+            side="top">
+            {/* "Show active only" toggle — first row, right under the "← Playlist"
+                header MenuShell already renders. Real slider toggle (not a
+                checkmark) per request, default ON — toggling it off reveals
+                all channels. */}
+            {/* FIX (visible seam under header): background here was a
+                slightly different rgba + backdrop-blur than the panel shell
+                itself (VideoSidebar's own background, rgba(10,10,14,0.94)) —
+                close enough to look like an intentional divider, but not an
+                exact match, so it read as a stray gap/seam right under the
+                header. Using the exact same solid color (no blur) makes this
+                row visually continuous with the header instead. */}
+            <div
+                className="flex items-center justify-between px-3 py-2 mb-1"
+                style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 5,
+                    // The scrollable body (.flux-sidebar-scroll) all menus
+                    // share has its own paddingTop:4 — pulling this row up
+                    // by that same 4px and adding it back as this row's own
+                    // paddingTop closes that gap instead of leaving a sliver
+                    // of the container's padding visible above it.
+                    marginTop: -4,
+                    paddingTop: 4,
+                    background: "rgba(10, 10, 14, 0.94)",
+                }}>
+                <span className="text-sm text-base-content/80">Show active only</span>
+                {/* FIX: was DaisyUI's `toggle toggle-sm toggle-primary` — reads
+                    rectangular/blocky, inconsistent with every other on/off
+                    switch in the player (Equalizer's enable toggle, etc.),
+                    which all use this same round pill + sliding circle knob. */}
+                <button
+                    onClick={() => setShowActiveOnly((v) => !v)}
+                    role="switch"
+                    aria-checked={showActiveOnly}
+                    style={{
+                        width: 44,
+                        height: 26,
+                        borderRadius: 999,
+                        border: "none",
+                        position: "relative",
+                        background: showActiveOnly ? "var(--color-primary)" : "rgba(255,255,255,0.2)",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        transition: "background 0.15s",
+                    }}>
+                    <span
+                        style={{
+                            position: "absolute",
+                            top: 3,
+                            left: showActiveOnly ? 21 : 3,
+                            width: 20,
+                            height: 20,
+                            borderRadius: "50%",
+                            background: "#fff",
+                            transition: "left 0.15s",
+                        }}
                     />
-                ))}
+                </button>
+            </div>
+
+            {/* FIX (desktop: playlist overflows off the top of the screen):
+                same fix as PlaylistPanel — the desktop popup has no height
+                cap of its own, so a long/paginated channel list just grows
+                past the top of the viewport. Wraps only the LIST (sticky
+                toggle above stays put, doesn't scroll with it). Mobile
+                already scrolls fine inside VideoSidebar's own bottom-sheet
+                container. Scrollbar hidden per request — scrolling still
+                works via wheel/trackpad, just no visible track. */}
+            {isMobile ? (
+                <div className="px-2">
+                    {loading ? (
+                        <div className="text-center text-[13px] text-base-content/40 py-6">Loading…</div>
+                    ) : channelList.length === 0 ? (
+                        <div className="text-center text-[13px] text-base-content/40 py-6">{showActiveOnly ? "No active channels pinned yet." : "No other channels found."}</div>
+                    ) : (
+                        <>
+                            {currentChannel && (
+                                <div className="mb-2">
+                                    <ChannelRow ch={currentChannel} isCurrent />
+                                </div>
+                            )}
+                            {categoryOrder.map((cat) => (
+                                <div key={cat} className="mb-1">
+                                    <div className="text-[11px] font-semibold text-base-content/35 tracking-wide py-2 px-1">{cat}</div>
+                                    {categoryMap.get(cat).map((ch) => (
+                                        <ChannelRow key={ch.id ?? ch.url} ch={ch} isCurrent={false} />
+                                    ))}
+                                </div>
+                            ))}
+                            {hasMore && (
+                                <div ref={sentinelRef} className="text-center text-[12px] text-base-content/30 py-4">
+                                    {isFetchingMore ? "Loading more…" : ""}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            ) : (
+                <>
+                    <style>{`
+                        .flux-channels-scroll::-webkit-scrollbar { display: none; }
+                    `}</style>
+                    <div className="flux-channels-scroll px-2" style={{ maxHeight: "min(70vh, 560px)", overflowY: "auto", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                        {loading ? (
+                            <div className="text-center text-[13px] text-base-content/40 py-6">Loading…</div>
+                        ) : channelList.length === 0 ? (
+                            <div className="text-center text-[13px] text-base-content/40 py-6">{showActiveOnly ? "No active channels pinned yet." : "No other channels found."}</div>
+                        ) : (
+                            <>
+                                {currentChannel && (
+                                    <div className="mb-2">
+                                        <ChannelRow ch={currentChannel} isCurrent />
+                                    </div>
+                                )}
+                                {categoryOrder.map((cat) => (
+                                    <div key={cat} className="mb-1">
+                                        <div className="text-[11px] font-semibold text-base-content/35 tracking-wide py-2 px-1">{cat}</div>
+                                        {categoryMap.get(cat).map((ch) => (
+                                            <ChannelRow key={ch.id ?? ch.url} ch={ch} isCurrent={false} />
+                                        ))}
+                                    </div>
+                                ))}
+                                {hasMore && (
+                                    <div ref={sentinelRef} className="text-center text-[12px] text-base-content/30 py-4">
+                                        {isFetchingMore ? "Loading more…" : ""}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </>
+            )}
         </MenuShell>
     );
 }
@@ -521,6 +1134,16 @@ export function QualityPicker({ open, onClose, isMobile, controlsPhase, onSwitch
     // playing right now.
     const currentAutoLabel = state.qualityLevels[0]?.label;
     const isAutoActive = state.activeQuality === -1 && !state.requestedQuality;
+    // FIX (Live: quality sidebar opens with nothing to pick): hls.js reports
+    // a REAL multi-level ladder for Live (and for VOD when the multi-quality
+    // ABR backend is on) in state.qualityLevels — this component populated
+    // that array but never actually rendered it as selectable buttons, only
+    // read qualityLevels[0] for the "Auto" label text above. The manual list
+    // below it only ever showed the VOD "request a new transcode at a fixed
+    // tier" flow (onSwitchQuality), which Live doesn't use at all. Now: if
+    // hls.js actually reports more than one level, show THOSE (switching via
+    // actions.setActiveQuality → hlsRef.nextLevel, already wired) instead.
+    const hasRealLevels = state.qualityLevels.length > 1;
     return (
         <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="Quality" side="bottom">
             <MenuItem
@@ -534,7 +1157,30 @@ export function QualityPicker({ open, onClose, isMobile, controlsPhase, onSwitch
                 }}>
                 <div>Auto{currentAutoLabel ? ` • ${currentAutoLabel}` : ""}</div>
             </MenuItem>
-            {onSwitchQuality && (
+            {hasRealLevels && (
+                <>
+                    <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "6px 0" }} />
+                    {/* High → Low for picking (qualityLevels itself is stored
+                        ascending — see the sort comment where it's built). */}
+                    {[...state.qualityLevels]
+                        .sort((a, b) => (b.height || b.bitrate || 0) - (a.height || a.bitrate || 0))
+                        .map((lvl) => (
+                            <MenuItem
+                                isMobile={isMobile}
+                                key={lvl.index}
+                                active={state.activeQuality === lvl.index}
+                                icon={MonitorPlay}
+                                onClick={() => {
+                                    actions.setActiveQuality(lvl.index);
+                                    actions.setRequestedQuality(null);
+                                    onClose();
+                                }}>
+                                <div>{lvl.label}</div>
+                            </MenuItem>
+                        ))}
+                </>
+            )}
+            {!hasRealLevels && onSwitchQuality && (
                 <>
                     <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "6px 0" }} />
                     {MANUAL_QUALITY_TIERS.map((tier) => (
@@ -1214,16 +1860,20 @@ export function SubtitlePicker({ open, onClose, subtitles, isMobile, controlsPha
             </button>
 
             <div style={{ margin: "2px 12px 4px", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, overflow: "hidden" }}>
-                {/* Explicit "Off" row — clearer than toggling a track's own
-                    checkbox off, and matches how the list worked before. */}
-                <CheckRow checked={!state.activeSubtitle} onChange={() => actions.setActiveSubtitle(null)}>
-                    Off
-                </CheckRow>
+                {/* FIX: removed the separate "Off" row per request — each
+                    track's own checkbox now IS the on/off control. Checking
+                    a track selects it (same as before); unchecking the
+                    currently-active one turns subtitles off (previously
+                    clicking an already-checked row did nothing — you had to
+                    go find the separate Off row instead). Default-select-
+                    first-subtitle-on-load and everything else above is
+                    unchanged. */}
                 {allSubs.map((sub, i) => {
                     const fallbackName = mediaInfoFallback?.subtitleTracks?.[i]?.languageName || null;
                     const label = getSubLabel(sub, fallbackName) || `Subtitle ${i + 1}`;
+                    const isActive = state.activeSubtitle?.url === sub.url;
                     return (
-                        <CheckRow key={sub.url} checked={state.activeSubtitle?.url === sub.url} onChange={() => actions.setActiveSubtitle(sub)}>
+                        <CheckRow key={sub.url} checked={isActive} onChange={() => actions.setActiveSubtitle(isActive ? null : sub)}>
                             {sub.forced && <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.55)", marginRight: 4 }}>[Forced]</span>}
                             {label}
                             <SourceBadge source={sub.source} />

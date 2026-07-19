@@ -14,9 +14,17 @@ export const MEDIA_KEYS = {
     search: (q, folderId) => ["media", "search", q, folderId],
 };
 
-// Filters out permission:false items when allowAdult is false
-function filterRestricted(data, allowAdult) {
-    if (allowAdult !== false || !data) return data;
+// Restricted-content rule (mirrors backend mediaController.js canSeeRestricted):
+// admin OR allowAdult:true → see everything.
+// everyone else → permission:false items hidden.
+function canSeeRestricted(user, permissions) {
+    if (!user) return false;
+    return user.role === "admin" || permissions?.allowAdult === true;
+}
+
+// Filters out permission:false items unless canSeeRestricted
+function filterRestricted(data, user, permissions) {
+    if (!data || canSeeRestricted(user, permissions)) return data;
     const filter = (arr) => (arr || []).filter((item) => item.permission !== false);
     return {
         ...data,
@@ -34,7 +42,7 @@ function filterRestricted(data, allowAdult) {
  * @param {object} [options] — additional useQuery options
  */
 export function useMedia(params = {}, options = {}) {
-    const { permissions } = useAuth();
+    const { user, permissions } = useAuth();
     const query = useQuery({
         queryKey: MEDIA_KEYS.list(params),
         queryFn: () => getMedia(params),
@@ -43,7 +51,7 @@ export function useMedia(params = {}, options = {}) {
     });
     return {
         ...query,
-        data: filterRestricted(query.data, permissions?.allowAdult),
+        data: filterRestricted(query.data, user, permissions),
     };
 }
 
@@ -64,7 +72,7 @@ export function useMediaById(id, options = {}) {
  * useMediaSearch(q, folderId) — search media
  */
 export function useMediaSearch(q, folderId, options = {}) {
-    const { permissions } = useAuth();
+    const { user, permissions } = useAuth();
     const query = useQuery({
         queryKey: MEDIA_KEYS.search(q, folderId),
         queryFn: () => searchMedia(q, folderId),
@@ -77,7 +85,7 @@ export function useMediaSearch(q, folderId, options = {}) {
         data: query.data
             ? {
                   ...query.data,
-                  results: permissions?.allowAdult === false ? (query.data.results || []).filter((item) => item.permission !== false) : query.data.results,
+                  results: canSeeRestricted(user, permissions) ? query.data.results : (query.data.results || []).filter((item) => item.permission !== false),
               }
             : query.data,
     };

@@ -61,6 +61,7 @@ function invalidate(fileId) {
 }
 
 function invalidateAll() {
+    loadStore();
     store.clear();
     scheduleSave();
 }

@@ -28,7 +28,10 @@ const ApiContext = createContext(null);
 
 export function ApiProvider({ children }) {
     const qc = useQueryClient();
-    const { permissions } = useAuth();
+    const { user, permissions } = useAuth();
+
+    // Restricted-content rule (mirrors backend + useMedia.js): admin OR allowAdult:true → see everything.
+    const canSeeRestricted = user && (user.role === "admin" || permissions?.allowAdult === true);
 
     // ─── Media ────────────────────────────────────────────────────────────────
     const mediaQuery = useMedia();
@@ -39,7 +42,7 @@ export function ApiProvider({ children }) {
     const [rawSearchResults, setRawSearchResults] = useState([]);
 
     // Derived — re-filters whenever permissions change without re-fetch
-    const searchResults = useMemo(() => (permissions?.allowAdult === false ? rawSearchResults.filter((item) => item.permission !== false) : rawSearchResults), [rawSearchResults, permissions]);
+    const searchResults = useMemo(() => (canSeeRestricted ? rawSearchResults : rawSearchResults.filter((item) => item.permission !== false)), [rawSearchResults, canSeeRestricted]);
 
     // ─── Library / Folders ────────────────────────────────────────────────────
     const libraryQuery = useLibrary();
@@ -131,10 +134,10 @@ export function ApiProvider({ children }) {
             const data = await searchMedia(q, folderId);
             const raw = data?.results ?? [];
             setRawSearchResults(raw);
-            const filtered = permissions?.allowAdult === false ? raw.filter((item) => item.permission !== false) : raw;
+            const filtered = canSeeRestricted ? raw : raw.filter((item) => item.permission !== false);
             return { ...data, results: filtered };
         },
-        [permissions],
+        [canSeeRestricted],
     );
 
     /** Refetch folders */

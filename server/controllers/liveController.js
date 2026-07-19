@@ -1,5 +1,20 @@
 "use strict";
 
+// ─── Crash safety net ──────────────────────────────────────────────────────
+// The bulk/per-channel health checker fires many concurrent fetch() calls at
+// third-party IPTV hosts that are often slow, flaky, or actively hostile
+// (redirect loops, connection resets mid-body). Aborting/timing those out
+// can occasionally surface as an unhandled rejection or a dangling-socket
+// 'error' event that bypasses normal try/catch — which previously took the
+// whole Node process down. This is scoped narrowly (log + survive) rather
+// than silently swallowing real bugs elsewhere.
+process.on("unhandledRejection", (err) => {
+    console.error("[IPTV] Unhandled rejection (survived):", err?.message || err);
+});
+process.on("uncaughtException", (err) => {
+    console.error("[IPTV] Uncaught exception (survived):", err?.message || err);
+});
+
 const fs = require("fs");
 const path = require("path");
 const {
@@ -13,6 +28,7 @@ const {
     getPublicLiveRich,
     getLive,
     writeLive,
+    getActiveLive,
     mergeChannelsForSource,
     removeChannelsForSource,
 } = require("../utils/iptvStore");
@@ -72,7 +88,11 @@ async function ingestSource(source, content) {
         const format = source.format && source.format !== "Unknown" ? source.format : sniffFormat(content);
         const channels = parsePlaylist(content, format, source.location);
         await mergeChannelsForSource(source.id, source.name, channels);
-        return updateSource(source.id, { status: "ready", channelCount: channels.length, error: null });
+        const result = await updateSource(source.id, { status: "ready", channelCount: channels.length, error: null });
+        // Auto health-check the fresh batch in background — no admin click
+        // needed before "Working Status" / status-sort has real data.
+        runBulkStreamCheck().catch((err) => console.warn("[IPTV] post-ingest bulk check failed:", err.message));
+        return result;
     } catch (err) {
         console.error(`[IPTV] ingest failed for source ${source.id}:`, err.message);
         return updateSource(source.id, { status: "error", error: err.message });
@@ -255,7 +275,54 @@ async function removeSource(req, res) {
     }
 }
 
-// ─── In-memory flat-channel cache ─────────────────────────────────────────────
+// ─── In-memory flat-channel cache: active_live.json ───────────────────────────
+// Deliberately a SEPARATE cache + separate source file from buildFlatRows()
+// below. Active Only reads straight from active_live.json (already-final
+// snapshots, curated via the Star button / Active-tab CRUD) — it does NOT
+// filter live.json rows by an id set. All Channel reads straight from
+// live.json via buildFlatRows(). Two independent files, two independent
+// code paths — deleting a source only ever touches live.json's cache.
+let _activeFlatCache = null; // { builtFromDate, rows: [...] }
+
+function buildActiveFlatRows() {
+    const active = getActiveLive();
+    if (_activeFlatCache && _activeFlatCache.builtFromDate === active.date) return _activeFlatCache.rows;
+
+    const rows = [];
+    let globalIndex = 0;
+
+    for (const [group, list] of Object.entries(active.channels || {})) {
+        for (const ch of list) {
+            rows.push({
+                id: ch.id || Buffer.from(ch.url).toString("base64url"),
+                index: globalIndex++,
+                name: ch.name,
+                logo: ch.logo,
+                group: ch.group !== undefined && ch.group !== null ? ch.group : group,
+                category: ch.category || null,
+                country: ch.country || null,
+                language: ch.language || null,
+                resolution: ch.resolution || null,
+                isHD: !!ch.isHD,
+                source: ch.source,
+                url: ch.url,
+                streamStatus: ch.streamStatus || "unknown",
+                httpCode: ch.httpCode ?? null,
+                lastChecked: ch.lastChecked || null,
+                activatedAt: ch.activatedAt || null,
+            });
+        }
+    }
+
+    // Default order: oldest-marked-active first (ascending activatedAt) —
+    // matches the Active tab's own ordering.
+    rows.sort((a, b) => new Date(a.activatedAt || 0) - new Date(b.activatedAt || 0));
+
+    _activeFlatCache = { builtFromDate: active.date, rows };
+    return rows;
+}
+
+// ─── In-memory flat-channel cache: live.json ──────────────────────────────────
 // Root cause of the frontend freeze: this endpoint used to dump all 2700+
 // channels on every single request (no pagination, no filtering at all), so
 // the player had to download + render the entire dataset before anything
@@ -285,6 +352,9 @@ function buildFlatRows() {
                 group: ch.group !== undefined && ch.group !== null ? ch.group : group,
                 category: ch.category || null,
                 country: ch.country || null,
+                language: ch.language || null,
+                resolution: ch.resolution || null, // "4K" | "1080p" | "720p" | "576p" | "480p" | "360p" | "240p" | "SD" | null
+                isHD: !!ch.isHD,
                 source: ch.source,
                 url: ch.url,
                 // Written by the bulk stream-health checker (runBulkStreamCheck) —
@@ -314,8 +384,17 @@ function getChannels(req, res) {
         const q = (req.query.q || "").toLowerCase().trim();
         const category = (req.query.category || "").toLowerCase().trim();
         const workingOnly = req.query.workingOnly === "true" || req.query.workingOnly === "1";
+        const quality = (req.query.quality || "").trim(); // "4K" | "1080p" | "720p" | "SD"
+        const country = (req.query.country || "").toLowerCase().trim();
+        const language = (req.query.language || "").toLowerCase().trim();
+        // ?all=true → "All Channel": every parsed channel, straight from
+        // live.json (buildFlatRows). Default → "Active Only": straight from
+        // active_live.json (buildActiveFlatRows) — a genuinely separate file
+        // and cache, not a filter over live.json by id. Deleting a source
+        // only ever rewrites live.json, so it can never affect this branch.
+        const showAll = req.query.all === "true" || req.query.all === "1";
 
-        let rows = channelStateStore.applyChannelState(buildFlatRows());
+        let rows = showAll ? channelStateStore.applyChannelState(buildFlatRows()) : buildActiveFlatRows();
 
         if (q) {
             rows = rows.filter((c) => (c.name || "").toLowerCase().includes(q) || (c.group || "").toLowerCase().includes(q) || (c.category || "").toLowerCase().includes(q));
@@ -329,6 +408,21 @@ function getChannels(req, res) {
             // yet doesn't get the benefit of the doubt here; it'll show up
             // once the bulk checker (or the next scheduled run) confirms it.
             rows = rows.filter((c) => c.streamStatus === "working");
+        }
+        if (quality) {
+            if (quality.toUpperCase() === "SD") {
+                // "SD" is a bucket, not one exact label — anything explicitly
+                // tagged low-res AND not flagged HD counts as SD.
+                rows = rows.filter((c) => c.resolution && !c.isHD);
+            } else {
+                rows = rows.filter((c) => (c.resolution || "").toLowerCase() === quality.toLowerCase());
+            }
+        }
+        if (country) {
+            rows = rows.filter((c) => (c.country || "").toLowerCase() === country);
+        }
+        if (language) {
+            rows = rows.filter((c) => (c.language || "").toLowerCase() === language);
         }
 
         const totalItems = rows.length;
@@ -377,9 +471,13 @@ function getChannelsFlat(req, res) {
         const q = (req.query.q || "").toLowerCase().trim();
         const category = (req.query.category || "").toLowerCase().trim();
 
-        // 1. Add "index" to the allowed sort keys, and make it the default fallback
-        const sort = ["index", "name", "country", "category", "group"].includes(req.query.sort) ? req.query.sort : "index";
+        // 1. "status" sort auto-surfaces channels that are confirmed playable
+        // (no 404/503/timeout) at the top — this is the "auto detect active
+        // channel" the admin uses to pick candidates before hitting the Star
+        // (Mark Active) button. Falls back to "index" when not requested.
+        const sort = ["index", "name", "country", "category", "group", "status"].includes(req.query.sort) ? req.query.sort : "index";
         const order = req.query.order === "desc" ? -1 : 1;
+        const STATUS_RANK = { working: 0, unknown: 1, timeout: 2, offline: 3 };
 
         let flat = channelStateStore.applyChannelState(buildFlatRows());
 
@@ -400,6 +498,12 @@ function getChannelsFlat(req, res) {
         flat.sort((a, b) => {
             if (sort === "index") {
                 return (a.index - b.index) * order;
+            }
+            if (sort === "status") {
+                const ra = STATUS_RANK[a.streamStatus] ?? 1;
+                const rb = STATUS_RANK[b.streamStatus] ?? 1;
+                if (ra !== rb) return (ra - rb) * order;
+                return a.index - b.index; // stable tiebreak, ignores order flip on purpose
             }
             const av = (a[sort] || "").toLowerCase();
             const bv = (b[sort] || "").toLowerCase();
@@ -454,6 +558,7 @@ async function checkStreamStatus(req, res) {
         }
 
         const status = r.ok || r.status === 206 ? "working" : "offline";
+        r.body?.cancel?.().catch(() => {}); // never leave the body unread/unclosed
         return ok(res, { status, code: r.status });
     } catch (err) {
         const status = err.name === "AbortError" ? "timeout" : "offline";
@@ -476,7 +581,11 @@ async function checkStreamStatus(req, res) {
 // RTMP / SRT / UDP streams can't be HTTP-probed → marked "unknown".
 
 const PROBE_TIMEOUT_MS = 7_000;
-const PROBE_CONCURRENCY = 20; // simultaneous probes — keep below OS fd limit
+// Was a hardcoded 20 — for a large playlist that's 20 concurrent open
+// sockets/response buffers at once, plus a big write-back afterward (see
+// merge fix below). Lowering the default eases memory/fd pressure on small
+// NAS/CasaOS boxes; override with PROBE_CONCURRENCY env if you want it back up.
+const PROBE_CONCURRENCY = parseInt(process.env.PROBE_CONCURRENCY || "10", 10);
 
 let _bulkCheckRunning = false; // prevent concurrent full-scan jobs
 
@@ -510,6 +619,7 @@ async function probeUrl(url) {
             r = await tryFetch("GET");
         }
         const streamStatus = r.ok || r.status === 206 ? "working" : "offline";
+        r.body?.cancel?.().catch(() => {});
         return { streamStatus, httpCode: r.status };
     } catch (err) {
         const streamStatus = err.name === "AbortError" ? "timeout" : "offline";
@@ -559,24 +669,39 @@ async function runBulkStreamCheck() {
         }
         await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, worker));
 
-        // Merge probe results back into a copy of the grouped structure
+        // Merge probe results back into the grouped structure in ONE pass —
+        // previously this deep-cloned every channel once (list.map(...)) then
+        // overwrote each entry again in a second loop, so every channel was
+        // copied twice right before a JSON.stringify write. For a large
+        // playlist that's real peak-memory pressure on a small box. Build a
+        // group|index → result lookup once, then produce each channel's
+        // final shape in a single map pass.
+        const resultByKey = new Map();
+        for (let i = 0; i < tasks.length; i++) {
+            resultByKey.set(`${tasks[i].group}\u0000${tasks[i].index}`, results[i]);
+        }
+        const checkedAt = new Date().toISOString();
         const updatedGrouped = {};
         for (const [group, list] of Object.entries(grouped)) {
-            updatedGrouped[group] = list.map((ch) => ({ ...ch }));
-        }
-        for (let i = 0; i < tasks.length; i++) {
-            const { group, index } = tasks[i];
-            const { streamStatus, httpCode } = results[i];
-            updatedGrouped[group][index] = {
-                ...updatedGrouped[group][index],
-                streamStatus,
-                httpCode,
-                lastChecked: new Date().toISOString(),
-            };
+            updatedGrouped[group] = list.map((ch, index) => {
+                const r = resultByKey.get(`${group}\u0000${index}`);
+                if (!r) return ch; // shouldn't happen — no probe result for this slot
+                return { ...ch, streamStatus: r.streamStatus, httpCode: r.httpCode, lastChecked: checkedAt };
+            });
         }
 
         // Atomic write through the store's serialised queue
         await writeLive({ date: live.date, channels: updatedGrouped });
+
+        // The write above intentionally reuses the OLD live.date (this is a
+        // health-check update, not a content change), so buildFlatRows()'s
+        // date-based cache check would never notice this write happened and
+        // would keep serving pre-check streamStatus/httpCode/lastChecked
+        // values indefinitely. Force a rebuild on next read instead —
+        // unrelated requests (ingest/source edits, which DO bump the date)
+        // are unaffected by this and keep using the existing cache exactly
+        // as before.
+        _flatCache = null;
 
         const summary = {
             total: tasks.length,
@@ -640,12 +765,16 @@ function getChannelState(req, res) {
     }
 }
 
-// GET /api/live/channels/active — full channel objects currently pinned active
+// GET /api/live/channels/active — reads directly from active_live.json (not
+// derived from live.json + overrides anymore) — sorted ascending by
+// activatedAt (oldest-marked-active first), per requirement.
 function getActiveChannels(req, res) {
     try {
-        const { active, overrides } = channelStateStore.getState();
-        const channels = Object.values(active).map((ch) => (overrides[ch.id] ? { ...ch, ...overrides[ch.id] } : ch));
-        return ok(res, { channels });
+        const live = getActiveLive();
+        const channels = [];
+        for (const group of Object.values(live.channels || {})) channels.push(...group);
+        channels.sort((a, b) => new Date(a.activatedAt || 0) - new Date(b.activatedAt || 0));
+        return ok(res, { channels, date: live.date });
     } catch (err) {
         console.error("[IPTV] getActiveChannels error:", err);
         return fail(res, err.message);
@@ -667,16 +796,127 @@ function markChannelActive(req, res) {
 }
 
 // DELETE /api/live/channels/:id/active — unpin from Active tab
+// DELETE /api/live/channels/:id/active — unpin from Active tab
 function unmarkChannelActive(req, res) {
     try {
         const { id } = req.params;
         if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
         const removed = channelStateStore.unsetActive(id);
         if (!removed) return fail(res, "Channel was not marked active", 404);
+        // Best-effort cleanup — channel going inactive means its imgbb-hosted
+        // logo (if any) is no longer needed anywhere.
+        if (removed.logoDeleteUrl) deleteFromImgbb(removed.logoDeleteUrl);
         return ok(res, { id, message: "Removed from Active" });
     } catch (err) {
         console.error("[IPTV] unmarkChannelActive error:", err);
         return fail(res, err.message);
+    }
+}
+
+// PATCH /api/live/active/:id — full CRUD on an Active-tab entry: name, logo,
+// category, country, group, url — anything. Deliberately separate from
+// updateChannel() below, which patches the main list (live.json-derived)
+// via overrides. This only ever writes active_live.json.
+function updateActiveChannelDetails(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const patch = {};
+        for (const key of ["name", "logo", "category", "country", "group", "url", "language", "resolution"]) {
+            if (body[key] === undefined) continue;
+            patch[key] = typeof body[key] === "string" ? body[key].trim() : body[key];
+        }
+        if (Object.keys(patch).length === 0) return fail(res, "Nothing to update", 400);
+
+        // Logo is being changed by hand (typed/pasted URL, not the imgbb
+        // upload button) — if the old logo was an imgbb upload, clean it up,
+        // and drop the now-stale delete token since the new value isn't ours.
+        const before = channelStateStore.getState().active[id];
+        if (patch.logo !== undefined && before && patch.logo !== before.logo) {
+            if (before.logoDeleteUrl) deleteFromImgbb(before.logoDeleteUrl);
+            patch.logoDeleteUrl = null;
+        }
+
+        const updated = channelStateStore.updateActiveChannel(id, patch);
+        if (!updated) return fail(res, "Channel not found in Active list", 404);
+        return ok(res, { channel: updated });
+    } catch (err) {
+        console.error("[IPTV] updateActiveChannelDetails error:", err);
+        return fail(res, err.message);
+    }
+}
+
+// ─── imgbb logo upload/cleanup ──────────────────────────────────────────────
+const IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload";
+
+async function uploadToImgbb(buffer, filename) {
+    const apiKey = process.env.IMGBB_API_KEY;
+    if (!apiKey) throw new Error("IMGBB_API_KEY is not set in .env");
+
+    const form = new FormData();
+    form.append("image", new Blob([buffer]), filename || "logo.png");
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let res;
+    try {
+        res = await fetch(`${IMGBB_UPLOAD_URL}?key=${apiKey}`, { method: "POST", body: form, signal: controller.signal });
+    } catch (err) {
+        if (err.name === "AbortError") throw new Error("imgbb upload timed out");
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`imgbb ${res.status}: ${body.slice(0, 150)}`);
+    }
+    const data = await res.json();
+    if (!data?.success || !data?.data?.url) throw new Error("imgbb upload did not return a URL");
+    // delete_url is imgbb's own deletion token for this specific upload —
+    // stash it so we can clean up later without needing an API key-based
+    // delete endpoint (imgbb's public API doesn't have one).
+    return { url: data.data.url, deleteUrl: data.data.delete_url || null };
+}
+
+// Best-effort — imgbb's delete_url is a plain GET link, not a documented
+// guaranteed API contract. Never let a failure here affect the caller;
+// just log and move on.
+async function deleteFromImgbb(deleteUrl) {
+    if (!deleteUrl) return;
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        try {
+            await fetch(deleteUrl, { method: "GET", signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+    } catch (err) {
+        console.warn("[IPTV] imgbb delete failed (best-effort, ignoring):", err.message);
+    }
+}
+
+// POST /api/live/active/:id/logo — multipart field "logo" — uploads to imgbb,
+// deletes the PREVIOUS imgbb logo (if any) for this channel, then saves the
+// new URL. active_live.json only.
+async function uploadActiveLogo(req, res) {
+    try {
+        const { id } = req.params;
+        if (!channelStateStore.isValidId(id)) return fail(res, "Invalid channel id", 400);
+        if (!req.file) return fail(res, 'Logo file is required (multipart field name: "logo")', 400);
+
+        const before = channelStateStore.getState().active[id];
+        const { url, deleteUrl } = await uploadToImgbb(req.file.buffer, req.file.originalname);
+        const updated = channelStateStore.updateActiveChannel(id, { logo: url, logoDeleteUrl: deleteUrl });
+        if (!updated) return fail(res, "Channel not found in Active list", 404);
+
+        if (before?.logoDeleteUrl) deleteFromImgbb(before.logoDeleteUrl); // old image cleanup, fire-and-forget
+        return ok(res, { logo: url, channel: updated });
+    } catch (err) {
+        console.error("[IPTV] uploadActiveLogo error:", err);
+        return fail(res, err.message || "Logo upload failed");
     }
 }
 
@@ -726,6 +966,20 @@ function restoreChannel(req, res) {
     }
 }
 
+// ─── Periodic auto health-check ────────────────────────────────────────────
+// Keeps streamStatus fresh (so status-sort / 404-503 detection stays accurate)
+// without the admin needing to press "recheck" manually. Guarded per learned
+// pattern (EPG scheduler) — an error inside the interval must never crash
+// the process or stop future ticks.
+const AUTO_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 min
+setInterval(() => {
+    try {
+        runBulkStreamCheck().catch((err) => console.warn("[IPTV] scheduled bulk check failed:", err.message));
+    } catch (err) {
+        console.warn("[IPTV] scheduled bulk check threw synchronously:", err.message);
+    }
+}, AUTO_CHECK_INTERVAL_MS).unref();
+
 module.exports = {
     listSources,
     addUrlSource,
@@ -745,6 +999,8 @@ module.exports = {
     getActiveChannels,
     markChannelActive,
     unmarkChannelActive,
+    updateActiveChannelDetails,
+    uploadActiveLogo,
     updateChannel,
     deleteChannel,
     restoreChannel,

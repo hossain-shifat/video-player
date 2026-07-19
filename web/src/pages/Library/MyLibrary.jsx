@@ -42,7 +42,7 @@ function truncate(str, n = 38) {
 
 // ─── Reusable Modal Shell ────────────────────────────────────────────────────
 
-function Modal({ open, onClose, children, width = "max-w-md" }) {
+function Modal({ open, onClose, children, width = "max-w-[520px]" }) {
     useEffect(() => {
         if (!open) return;
         const handler = (e) => {
@@ -57,7 +57,7 @@ function Modal({ open, onClose, children, width = "max-w-md" }) {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-            <div className={`relative w-full ${width} bg-base-200 border border-white/10 rounded-2xl shadow-2xl`}>{children}</div>
+            <div className={`relative w-full ${width} bg-base-200 border border-base-300 rounded-2xl shadow-2xl`}>{children}</div>
         </div>
     );
 }
@@ -74,16 +74,16 @@ function DeleteModal({ folder, onConfirm, onClose, loading }) {
                     </div>
                     <div>
                         <h3 className="font-semibold text-base-content">Remove Library</h3>
-                        <p className="text-xs text-base-content/50">This action cannot be undone</p>
+                        <p className="text-xs text-base-content/85">This action cannot be undone</p>
                     </div>
                 </div>
-                <div className="bg-base-300/60 rounded-lg px-4 py-3 mb-5 border border-white/5">
+                <div className="bg-base-300 rounded-lg px-4 py-3 mb-5 border border-base-300">
                     <p className="text-sm font-medium text-base-content">{folder?.label}</p>
-                    <p className="text-xs text-base-content/50 mt-0.5 font-mono break-all">{folder?.path}</p>
+                    <p className="text-xs text-base-content/85 mt-0.5 font-mono break-all">{folder?.path}</p>
                 </div>
-                <p className="text-sm text-base-content/60 mb-5">Removing this library will stop the server from scanning this folder. Your actual files will not be deleted.</p>
+                <p className="text-sm text-base-content/80 mb-5">Removing this library will stop the server from scanning this folder. Your actual files will not be deleted.</p>
                 <div className="flex gap-3 justify-end">
-                    <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-300/70 text-base-content transition-colors">
+                    <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-100 text-base-content transition-colors">
                         Cancel
                     </button>
                     <button
@@ -128,7 +128,7 @@ function ViewModal({ folder, onClose }) {
                         </div>
                         <h3 className="font-semibold text-base-content">Library Details</h3>
                     </div>
-                    <button onClick={onClose} className="text-base-content/40 hover:text-base-content transition-colors">
+                    <button onClick={onClose} className="text-base-content/85 hover:text-base-content hover:bg-base-300 w-8 h-8 rounded-lg flex items-center justify-center transition-colors">
                         <X size={18} />
                     </button>
                 </div>
@@ -136,23 +136,23 @@ function ViewModal({ folder, onClose }) {
                 <div className="space-y-3 mb-5">
                     {rows.map(({ label, value, mono }) => (
                         <div key={label} className="flex justify-between items-start gap-4">
-                            <span className="text-xs text-base-content/50 w-28 shrink-0 pt-0.5">{label}</span>
-                            <span className={`text-sm text-base-content text-right break-all ${mono ? "font-mono text-xs text-base-content/70" : ""}`}>{value || "—"}</span>
+                            <span className="text-xs text-base-content/85 w-28 shrink-0 pt-0.5">{label}</span>
+                            <span className={`text-sm text-base-content text-right break-all ${mono ? "font-mono text-xs text-base-content/85" : ""}`}>{value || "—"}</span>
                         </div>
                     ))}
                     {/* Path with copy */}
                     <div className="flex justify-between items-start gap-4">
-                        <span className="text-xs text-base-content/50 w-28 shrink-0 pt-0.5">Folder Path</span>
+                        <span className="text-xs text-base-content/85 w-28 shrink-0 pt-0.5">Folder Path</span>
                         <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-xs font-mono text-base-content/70 break-all text-right">{folder.path}</span>
-                            <button onClick={copyPath} className="shrink-0 text-base-content/40 hover:text-primary transition-colors" title="Copy path">
+                            <span className="text-xs font-mono text-base-content/85 break-all text-right">{folder.path}</span>
+                            <button onClick={copyPath} className="shrink-0 text-base-content/85 hover:text-primary transition-colors" title="Copy path">
                                 {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
                             </button>
                         </div>
                     </div>
                 </div>
 
-                <button onClick={onClose} className="w-full py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-300/70 text-base-content transition-colors">
+                <button onClick={onClose} className="w-full py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-100 text-base-content transition-colors">
                     Close
                 </button>
             </div>
@@ -193,7 +193,7 @@ function FolderFormModal({ mode, folder, onSave, onClose, loading, error }) {
                         </div>
                         <h3 className="font-semibold text-base-content">{isEdit ? "Edit Library" : "Add Library"}</h3>
                     </div>
-                    <button onClick={onClose} className="text-base-content/40 hover:text-base-content transition-colors">
+                    <button onClick={onClose} className="text-base-content/85 hover:text-base-content hover:bg-base-300 w-8 h-8 rounded-lg flex items-center justify-center transition-colors">
                         <X size={18} />
                     </button>
                 </div>
@@ -207,7 +207,7 @@ function FolderFormModal({ mode, folder, onSave, onClose, loading, error }) {
 
                 <div className="space-y-4 mb-5">
                     <div>
-                        <label className="block text-xs font-medium text-base-content/60 mb-1.5">
+                        <label className="block text-xs font-medium text-base-content/80 mb-1.5">
                             Display Label <span className="text-error">*</span>
                         </label>
                         <input
@@ -216,11 +216,11 @@ function FolderFormModal({ mode, folder, onSave, onClose, loading, error }) {
                             onChange={(e) => setLabel(e.target.value)}
                             onKeyDown={handleKey}
                             placeholder="e.g. Movies, Anime, TV Shows"
-                            className="w-full bg-base-300 border border-white/10 rounded-md px-3 py-2 text-sm text-base-content placeholder-base-content/30 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all"
+                            className="w-full bg-base-300 border border-base-300 rounded-md px-3 py-2 text-sm text-base-content placeholder-base-content/60 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all"
                         />
                     </div>
                     <div>
-                        <label className="block text-xs font-medium text-base-content/60 mb-1.5">
+                        <label className="block text-xs font-medium text-base-content/80 mb-1.5">
                             Folder Path <span className="text-error">*</span>
                         </label>
                         <input
@@ -228,14 +228,14 @@ function FolderFormModal({ mode, folder, onSave, onClose, loading, error }) {
                             onChange={(e) => setPath(e.target.value)}
                             onKeyDown={handleKey}
                             placeholder="e.g. D:\Media\Movies or /mnt/media/movies"
-                            className="w-full bg-base-300 border border-white/10 rounded-md px-3 py-2 text-sm text-base-content placeholder-base-content/30 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all font-mono"
+                            className="w-full bg-base-300 border border-base-300 rounded-md px-3 py-2 text-sm text-base-content placeholder-base-content/60 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all font-mono"
                         />
-                        <p className="text-xs text-base-content/40 mt-1.5">Absolute path on the server machine. Network paths supported.</p>
+                        <p className="text-xs text-base-content/85 mt-1.5">Absolute path on the server machine. Network paths supported.</p>
                     </div>
                 </div>
 
                 <div className="flex gap-3 justify-end">
-                    <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-300/70 text-base-content transition-colors">
+                    <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-100 text-base-content transition-colors">
                         Cancel
                     </button>
                     <button
@@ -270,12 +270,28 @@ function Toast({ toast }) {
 
 function SkeletonRow() {
     return (
-        <tr className="border-b border-white/5">
-            {[48, 96, 160, 200, 80, 80, 72].map((w, i) => (
-                <td key={i} className="px-4 py-3.5">
-                    <div className="h-3.5 rounded bg-white/8 animate-pulse" style={{ width: w }} />
-                </td>
-            ))}
+        <tr className="border-b border-base-300">
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 32 }} />
+            </td>
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 140 }} />
+            </td>
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 90 }} />
+            </td>
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 60 }} />
+            </td>
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 200 }} />
+            </td>
+            <td className="px-4 py-3.5 hidden md:table-cell">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse" style={{ width: 80 }} />
+            </td>
+            <td className="px-4 py-3.5">
+                <div className="h-3.5 rounded bg-base-300 animate-pulse ml-auto" style={{ width: 72 }} />
+            </td>
         </tr>
     );
 }
@@ -295,25 +311,25 @@ function Pagination({ page, totalPages, total, perPage, onPage }) {
     }
 
     return (
-        <div className="flex items-center justify-between px-4 py-3 border-t border-white/8">
-            <span className="text-xs text-base-content/50">
+        <div className="flex items-center justify-between px-4 py-3 border-t border-base-300">
+            <span className="text-xs text-base-content/85">
                 Showing {start}–{end} of {total} libraries
             </span>
             <div className="flex items-center gap-1">
                 <PagBtn icon={<ChevronsLeft size={14} />} onClick={() => onPage(1)} disabled={page === 1} />
                 <PagBtn icon={<ChevronLeft size={14} />} onClick={() => onPage(page - 1)} disabled={page === 1} />
-                {pages[0] > 1 && <span className="px-1.5 text-base-content/30 text-xs">…</span>}
+                {pages[0] > 1 && <span className="px-1.5 text-base-content/85 text-xs">…</span>}
                 {pages.map((p) => (
                     <button
                         key={p}
                         onClick={() => onPage(p)}
                         className={`w-7 h-7 rounded-md text-xs font-medium transition-colors ${
-                            p === page ? "bg-primary text-primary-content" : "text-base-content/60 hover:bg-white/8 hover:text-base-content"
+                            p === page ? "bg-primary text-primary-content" : "text-base-content/80 hover:bg-base-300 hover:text-base-content"
                         }`}>
                         {p}
                     </button>
                 ))}
-                {pages[pages.length - 1] < totalPages && <span className="px-1.5 text-base-content/30 text-xs">…</span>}
+                {pages[pages.length - 1] < totalPages && <span className="px-1.5 text-base-content/85 text-xs">…</span>}
                 <PagBtn icon={<ChevronRight size={14} />} onClick={() => onPage(page + 1)} disabled={page === totalPages} />
                 <PagBtn icon={<ChevronsRight size={14} />} onClick={() => onPage(totalPages)} disabled={page === totalPages} />
             </div>
@@ -326,7 +342,7 @@ function PagBtn({ icon, onClick, disabled }) {
         <button
             onClick={onClick}
             disabled={disabled}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-base-content/50 hover:bg-white/8 hover:text-base-content transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+            className="w-7 h-7 rounded-md flex items-center justify-center text-base-content/85 hover:bg-base-300 hover:text-base-content transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
             {icon}
         </button>
     );
@@ -471,20 +487,20 @@ export default function MyLibrary() {
         {
             label: "Total Libraries",
             value: folders.length,
-            icon: <HardDrive size={18} className="text-primary" />,
-            bg: "bg-primary/10",
+            icon: <HardDrive size={17} className="text-primary" />,
+            accent: "bg-primary/10 border-primary/20",
         },
         {
             label: "Filtered Results",
             value: filtered.length,
-            icon: <Film size={18} className="text-accent" />,
-            bg: "bg-accent/10",
+            icon: <Film size={17} className="text-accent" />,
+            accent: "bg-accent/10 border-accent/20",
         },
         {
             label: "Current Page",
             value: `${safePage} / ${totalPages}`,
-            icon: <FolderOpen size={18} className="text-secondary" />,
-            bg: "bg-secondary/10",
+            icon: <FolderOpen size={17} className="text-secondary" />,
+            accent: "bg-secondary/10 border-secondary/20",
         },
     ];
 
@@ -495,13 +511,13 @@ export default function MyLibrary() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                 <div>
                     <h1 className="text-2xl font-bold text-base-content tracking-tight">My Libraries</h1>
-                    <p className="text-sm text-base-content/50 mt-0.5">Manage media folders scanned by the server</p>
+                    <p className="text-sm text-base-content/85 mt-0.5">Manage media folders scanned by the server</p>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
                         onClick={fetchFolders}
                         disabled={loading}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-300/70 text-base-content/80 hover:text-base-content transition-colors disabled:opacity-50 cursor-pointer">
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium bg-base-300 hover:bg-base-100 text-base-content/80 hover:text-base-content transition-colors disabled:opacity-50 cursor-pointer">
                         <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                         Refresh
                     </button>
@@ -515,13 +531,13 @@ export default function MyLibrary() {
             </div>
 
             {/* ── Stats ── */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-                {stats.map(({ label, value, icon, bg }) => (
-                    <div key={label} className={`flex items-center gap-3 px-4 py-3 rounded-xl border border-white/8 ${bg}`}>
-                        <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">{icon}</div>
-                        <div>
-                            <div className="text-lg font-bold text-base-content leading-none">{value}</div>
-                            <div className="text-xs text-base-content/50 mt-0.5">{label}</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+                {stats.map(({ label, value, icon, accent }) => (
+                    <div key={label} className="flex items-center gap-3 px-4 py-3.5 rounded-xl border border-base-300 bg-base-200 hover:border-base-content/20 transition-colors">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 border ${accent}`}>{icon}</div>
+                        <div className="min-w-0">
+                            <div className="text-xl font-bold text-base-content leading-none tabular-nums truncate">{value}</div>
+                            <div className="text-[11px] font-semibold text-base-content/80 mt-1 uppercase tracking-wider truncate">{label}</div>
                         </div>
                     </div>
                 ))}
@@ -530,28 +546,28 @@ export default function MyLibrary() {
             {/* ── Search toolbar ── */}
             <div className="flex items-center gap-2 mb-4">
                 <div className="relative flex-1 max-w-sm">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40" />
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/85" />
                     <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search by label, path, or ID…"
-                        className="w-full bg-base-200 border border-white/10 rounded-md pl-8 pr-3 py-2 text-sm text-base-content placeholder-base-content/30 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all"
+                        className="w-full bg-base-200 border border-base-300 rounded-md pl-8 pr-3 py-2 text-sm text-base-content placeholder-base-content/60 focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all"
                     />
                     {search && (
-                        <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/40 hover:text-base-content transition-colors">
+                        <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/85 hover:text-base-content transition-colors">
                             <X size={13} />
                         </button>
                     )}
                 </div>
                 {search && (
-                    <span className="text-xs text-base-content/40">
+                    <span className="text-xs text-base-content/85">
                         {filtered.length} result{filtered.length !== 1 ? "s" : ""}
                     </span>
                 )}
             </div>
 
             {/* ── Table ── */}
-            <div className="bg-base-200 border border-white/8 rounded-xl overflow-hidden">
+            <div className="bg-base-200 border border-base-300 rounded-xl overflow-hidden">
                 {fetchError && (
                     <div className="flex items-center gap-3 px-5 py-4 bg-error/10 border-b border-error/20">
                         <AlertCircle size={16} className="text-error shrink-0" />
@@ -565,14 +581,14 @@ export default function MyLibrary() {
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                         <thead>
-                            <tr className="border-b border-white/8 bg-base-300/40">
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider w-12">#Id</th>
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider">Label</th>
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider">Folder ID</th>
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider">Media Count</th>
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider">Path</th>
-                                <th className="text-left px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider hidden md:table-cell">Added</th>
-                                <th className="text-right px-4 py-3 font-medium text-base-content/50 text-xs uppercase tracking-wider">Actions</th>
+                            <tr className="border-b border-base-300 bg-base-300">
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider w-12">#Id</th>
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider">Label</th>
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider">Folder ID</th>
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider">Media Count</th>
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider">Path</th>
+                                <th className="text-left px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider hidden md:table-cell">Added</th>
+                                <th className="text-right px-4 py-3 font-medium text-base-content/85 text-xs uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -580,19 +596,18 @@ export default function MyLibrary() {
                                 Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
                             ) : paginated.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6}>
+                                    <td colSpan={7}>
                                         <EmptyState search={search} onAdd={openAdd} onClear={() => setSearch("")} />
                                     </td>
                                 </tr>
                             ) : (
                                 paginated.map((folder, idx) => {
                                     const globalIdx = (safePage - 1) * PER_PAGE + idx + 1;
-                                    console.log(folder);
                                     return (
-                                        <tr key={folder.id} className="border-b border-white/5 hover:bg-white/3 transition-colors group">
+                                        <tr key={folder.id} className="border-b border-base-300 hover:bg-base-300 transition-colors group">
                                             {/* #Id */}
                                             <td className="px-4 py-3.5">
-                                                <span className="text-xs font-mono text-base-content/40 font-medium">#{globalIdx}</span>
+                                                <span className="text-xs font-mono text-base-content/85 font-medium">#{globalIdx}</span>
                                             </td>
 
                                             {/* Label */}
@@ -601,30 +616,30 @@ export default function MyLibrary() {
                                                     <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                                                         <FolderOpen size={13} className="text-primary" />
                                                     </div>
-                                                    <span className="font-medium text-base-content text-sm">{folder.label || "—"}</span>
+                                                    <span className="font-medium text-base-content text-sm truncate">{folder.label || "—"}</span>
                                                 </div>
                                             </td>
 
                                             {/* Folder ID */}
                                             <td className="px-4 py-3.5">
-                                                <span className="text-xs font-mono text-base-content/50 bg-base-300/60 px-2 py-0.5 rounded border border-white/5">{folder.id || "—"}</span>
+                                                <span className="text-xs font-mono text-base-content/85 bg-base-300 px-2 py-0.5 rounded border border-base-300">{folder.id || "—"}</span>
                                             </td>
 
                                             {/* Media Count */}
                                             <td className="px-4 py-3.5">
-                                                <span className="text-xs font-mono text-base-content/50 bg-base-300/60 px-2 py-0.5 rounded border border-white/5">{folder.count || "—"}</span>
+                                                <span className="text-xs font-mono text-base-content/85 bg-base-300 px-2 py-0.5 rounded border border-base-300">{folder.count || "—"}</span>
                                             </td>
 
                                             {/* Path */}
                                             <td className="px-4 py-3.5 max-w-xs">
-                                                <span className="text-xs font-mono text-base-content/60 block truncate" title={folder.path}>
+                                                <span className="text-xs font-mono text-base-content/80 block truncate" title={folder.path}>
                                                     {truncate(folder.path, 40)}
                                                 </span>
                                             </td>
 
                                             {/* Added */}
                                             <td className="px-4 py-3.5 hidden md:table-cell">
-                                                <span className="text-xs text-base-content/50">{fmtDate(folder.addedAt)}</span>
+                                                <span className="text-xs text-base-content/85">{fmtDate(folder.addedAt)}</span>
                                             </td>
 
                                             {/* Actions */}
@@ -634,19 +649,19 @@ export default function MyLibrary() {
                                                         icon={<Eye size={13} />}
                                                         label="View"
                                                         onClick={() => setViewFolder(folder)}
-                                                        className="text-base-content/50 hover:text-base-content hover:bg-white/8"
+                                                        className="text-base-content/85 hover:text-base-content hover:bg-base-300"
                                                     />
                                                     <ActionBtn
                                                         icon={<SquarePen size={13} />}
                                                         label="Edit"
                                                         onClick={() => openEdit(folder)}
-                                                        className="text-base-content/50 hover:text-primary hover:bg-primary/10"
+                                                        className="text-base-content/85 hover:text-primary hover:bg-primary/10"
                                                     />
                                                     <ActionBtn
                                                         icon={<Trash2 size={13} />}
                                                         label="Delete"
                                                         onClick={() => setDeleteFolder(folder)}
-                                                        className="text-base-content/50 hover:text-error hover:bg-error/10"
+                                                        className="text-base-content/85 hover:text-error hover:bg-error/10"
                                                     />
                                                 </div>
                                             </td>
@@ -694,21 +709,21 @@ function ActionBtn({ icon, label, onClick, className }) {
 function EmptyState({ search, onAdd, onClear }) {
     return (
         <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-            <div className="w-14 h-14 rounded-full bg-base-300/60 flex items-center justify-center mb-4">
+            <div className="w-14 h-14 rounded-full bg-base-300 flex items-center justify-center mb-4">
                 <FolderOpen size={24} className="text-base-content/25" />
             </div>
             {search ? (
                 <>
                     <h3 className="text-base font-semibold text-base-content mb-1">No libraries match</h3>
-                    <p className="text-sm text-base-content/50 mb-4">Try a different search term</p>
-                    <button onClick={onClear} className="px-3 py-1.5 rounded-md text-sm font-medium bg-base-300 hover:bg-base-300/70 text-base-content transition-colors">
+                    <p className="text-sm text-base-content/85 mb-4">Try a different search term</p>
+                    <button onClick={onClear} className="px-3 py-1.5 rounded-md text-sm font-medium bg-base-300 hover:bg-base-100 text-base-content transition-colors">
                         Clear Search
                     </button>
                 </>
             ) : (
                 <>
                     <h3 className="text-base font-semibold text-base-content mb-1">No libraries yet</h3>
-                    <p className="text-sm text-base-content/50 mb-4">Add a folder to start scanning media</p>
+                    <p className="text-sm text-base-content/85 mb-4">Add a folder to start scanning media</p>
                     <button
                         onClick={onAdd}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-primary hover:bg-primary/80 text-primary-content transition-colors cursor-pointer">

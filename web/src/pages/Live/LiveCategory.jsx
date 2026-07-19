@@ -6,6 +6,17 @@ import LiveCard from "../../Components/LiveCard";
 import { getLiveChannels, getLiveCategories, getFeaturedEvents } from "../../api/live";
 import { useAuth } from "../../auth/useAuth";
 
+// Same Settings → Live tab pref Live.jsx reads — "flux-prefs" localStorage key.
+function getLiveChannelMode() {
+    try {
+        const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+        // Default "active" — same default as Live.jsx/LiveSection.jsx.
+        return prefs.liveChannelMode === "all" ? "all" : "active";
+    } catch {
+        return "active";
+    }
+}
+
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_LIMIT = 30;
 
@@ -258,6 +269,16 @@ export default function LiveCategory() {
     const [viewMode, setViewMode] = useState("grid"); // grid | list
     const filterPanelRef = useRef(null);
 
+    // Same reactive toggle as Live.jsx — All Channel vs Active Only.
+    const [channelMode, setChannelMode] = useState(getLiveChannelMode);
+    function changeChannelMode(next) {
+        setChannelMode(next);
+        try {
+            const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+            localStorage.setItem("flux-prefs", JSON.stringify({ ...prefs, liveChannelMode: next }));
+        } catch {}
+    }
+
     useEffect(() => {
         function onOutside(e) {
             if (filterPanelRef.current && !filterPanelRef.current.contains(e.target)) setFiltersOpen(false);
@@ -270,12 +291,12 @@ export default function LiveCategory() {
     const [pages, setPages] = useState([1]); // accumulated page numbers fetched
     const sentinelRef = useRef(null);
 
-    // Reset pagination whenever query/sort/filters change
+    // Reset pagination whenever query/sort/filters/channel-mode change
     useEffect(() => {
         setPages([1]);
-    }, [q, sort, filters, categoryValue]);
+    }, [q, sort, filters, categoryValue, channelMode]);
 
-    const queryKeyBase = ["live", "category-channels", categoryValue, { q, sort, filters }];
+    const queryKeyBase = ["live", "category-channels", categoryValue, { q, sort, filters, channelMode }];
 
     // Fetch all accumulated pages — react-query caches each page key individually,
     // we just read them all and concatenate for render. Backend still does the
@@ -297,6 +318,7 @@ export default function LiveCategory() {
                     country: filters.country || undefined,
                     language: filters.language || undefined,
                     quality: filters.quality || undefined,
+                    all: channelMode === "all",
                 }),
             enabled,
             staleTime: 30 * 1000,
@@ -401,6 +423,22 @@ export default function LiveCategory() {
                             <X size={13} />
                         </button>
                     )}
+                </div>
+
+                {/* All Channel / Active Only */}
+                <div className="inline-flex items-center rounded-md border border-base-content/10 bg-base-300 p-0.5 shrink-0">
+                    {[
+                        { v: "active", l: "Active Only" },
+                        { v: "all", l: "All Channel" },
+                    ].map((o) => (
+                        <button
+                            key={o.v}
+                            onClick={() => changeChannelMode(o.v)}
+                            className={`px-3 py-1.5 rounded text-xs font-semibold transition-colors border-none cursor-pointer
+                                ${channelMode === o.v ? "bg-primary text-primary-content" : "bg-transparent text-base-content/50 hover:text-base-content/80"}`}>
+                            {o.l}
+                        </button>
+                    ))}
                 </div>
 
                 {/* Sort */}

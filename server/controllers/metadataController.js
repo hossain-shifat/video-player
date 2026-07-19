@@ -4,7 +4,24 @@ const { readFolders } = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
 const { getMetadata, getCached, invalidate, invalidateAll } = require("../utils/metadataStore");
 const { parseFilename } = require("../utils/nameParser");
-const { getMediaInfo, invalidate: invalidateMediaInfo } = require("../utils/mediaInfoStore");
+const { getMediaInfo: _getMediaInfoRaw, invalidate: invalidateMediaInfo } = require("../utils/mediaInfoStore");
+
+// ── NEW: mediaInfo (ffprobe) failure must never take down metadata ─────────
+// getOne()/refreshOne() below await getMetadata() and getMediaInfo() together
+// in Promise.all. If ffprobe is missing/misconfigured, or a file is
+// unreadable, _getMediaInfoRaw() can reject — and Promise.all fails the
+// WHOLE request on that one rejection, even though TMDB metadata had
+// already succeeded. That's the "metadata not loaded" symptom. This wraps
+// the raw import so a probe failure degrades to mediaInfo: null instead of
+// failing the endpoint. mediaInfoStore.js itself is untouched.
+async function getMediaInfo(file) {
+    try {
+        return await _getMediaInfoRaw(file);
+    } catch (err) {
+        console.error(`[MediaInfo] probe failed for "${file.name}", continuing without it:`, err.message);
+        return null;
+    }
+}
 
 // GET /api/metadata/:id — returns metadata + mediaInfo for one file, fetching TMDB/ffprobe if needed
 async function getOne(req, res) {

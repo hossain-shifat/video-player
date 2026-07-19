@@ -593,6 +593,83 @@ async function lookupMetadata(parsed) {
     return null;
 }
 
+// ============================================================================
+// ─── NEW: Release-date backfill patch layer ─────────────────────────────────
+// Problem: some TMDB records have no release_date / first_air_date on the
+// main endpoint (common for newer/regional/streaming-only titles). When that
+// happens `releaseDate`/`firstAirDate`/`year` all come back null, which makes
+// it look like metadata "didn't load" even though everything else (poster,
+// overview, cast, etc.) fetched fine. This wraps the existing functions —
+// none of their internal logic is touched — and fills the gap from
+// alternate TMDB endpoints, falling back to the parsed filename year as a
+// last resort.
+// ============================================================================
+
+// Earliest dated release across all countries from /movie/:id/release_dates
+async function _fetchFallbackMovieReleaseDate(tmdbId) {
+    const data = await tmdbFetchSafe(`/movie/${tmdbId}/release_dates`);
+    const allDates = (data?.results || [])
+        .flatMap((r) => r.release_dates || [])
+        .map((d) => d.release_date)
+        .filter(Boolean)
+        .sort();
+    return allDates[0] ? allDates[0].slice(0, 10) : null;
+}
+
+// Earliest season air_date, falling back to last_air_date, from /tv/:id
+async function _fetchFallbackTVReleaseDate(tmdbId) {
+    const data = await tmdbFetchSafe(`/tv/${tmdbId}`);
+    if (!data) return null;
+    const seasonDates = (data.seasons || [])
+        .map((s) => s.air_date)
+        .filter(Boolean)
+        .sort();
+    return seasonDates[0] || data.last_air_date || null;
+}
+
+const _origGetMovieDetails = getMovieDetails;
+getMovieDetails = async function (tmdbId) {
+    const result = await _origGetMovieDetails(tmdbId);
+    if (result && !result.releaseDate) {
+        const fallbackDate = await _fetchFallbackMovieReleaseDate(tmdbId);
+        if (fallbackDate) {
+            result.releaseDate = fallbackDate;
+            result.year = parseInt(fallbackDate.slice(0, 4), 10);
+        }
+    }
+    return result;
+};
+
+const _origGetTVDetails = getTVDetails;
+getTVDetails = async function (tmdbId) {
+    const result = await _origGetTVDetails(tmdbId);
+    if (result && !result.firstAirDate) {
+        const fallbackDate = await _fetchFallbackTVReleaseDate(tmdbId);
+        if (fallbackDate) {
+            result.firstAirDate = fallbackDate;
+            result.year = parseInt(fallbackDate.slice(0, 4), 10);
+        }
+    }
+    return result;
+};
+
+// Last resort: if TMDB has no date anywhere but the filename itself had a
+// parsed year, use that so the UI never shows a completely empty year.
+const _origLookupMetadata = lookupMetadata;
+lookupMetadata = async function (parsed) {
+    const result = await _origLookupMetadata(parsed);
+    if (result && !result.year && parsed && parsed.year) {
+        result.year = parsed.year;
+        if (result.type === "movie" && !result.releaseDate) {
+            result.releaseDate = `${parsed.year}-01-01`;
+        }
+        if ((result.type === "series" || result.type === "anime") && !result.firstAirDate) {
+            result.firstAirDate = `${parsed.year}-01-01`;
+        }
+    }
+    return result;
+};
+
 module.exports = {
     lookupMetadata,
     searchMovie,

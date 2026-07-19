@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router";
-import { Users, ChevronLeft, ChevronRight, X, Calendar, MapPin, Star, Film, Tv, Globe, TrendingUp, Heart, Eye, MoreVertical, Bookmark, List, CheckCircle, Play, ExternalLink } from "lucide-react";
+import { Users, ChevronLeft, ChevronRight, X, Calendar, MapPin, Star, Film, Tv, TrendingUp, Heart, Eye, MoreVertical, Bookmark, List, CheckCircle, Play, ExternalLink } from "lucide-react";
 import { useApi } from "../Context/apiContext";
 import { getMediaById } from "../api";
 
@@ -284,26 +284,13 @@ function LibraryMediaCard({ item, onClose }) {
     );
 }
 
-// ─── Fact row — small icon + label pair used in Overview tab ─────────────────
-function FactRow({ icon: Icon, children }) {
+// ─── Fact chip — compact icon+value pill used in the header stat strip ───────
+function FactChip({ icon: Icon, muted, children }) {
     return (
-        <div className="flex items-start gap-2.5 py-1.5">
-            <Icon size={13} style={{ color: "var(--color-primary)" }} className="shrink-0 mt-0.5" />
-            <div className="text-[12.5px] text-white/75 leading-snug min-w-0">{children}</div>
+        <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${muted ? "border-white/5" : "border-white/8"}`} style={{ background: "rgba(255,255,255,0.04)" }}>
+            <Icon size={12} className="shrink-0" style={{ color: muted ? "rgba(255,255,255,0.35)" : "var(--color-primary)" }} />
+            <span className={`text-[12px] font-medium leading-none whitespace-nowrap ${muted ? "text-white/45" : "text-white/82"}`}>{children}</span>
         </div>
-    );
-}
-
-// ─── Tab button ────────────────────────────────────────────────────────────────
-function TabButton({ active, onClick, children }) {
-    return (
-        <button
-            onClick={onClick}
-            className={`relative px-3.5 sm:px-4 py-2.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors cursor-pointer
-                        ${active ? "text-white" : "text-white/45 hover:text-white/75"}`}>
-            {children}
-            {active && <span className="absolute left-3 right-3 -bottom-px h-[2px] rounded-full" style={{ background: "var(--color-primary)" }} />}
-        </button>
     );
 }
 
@@ -360,211 +347,171 @@ function PersonModal({ member, currentMediaId, movies, series, anime, onClose })
     };
 
     const photo = member.photo || (bio?.profile_path ? `${IMG_BASE}/w400${bio.profile_path}` : null);
-    const backdropPhoto = member.photo || (bio?.profile_path ? `${IMG_BASE}/w780${bio.profile_path}` : null);
     const age = bio ? calcAge(bio.birthday, bio.deathday) : null;
     const biographyText = bio?.biography || "";
     const noScrollbar = { scrollbarWidth: "none", msOverflowStyle: "none" };
-
-    // Single quick-fact line — icon + value, used in the sidebar
-    const FactRow = ({ icon: Icon, muted, children }) => (
-        <div className="flex items-start gap-2.5 py-1.5">
-            <Icon size={13} className="shrink-0 mt-0.5" style={{ color: muted ? "rgba(255,255,255,0.3)" : "var(--color-primary)" }} />
-            <span className={`text-[12px] leading-snug ${muted ? "text-white/45" : "text-white/75"}`}>{children}</span>
-        </div>
-    );
 
     const modal = (
         <div
             ref={overlayRef}
             onClick={handleOverlayClick}
             className="fixed inset-0 flex items-center justify-center p-3 sm:p-4"
-            style={{ zIndex: 99998, backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
+            style={{ zIndex: 99998, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
             <div
                 role="dialog"
                 aria-modal="true"
                 aria-label={member.name}
-                className="relative w-full max-w-lg sm:max-w-2xl lg:max-w-4xl rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-                style={{
-                    background: "oklch(14% 0.01 260 / 0.97)",
-                    border: "1px solid rgba(255,255,255,0.10)",
-                    height: "min(88dvh, 720px)",
-                    maxHeight: "92dvh",
-                    zIndex: 99999,
-                }}>
+                className="relative w-full max-w-xl sm:max-w-2xl rounded-2xl shadow-2xl flex flex-col overflow-hidden bg-base-100 border border-white/10"
+                style={{ height: "min(86dvh, 680px)", maxHeight: "92dvh", zIndex: 99999 }}>
+                {/* ── Header: photo + identity, inline masthead style ──────────── */}
+                <header className="relative shrink-0 flex items-start gap-4 p-5 pr-14 border-b border-white/8 bg-base-200/60">
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl overflow-hidden shrink-0 ring-2 ring-white/10 bg-base-300">
+                        {photo && !imgErr ? (
+                            <img src={photo} alt={member.name} className="w-full h-full object-cover" onError={() => setImgErr(true)} />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                                <Users size={26} className="text-white/25" />
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="min-w-0 pt-0.5">
+                        <h3 className="text-lg sm:text-xl font-bold text-white leading-tight tracking-tight truncate">{member.name}</h3>
+
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                            {member.character && (
+                                <span
+                                    className="text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-md"
+                                    style={{
+                                        background: "color-mix(in oklch, var(--color-primary) 18%, transparent)",
+                                        color: "var(--color-primary)",
+                                        border: "1px solid color-mix(in oklch, var(--color-primary) 35%, transparent)",
+                                    }}>
+                                    as {member.character}
+                                </span>
+                            )}
+                            {member.job && (
+                                <span
+                                    className="text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-md text-white/70"
+                                    style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.10)" }}>
+                                    {member.job}
+                                </span>
+                            )}
+                            {!loadingBio && bio?.known_for_department && (
+                                <span className="text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-md text-white/50" style={{ background: "rgba(255,255,255,0.05)" }}>
+                                    {bio.known_for_department}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </header>
+
                 {/* Close */}
                 <button
                     onClick={onClose}
-                    className="absolute top-3 right-3 z-30 w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-white/15 cursor-pointer"
-                    style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)" }}
+                    className="absolute top-4 right-4 z-30 w-9 h-9 rounded-full flex items-center justify-center transition-all hover:bg-white/15 active:scale-95 cursor-pointer"
+                    style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.08)" }}
                     aria-label="Close">
-                    <X size={15} className="text-white/90" />
+                    <X size={16} className="text-white/90" />
                 </button>
 
-                {/*
-                 * Body layout:
-                 *  - mobile/tablet (<lg): one column, whole panel scrolls together
-                 *  - desktop (lg+): fixed-height split view — identity sidebar and
-                 *    biography/filmography each scroll independently, so the modal
-                 *    itself never has to grow past its clamped height.
-                 */}
-                <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden lg:grid lg:grid-cols-[280px_1fr]" style={noScrollbar}>
-                    {/* ── Sidebar: photo, name, quick facts ── */}
-                    <aside className="relative shrink-0 border-b lg:border-b-0 lg:border-r border-white/10 lg:h-full lg:overflow-y-auto" style={noScrollbar}>
-                        {/* Banner */}
-                        {/* <div className="relative h-24 sm:h-28">
-                            {backdropPhoto && !imgErr ? (
-                                <img src={backdropPhoto} alt="" className="w-full h-full object-cover" style={{ filter: "blur(20px) brightness(0.35)", transform: "scale(1.15)" }} />
-                            ) : (
-                                <div className="w-full h-full" style={{ background: "linear-gradient(135deg, oklch(22% 0.05 260), oklch(12% 0.02 260))" }} />
-                            )}
-                            <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom, transparent, oklch(14% 0.01 260 / 0.92))" }} />
-                        </div> */}
-
-                        <div className="px-5 mt-12 sm:mt-14 pb-5 flex flex-col items-center text-center">
-                            {/* Photo */}
-                            <div
-                                className="w-50 md:w-60 h-70 sm:w-28 rounded-2xl overflow-hidden shadow-2xl"
-                                style={{ aspectRatio: "2/3", boxShadow: "0 0 0 4px oklch(14% 0.01 260), 0 12px 28px rgba(0,0,0,0.55)" }}>
-                                {photo && !imgErr ? (
-                                    <img src={photo} alt={member.name} className="w-full h-full object-cover" onError={() => setImgErr(true)} />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center" style={{ background: "oklch(20% 0.02 260)" }}>
-                                        <Users size={28} className="text-white/20" />
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Name */}
-                            <h3 className="text-base sm:text-lg font-bold text-white leading-tight mt-3">{member.name}</h3>
-
-                            {/* Role badges */}
-                            <div className="flex flex-wrap justify-center gap-1.5 mt-2">
-                                {member.character && (
-                                    <span
-                                        className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full"
-                                        style={{
-                                            background: "color-mix(in oklch, var(--color-primary) 20%, transparent)",
-                                            color: "var(--color-primary)",
-                                            border: "1px solid color-mix(in oklch, var(--color-primary) 35%, transparent)",
-                                        }}>
-                                        as {member.character}
-                                    </span>
-                                )}
-                                {member.job && (
-                                    <span
-                                        className="text-[10px] font-medium px-2.5 py-0.5 rounded-full text-white/70"
-                                        style={{ background: "rgba(255,255,255,0.10)", border: "1px solid rgba(255,255,255,0.12)" }}>
-                                        {member.job}
-                                    </span>
-                                )}
-                            </div>
-
-                            {/* Quick facts */}
-                            <div className="w-full mt-4 pt-4 text-left" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-                                {loadingBio && (
-                                    <div className="space-y-2.5">
-                                        {[0.8, 0.6, 0.7].map((w, i) => (
-                                            <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
-                                        ))}
-                                    </div>
-                                )}
-
-                                {!loadingBio && bio && (
-                                    <div>
-                                        {bio.known_for_department && <FactRow icon={Star}>{bio.known_for_department}</FactRow>}
-                                        {bio.gender > 0 && <FactRow icon={Users}>{genderLabel(bio.gender)}</FactRow>}
-                                        {bio.birthday && (
-                                            <FactRow icon={Calendar}>
-                                                {formatDate(bio.birthday)}
-                                                {age !== null && <span className="text-white/45"> · {bio.deathday ? `died at ${age}` : `${age} yrs old`}</span>}
-                                            </FactRow>
-                                        )}
-                                        {bio.deathday && (
-                                            <FactRow icon={Calendar} muted>
-                                                Died {formatDate(bio.deathday)}
-                                            </FactRow>
-                                        )}
-                                        {bio.place_of_birth && <FactRow icon={MapPin}>{bio.place_of_birth}</FactRow>}
-                                        {bio.popularity != null && (
-                                            <FactRow icon={TrendingUp}>
-                                                Popularity <span className="text-white/90 font-medium">{bio.popularity.toFixed(1)}</span>
-                                            </FactRow>
-                                        )}
-                                        {bio.homepage && (
-                                            <FactRow icon={Globe}>
-                                                <a
-                                                    href={bio.homepage}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-white/90 transition-colors">
-                                                    Official site <ExternalLink size={9} />
-                                                </a>
-                                            </FactRow>
-                                        )}
-                                    </div>
-                                )}
-
-                                {!loadingBio && bio?.also_known_as?.length > 0 && (
-                                    <div className="mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-white/30 mb-1">Also known as</p>
-                                        <p className="text-[11px] text-white/50 leading-relaxed line-clamp-3">{bio.also_known_as.slice(0, 5).join(" · ")}</p>
-                                    </div>
-                                )}
-
-                                {!loadingBio && !bio && <p className="text-[12px] text-white/35 italic">No details available</p>}
-                            </div>
-                        </div>
-                    </aside>
-
-                    {/* ── Main: biography + filmography ── */}
-                    <main className="lg:h-full lg:overflow-y-auto" style={noScrollbar}>
-                        {/* Biography */}
-                        {(loadingBio || biographyText) && (
-                            <div className="px-5 py-5">
-                                <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-2">Biography</p>
-                                {loadingBio ? (
-                                    <div className="space-y-2">
-                                        {[1, 0.9, 1, 0.7, 0.85].map((w, i) => (
-                                            <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="relative">
-                                        <div className={`text-[12.5px] sm:text-[13px] text-white/75 leading-relaxed ${!bioExpanded ? "line-clamp-5 overflow-hidden" : ""}`}>{biographyText}</div>
-                                        {biographyText.length > 260 && (
-                                            <button onClick={() => setBioExpanded(!bioExpanded)} className="text-[11px] font-semibold text-primary hover:text-primary/80 mt-1.5 cursor-pointer">
-                                                {bioExpanded ? "Show less" : "Read more"}
-                                            </button>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* Filmography — everything else this person appears in, from the local library */}
-                        {libraryItems.length > 0 && (
-                            <>
-                                <div className="mx-5 h-px" style={{ background: "rgba(255,255,255,0.07)" }} />
-                                <div className="px-5 py-5">
-                                    <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35 mb-3">
-                                        In your library <span className="text-white/20">· {libraryItems.length}</span>
-                                    </p>
-                                    <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))" }}>
-                                        {libraryItems.map((libItem) => (
-                                            <LibraryMediaCard key={libItem.id} item={libItem} onClose={onClose} />
-                                        ))}
-                                    </div>
+                {/* ── Scrollable body: fact strip, biography, filmography ──────── */}
+                <div className="flex-1 min-h-0 overflow-y-auto" style={noScrollbar}>
+                    {/* Fact strip */}
+                    {(loadingBio || bio) && (
+                        <div className="px-5 py-4 border-b border-white/8">
+                            {loadingBio ? (
+                                <div className="flex gap-2">
+                                    {[70, 90, 60].map((w, i) => (
+                                        <div key={i} className="h-7 rounded-lg animate-pulse" style={{ width: w, background: "rgba(255,255,255,0.06)" }} />
+                                    ))}
                                 </div>
-                            </>
-                        )}
+                            ) : (
+                                <div className="flex flex-wrap gap-2">
+                                    {bio.gender > 0 && <FactChip icon={Users}>{genderLabel(bio.gender)}</FactChip>}
+                                    {bio.birthday && (
+                                        <FactChip icon={Calendar}>
+                                            {formatDate(bio.birthday)}
+                                            {age !== null && ` · ${bio.deathday ? `died at ${age}` : `${age} yrs`}`}
+                                        </FactChip>
+                                    )}
+                                    {bio.deathday && (
+                                        <FactChip icon={Calendar} muted>
+                                            Died {formatDate(bio.deathday)}
+                                        </FactChip>
+                                    )}
+                                    {bio.place_of_birth && <FactChip icon={MapPin}>{bio.place_of_birth}</FactChip>}
+                                    {bio.popularity != null && <FactChip icon={TrendingUp}>{bio.popularity.toFixed(1)} popularity</FactChip>}
+                                    {bio.homepage && (
+                                        <a href={bio.homepage} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex">
+                                            <FactChip icon={ExternalLink}>Official site</FactChip>
+                                        </a>
+                                    )}
+                                </div>
+                            )}
+                            {!loadingBio && bio?.also_known_as?.length > 0 && (
+                                <p className="text-[11px] text-white/40 leading-relaxed line-clamp-2 mt-2.5">
+                                    <span className="font-semibold text-white/50">Also known as</span> · {bio.also_known_as.slice(0, 5).join(" · ")}
+                                </p>
+                            )}
+                        </div>
+                    )}
 
-                        {!loadingBio && libraryItems.length === 0 && (
-                            <div className="px-5 pb-5">
-                                <p className="text-[12px] text-white/30 italic">Nothing else by {member.name.split(" ")[0]} in your library yet.</p>
+                    {/* Biography */}
+                    {(loadingBio || biographyText) && (
+                        <div className="px-5 py-5">
+                            <p className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-2.5 flex items-center gap-2">
+                                <span className="w-1 h-3.5 rounded-full bg-primary shrink-0" />
+                                Biography
+                            </p>
+                            {loadingBio ? (
+                                <div className="space-y-2">
+                                    {[1, 0.9, 1, 0.7, 0.85].map((w, i) => (
+                                        <div key={i} className="h-2.5 rounded animate-pulse" style={{ width: `${w * 100}%`, background: "rgba(255,255,255,0.08)" }} />
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="relative">
+                                    <div className={`text-[13px] text-white/78 leading-relaxed ${!bioExpanded ? "line-clamp-5 overflow-hidden" : ""}`}>{biographyText}</div>
+                                    {biographyText.length > 260 && (
+                                        <button onClick={() => setBioExpanded(!bioExpanded)} className="text-[11px] font-bold text-primary hover:text-primary/80 mt-1.5 cursor-pointer">
+                                            {bioExpanded ? "Show less" : "Read more"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {!loadingBio && !bio && !biographyText && (
+                        <div className="px-5 py-5">
+                            <p className="text-[12px] text-white/35 italic">No biography details available.</p>
+                        </div>
+                    )}
+
+                    {/* Filmography — everything else this person appears in, from the local library */}
+                    {libraryItems.length > 0 && (
+                        <>
+                            <div className="border-t border-white/8" />
+                            <div className="px-5 py-5">
+                                <p className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-3 flex items-center gap-2">
+                                    <span className="w-1 h-3.5 rounded-full bg-primary shrink-0" />
+                                    In your library <span className="text-white/25 normal-case font-medium tracking-normal">({libraryItems.length})</span>
+                                </p>
+                                <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))" }}>
+                                    {libraryItems.map((libItem) => (
+                                        <LibraryMediaCard key={libItem.id} item={libItem} onClose={onClose} />
+                                    ))}
+                                </div>
                             </div>
-                        )}
-                    </main>
+                        </>
+                    )}
+
+                    {!loadingBio && libraryItems.length === 0 && (
+                        <div className="px-5 pb-5">
+                            <p className="text-[12px] text-white/30 italic">Nothing else by {member.name.split(" ")[0]} in your library yet.</p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

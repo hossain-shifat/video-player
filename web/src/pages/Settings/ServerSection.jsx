@@ -17,7 +17,7 @@ function safeLabel(url) {
 
 export default function ServerSection({ prefs, setPref }) {
     const serverUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
-    const [ping, setPing] = useState(null); // null | "checking" | "ok" | "error"
+    const [ping, setPing] = useState(null);
 
     async function doPing() {
         setPing("checking");
@@ -37,25 +37,25 @@ export default function ServerSection({ prefs, setPref }) {
                 <Card>
                     <div className="flex items-center justify-between gap-6 px-5 py-5">
                         <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-success/15 flex items-center justify-center shrink-0">
+                            <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center shrink-0">
                                 <Wifi size={17} className="text-success" />
                             </div>
                             <div className="min-w-0">
-                                <p className="text-[14px] font-semibold text-white/95 leading-tight">Media server</p>
-                                <p className="text-[12px] text-white/60 mt-0.5 truncate">{safeLabel(serverUrl)}</p>
+                                <p className="text-[14px] font-semibold text-white leading-tight">Media server</p>
+                                <p className="text-[12px] text-white/85 mt-0.5 truncate">{safeLabel(serverUrl)}</p>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                             {ping === "ok" && <CheckCircle size={14} className="text-success" />}
                             {ping === "error" && <WifiOff size={14} className="text-error" />}
-                            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-success bg-success/15 px-2.5 py-1 rounded-full border border-success/30">
+                            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-success bg-success/20 px-2.5 py-1 rounded-full border border-success/40">
                                 <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" /> Online
                             </span>
                             <button
                                 onClick={doPing}
                                 disabled={ping === "checking"}
                                 style={{ outline: "none" }}
-                                className="text-[11px] text-white font-semibold px-3 py-1.5 rounded-lg hover:bg-white/[0.08] border border-white/[0.12] hover:border-white/25 transition-all disabled:opacity-40">
+                                className="text-[11px] text-white font-semibold px-3 py-1.5 rounded-lg hover:bg-white/[0.12] border border-white/[0.18] hover:border-white/30 transition-all disabled:opacity-40">
                                 {ping === "checking" ? "Pinging…" : "Ping"}
                             </button>
                         </div>

@@ -795,14 +795,20 @@ export default function PlayerGestures({ videoRef, containerRef, overlayTriggers
     }, [containerRef, handleTouchStart, handleTouchEnd, handleTouchMove]);
 
     // ── Expose APIs to container ref ──────────────────────────────────────────
+    // FIX: was also assigning _toggleFullscreen/_togglePiP here — but both
+    // LivePlayerPage.jsx and PlayerPage.jsx already assign those exact same
+    // properties on this same containerRef themselves (their own page-level
+    // implementations), and since parent effects run AFTER child effects on
+    // mount, the page's version always won anyway, making this assignment
+    // dead code that just made "which implementation actually runs" unclear.
+    // _cycleSpeed/_resetZoom have no page-level equivalent — only this
+    // component provides them — so those stay.
     useEffect(() => {
         if (containerRef.current) {
-            containerRef.current._toggleFullscreen = toggleFullscreen;
-            containerRef.current._togglePiP = togglePiP;
             containerRef.current._cycleSpeed = cycleSpeed;
             containerRef.current._resetZoom = resetZoom;
         }
-    }, [containerRef, toggleFullscreen, togglePiP, cycleSpeed, resetZoom]);
+    }, [containerRef, cycleSpeed, resetZoom]);
 
     return null;
 }

@@ -204,6 +204,18 @@ async function resolveFileById(id) {
     return mediaCache.findById(folders, id);
 }
 
+// True when filePart (e.g. "2/index00042.ts" or "2/index.m3u8") sits inside
+// ANY of the session's video-variant subdirectories. For a normal session
+// that's just session.videoVariantIndex; for a multi-quality ABR session
+// (session.isMultiQualityPath) it's every tier's %v dir in
+// session.videoVariantIndices. Falls back to the single videoVariantIndex
+// if videoVariantIndices is ever missing (older in-memory session shape),
+// so this can't regress a session created before this field existed.
+function isVideoVariantPath(session, filePart) {
+    const indices = Array.isArray(session.videoVariantIndices) && session.videoVariantIndices.length ? session.videoVariantIndices : [session.videoVariantIndex];
+    return indices.some((idx) => filePart.startsWith(`${idx}${path.sep}`) || filePart.startsWith(`${idx}/`));
+}
+
 function parseClientCaps(query) {
     return {
         maxHeight: parseInt(query.maxHeight || "1080") || 1080,
@@ -348,6 +360,15 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
         // switching is just an HLS.js audioTrack index change, no new
         // request to this server, no session restart.
         audioTracks: session.isMultiAudioPath ? buildAudioTrackList(mediaInfo) : [],
+        // Multi-quality (ABR): only populated when ENABLE_MULTI_QUALITY is on
+        // and this session's master.m3u8 actually carries multiple video
+        // renditions (session.isMultiQualityPath). Empty array otherwise —
+        // same shape/behavior as before this feature existed. The player
+        // does NOT need this list to switch quality (hls.js already parses
+        // RESOLUTION/BANDWIDTH straight from master.m3u8 into hls.levels),
+        // but it's handy for a picker that wants human labels up front
+        // without waiting on hls.js's manifest parse event.
+        qualities: session.isMultiQualityPath ? session.qualityLadder : [],
     });
 }
 
@@ -482,7 +503,7 @@ async function serveHLSFile(req, res) {
             }
             let content = await fsp.readFile(resolved, "utf-8");
 
-            const isVideoPlaylist = session.isMultiAudioPath && (filePart.startsWith(`${session.videoVariantIndex}${path.sep}`) || filePart.startsWith(`${session.videoVariantIndex}/`));
+            const isVideoPlaylist = session.isMultiAudioPath && isVideoVariantPath(session, filePart);
             const appliesSentinelPattern = !session.isMultiAudioPath || isVideoPlaylist;
 
             // FIX (Report-15): Solve the ENDLIST deadlock.
@@ -538,7 +559,7 @@ async function serveHLSFile(req, res) {
             // Gap-restart/seek logic only matters for the VIDEO variant — audio
             // segments are requested independently by HLS.js and aren't subject
             // to the same on-demand transcode-ahead pacing as video.
-            const isVideoSegment = !session.isMultiAudioPath || filePart.startsWith(`${session.videoVariantIndex}${path.sep}`) || filePart.startsWith(`${session.videoVariantIndex}/`);
+            const isVideoSegment = !session.isMultiAudioPath || isVideoVariantPath(session, filePart);
 
             if (!isVideoSegment) {
                 // Plain serve for audio-track segments — just wait for the file
@@ -566,9 +587,19 @@ async function serveHLSFile(req, res) {
                 return audioStream.pipe(res);
             }
 
+            // The variant dir actually being requested — for a normal/single-
+            // rendition session this is always session.videoDir, but for a
+            // multi-quality ABR session the client may be requesting any one
+            // of several video-tier dirs (whichever hls.currentLevel picked),
+            // so segment lookups below must use THIS dir, not always the
+            // primary tier's. path.dirname(resolved) is exactly the variant
+            // dir filePart pointed at (already validated by the path-traversal
+            // guard above).
+            const requestedVariantDir = path.dirname(resolved);
+
             // Jellyfin gap detection:
             // If requested segment is behind current OR too far ahead → restart
-            const currentIdx = await getCurrentSegmentIndex(session.videoDir);
+            const currentIdx = await getCurrentSegmentIndex(requestedVariantDir);
 
             let needsRestart = false;
             if (currentIdx === null) {
@@ -585,7 +616,7 @@ async function serveHLSFile(req, res) {
                     console.log(`[Stream] Forward gap ${gap} > ${SEGMENT_GAP_RESTART} for seg${requestedSeg} — restart`);
                 } else if (gap < 0) {
                     // Segment behind current transcode — check if still on disk
-                    const segFileCheck = makeSegPath(session.videoDir, requestedSeg);
+                    const segFileCheck = makeSegPath(requestedVariantDir, requestedSeg);
                     if (!fs.existsSync(segFileCheck)) {
                         needsRestart = true;
                         console.log(`[Stream] Seg${requestedSeg} deleted by cleanup (currentIdx=${currentIdx}) — restart`);
@@ -595,7 +626,7 @@ async function serveHLSFile(req, res) {
                     // caused HLS.js to request this segment. It doesn't exist yet on disk →
                     // restart FFmpeg from this segment. This is the gap detection trigger
                     // for the ENDLIST-sentinel pattern used in the m3u8 serve block.
-                    const segFileCheck = makeSegPath(session.videoDir, requestedSeg);
+                    const segFileCheck = makeSegPath(requestedVariantDir, requestedSeg);
                     if (!fs.existsSync(segFileCheck)) {
                         needsRestart = true;
                         console.log(`[Stream] Session done, sentinel seg${requestedSeg} requested — restarting from seg${requestedSeg}`);
@@ -648,7 +679,7 @@ async function serveHLSFile(req, res) {
             session.downloadPositionSec = Math.max(session.downloadPositionSec || 0, segEndSec);
 
             // Wait for this specific segment to exist
-            const segFile = makeSegPath(session.videoDir, requestedSeg);
+            const segFile = makeSegPath(requestedVariantDir, requestedSeg);
             try {
                 await waitForSegment(segFile, 45_000);
             } catch {
@@ -721,6 +752,7 @@ async function startTranscode(req, res) {
             startSegment: startSeg,
             segmentDuration: SEGMENT_DURATION,
             audioTracks: session.isMultiAudioPath ? buildAudioTrackList(mediaInfo) : [],
+            qualities: session.isMultiQualityPath ? session.qualityLadder : [],
         });
     } catch (err) {
         console.error("[Stream] startTranscode error:", err);
