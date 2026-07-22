@@ -16,11 +16,15 @@ const {
     getCategoriesList,
     getChannelsFlat,
     checkStreamStatus,
+    startBulkCheck,
+    getBulkCheckStatus,
     refreshIptvOrgDb,
     getChannelState,
     getActiveChannels,
     markChannelActive,
     unmarkChannelActive,
+    updateActiveChannelDetails,
+    uploadActiveLogo,
     updateChannel,
     deleteChannel,
     restoreChannel,
@@ -56,6 +60,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } });
 
+// Separate multer instance for Active-tab logo uploads — memory storage
+// since we forward the raw buffer straight to imgbb, never touch disk.
+const logoUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        if (/^image\//.test(file.mimetype)) return cb(null, true);
+        cb(new Error("Only image files are allowed for a channel logo"));
+    },
+});
+
 // Source management — admin only (matches /api/admin-dashboard + /api/sysinfo pattern)
 const adminOnly = [authenticateJWT, requireApprovedUser, requireRole("admin")];
 
@@ -79,6 +94,14 @@ router.get("/channels/flat", ...adminOnly, getChannelsFlat); // GET /api/live/ch
 // Single stream health check — admin dashboard "Working Status" column
 router.get("/check", ...adminOnly, checkStreamStatus); // GET /api/live/check?url=...
 
+// Bulk stream health check — controller fns already existed but were never
+// routed, so the auto-detect-working-channel status data had no manual
+// trigger endpoint either. Also now auto-runs after every ingest + every
+// 30 min on a scheduler (see liveController.js), these are just for the
+// admin "recheck all" button / progress poll.
+router.post("/check/bulk", ...adminOnly, startBulkCheck); // POST /api/live/check/bulk
+router.get("/check/status", ...adminOnly, getBulkCheckStatus); // GET  /api/live/check/status
+
 // Force-refresh the iptv-org channels/logos/categories database
 router.post("/iptvorg/refresh", ...adminOnly, refreshIptvOrgDb); // POST /api/live/iptvorg/refresh
 
@@ -90,6 +113,11 @@ router.get("/channel-state", ...adminOnly, getChannelState); // GET    /api/live
 router.get("/channels/active", ...adminOnly, getActiveChannels); // GET    /api/live/channels/active
 router.post("/channels/:id/active", ...adminOnly, markChannelActive); // POST   /api/live/channels/:id/active   { ...channel }
 router.delete("/channels/:id/active", ...adminOnly, unmarkChannelActive); // DELETE /api/live/channels/:id/active
+
+// Active-tab full CRUD — writes ONLY to active_live.json, never live.json
+// or the Channels-tab overrides layer.
+router.patch("/active/:id", ...adminOnly, updateActiveChannelDetails); // PATCH /api/live/active/:id   { name?, logo?, category?, country?, group?, url?, ... }
+router.post("/active/:id/logo", ...adminOnly, logoUpload.single("logo"), uploadActiveLogo); // POST  /api/live/active/:id/logo   multipart "logo" → uploads to imgbb
 router.post("/channels/:id/restore", ...adminOnly, restoreChannel); // POST   /api/live/channels/:id/restore
 router.patch("/channels/:id", ...adminOnly, updateChannel); // PATCH  /api/live/channels/:id          { name?, category?, country? }
 router.delete("/channels/:id", ...adminOnly, deleteChannel); // DELETE /api/live/channels/:id
@@ -105,30 +133,3 @@ router.use((err, req, res, next) => {
 });
 
 module.exports = router;
-
-// ─── Sports Event Routes ───────────────────────────────────────────────────────
-// Appended — no existing routes modified.
-// Consumed by: epgController.js (sports handler section)
-
-const {
-    getSportsLive,
-    getSportsToday,
-    getSportsUpcoming,
-    getSportsEventById,
-    getSportsEventChannels,
-    getFeaturedEvents,
-    getSportsStatus,
-    triggerSportsRefresh,
-} = require("../controllers/epgController");
-
-// Any approved user can see events (same auth as /channels)
-const approvedUser = [authenticateJWT, requireApprovedUser];
-
-router.get("/featured-events", ...approvedUser, getFeaturedEvents); // GET /api/live/featured-events
-router.get("/events/live", ...approvedUser, getSportsLive); // GET /api/live/events/live
-router.get("/events/today", ...approvedUser, getSportsToday); // GET /api/live/events/today
-router.get("/events/upcoming", ...approvedUser, getSportsUpcoming); // GET /api/live/events/upcoming
-router.get("/events/:id/channels", ...approvedUser, getSportsEventChannels); // GET /api/live/events/:id/channels
-router.get("/events/:id", ...approvedUser, getSportsEventById); // GET /api/live/events/:id
-router.get("/sports/status", ...adminOnly, getSportsStatus); // GET /api/live/sports/status
-router.post("/sports/refresh", ...adminOnly, triggerSportsRefresh); // POST /api/live/sports/refresh?bucket=all|live|today|upcoming

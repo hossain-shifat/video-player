@@ -1,24 +1,18 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { NavLink, Link } from "react-router";
-import { Search as SearchIcon, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut, LogIn, Bell, LayoutDashboard } from "lucide-react";
+import { Search as SearchIcon, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut, LogIn, Bell, LayoutDashboard, Heart } from "lucide-react";
 import Logo from "./Logo";
 import Search from "./Search";
 import { useAuth } from "../auth/AuthContext";
 import { useAuthModal } from "../auth/AuthModalContext";
-
-const navLinks = [
-    { to: "/live", label: "Live TV" },
-    { to: "/movies", label: "Movies" },
-    { to: "/series", label: "Series" },
-    { to: "/library", label: "My Library" },
-];
+import { useApi } from "../Context/apiContext";
 
 const profileMenuItems = [
     { icon: User, label: "Profile", to: "/settings?tab=profile" },
     { icon: Users, label: "Friends", to: "/friends" },
     { icon: List, label: "My Watchlist", to: "/watchlist" },
-    { icon: Library, label: "My Media", to: "/my-media" },
-    { icon: FolderTree, label: "Folders", to: "/settings?tab=library" },
+    { icon: Library, label: "My Media", to: "/my-media", adminOnly: true },
+    { icon: FolderTree, label: "Folders", to: "/settings?tab=library", adminOnly: true },
     { icon: Layers, label: "Services", to: "/services" },
     { icon: ShieldCheck, label: "Privacy Settings", to: "/settings?tab=privacy" },
     { icon: Settings, label: "Settings", to: "/settings" },
@@ -48,6 +42,17 @@ const Navbar = () => {
 
     const { user, isAuthenticated, logout } = useAuth();
     const { openAuthModal } = useAuthModal();
+    const { movies, series, anime } = useApi();
+    const isAdmin = user?.role === "admin";
+
+    const navLinks = useMemo(() => {
+        const links = [{ to: "/live", label: "Live TV" }];
+        if (movies?.length > 0) links.push({ to: "/movies", label: "Movies" });
+        if (series?.length > 0) links.push({ to: "/series", label: "Series" });
+        if (anime?.length > 0) links.push({ to: "/anime", label: "Anime" });
+        if (isAdmin) links.push({ to: "/library", label: "My Library" });
+        return links;
+    }, [movies, series, anime, isAdmin]);
 
     useEffect(() => {
         function handleClickOutside(e) {
@@ -100,17 +105,17 @@ const Navbar = () => {
 
                 {/* Right side */}
                 <div className="flex items-center gap-1 ml-auto">
-                    {/* My Media — xl+ desktop */}
+                    {/* My Media / Favourites — xl+ desktop */}
                     <NavLink
-                        to="/my-media"
+                        to={isAdmin ? "/my-media" : "/favourites"}
                         className={({ isActive }) =>
                             [
                                 "hidden xl:flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md transition-colors duration-200",
                                 isActive ? "text-white" : "text-white/80 hover:text-white",
                             ].join(" ")
                         }>
-                        <BarChart2 size={15} />
-                        <span>My Media</span>
+                        {isAdmin ? <BarChart2 size={15} /> : <Heart size={15} />}
+                        <span>{isAdmin ? "My Media" : "Favourites"}</span>
                     </NavLink>
 
                     {/* Watchlist — desktop */}
@@ -198,8 +203,11 @@ const Navbar = () => {
                                     border: "1px solid oklch(100% 0 0 / 0.08)",
                                     boxShadow: "0 12px 40px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(100% 0 0 / 0.04)",
                                     animation: "dropdownIn 0.18s ease-out",
-                                    maxHeight: "calc(100vh - 80px)",
+                                    maxHeight: "calc(100dvh - 80px)",
                                     overflowY: "auto",
+                                    overscrollBehavior: "contain",
+                                    WebkitOverflowScrolling: "touch",
+                                    touchAction: "pan-y",
                                     scrollbarWidth: "none",
                                     msOverflowStyle: "none",
                                 }}>
@@ -292,26 +300,28 @@ const Navbar = () => {
                                 <div className="lg:hidden mx-3 mt-1 mb-0 h-px" style={{ background: "oklch(100% 0 0 / 0.07)" }} />
 
                                 <ul className="py-1">
-                                    {profileMenuItems.map(({ icon: Icon, label, to }) => (
-                                        <li key={to}>
-                                            <Link
-                                                to={to}
-                                                onClick={() => setProfileOpen(false)}
-                                                className="flex items-center gap-3 mx-1 px-3 py-2 rounded-lg text-sm transition-colors duration-150"
-                                                style={{ color: "oklch(70% 0.01 260)", outline: "none" }}
-                                                onMouseEnter={(e) => {
-                                                    e.currentTarget.style.color = "white";
-                                                    e.currentTarget.style.background = "oklch(100% 0 0 / 0.05)";
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                    e.currentTarget.style.color = "oklch(70% 0.01 260)";
-                                                    e.currentTarget.style.background = "transparent";
-                                                }}>
-                                                <Icon size={15} strokeWidth={1.8} className="shrink-0 opacity-70" />
-                                                <span>{label}</span>
-                                            </Link>
-                                        </li>
-                                    ))}
+                                    {profileMenuItems
+                                        .filter((item) => !item.adminOnly || isAdmin)
+                                        .map(({ icon: Icon, label, to }) => (
+                                            <li key={to}>
+                                                <Link
+                                                    to={to}
+                                                    onClick={() => setProfileOpen(false)}
+                                                    className="flex items-center gap-3 mx-1 px-3 py-2 rounded-lg text-sm transition-colors duration-150"
+                                                    style={{ color: "oklch(70% 0.01 260)", outline: "none" }}
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.color = "white";
+                                                        e.currentTarget.style.background = "oklch(100% 0 0 / 0.05)";
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.color = "oklch(70% 0.01 260)";
+                                                        e.currentTarget.style.background = "transparent";
+                                                    }}>
+                                                    <Icon size={15} strokeWidth={1.8} className="shrink-0 opacity-70" />
+                                                    <span>{label}</span>
+                                                </Link>
+                                            </li>
+                                        ))}
                                 </ul>
 
                                 <div className="mx-2 mb-2 mt-1">

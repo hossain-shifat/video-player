@@ -582,6 +582,18 @@ const _MULTI_SEASON_RE = /[Ss](\d{1,2})[-–][Ss](\d{1,2})\b/;
 // Only if no year/season found and episode ≤22
 const _COMPACT_SNE_RE = /(?:^|[\s.])([1-9])(\d{2})(?:[\s.]|$)/;
 
+// ── NEW v3: Bracketed multi-language list, e.g. "Dual[English-German]" ───────
+// PRE_NORMALIZE_STRIP nukes ALL [...] groups before language detection ever
+// runs, so a language list stuffed inside brackets was silently lost. This
+// re-reads the untouched original filename to recover it.
+const _BRACKET_LANG_GROUP_RE = /\[([A-Za-z]{2,}(?:[\s-]+[A-Za-z]{2,})+)\]/;
+
+// ── NEW v3: Website/domain dash-prefix leaking into extracted title ──────────
+// "MovieLinkBD.com - Dark.S01E01..." → extractSmartTitle only strips known
+// tokens (year/res/season/etc), so "MovieLinkBD com - " survives as a prefix
+// on adv.title (e.g. "MovieLinkBD com - Dark"). Strip it here.
+const _WEBSITE_DASH_TITLE_RE = /^([A-Za-z0-9]+)[\s.]+(com|net|org|co|io|tv|to|me|in|cc|is|nl|pw|link|site|xyz|info|biz|club|fun|live|pro|vip|us|ws)\s*-\s*(.+)$/i;
+
 const _origParseFilenameAdvanced = parseFilenameAdvanced;
 
 function parseFilenamePatched(filename) {
@@ -789,6 +801,41 @@ function parseFilenamePatched(filename) {
     }
     if (adv.episodeEnd === null && adv.episodes && adv.episodes.length > 1) {
         adv.episodeEnd = adv.episodes[adv.episodes.length - 1];
+    }
+
+    // ── STEP 18 (NEW): Recover bracketed language list lost pre-normalize ──
+    // "Dual[English-German]" → adv.languages was empty since the bracket
+    // never survives to extractLanguages(). Re-check the raw filename.
+    const bracketLangMatch = filename.match(_BRACKET_LANG_GROUP_RE);
+    if (bracketLangMatch) {
+        const words = bracketLangMatch[1].split(/[\s-]+/);
+        const recovered = new Set(adv.languages || []);
+        for (const w of words) {
+            const code = LANG_TAG_MAP[w.toLowerCase()];
+            if (code) recovered.add(code);
+        }
+        adv.languages = [...recovered];
+    }
+
+    // ── STEP 19 (NEW): Bare "Dual" + 2-language bracket → dualAudio ────────
+    // Original dualAudio detection only fires on the literal phrase
+    // "dual audio". "Dual[English-German]" (no "Audio" word) was missed.
+    if (!adv.dualAudio && !adv.multiAudio && adv.languages && adv.languages.length === 2 && /\bDual\b/i.test(filename)) {
+        adv.dualAudio = true;
+    }
+    if (adv.languages && adv.languages.length > 2 && /\b(Dual|Multi)\b/i.test(filename)) {
+        adv.multiAudio = true;
+        adv.dualAudio = false;
+    }
+
+    // ── STEP 20 (NEW): Website/domain dash-prefix leaking into title ───────
+    // "MovieLinkBD.com - Dark.S01E01..." → title ends up "MovieLinkBD com -
+    // Dark" after smart-title extraction. Strip the leading site tag.
+    if (adv.title) {
+        const siteDashMatch = adv.title.match(_WEBSITE_DASH_TITLE_RE);
+        if (siteDashMatch && siteDashMatch[3] && siteDashMatch[3].trim().length > 0) {
+            adv.title = siteDashMatch[3].trim();
+        }
     }
 
     return adv;

@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { useNavigate } from "react-router";
 import { getMedia } from "../../api/media";
-import { getHistory } from "../../api/history";
 import {
     Play,
     Pause,
@@ -66,6 +65,7 @@ import VideoSidebar, {
     MenuItem,
     DisabledRow,
     PlaylistPanel,
+    LiveChannelsPanel,
     QualityPicker,
     SpeedPicker,
     SubtitlePicker,
@@ -98,25 +98,29 @@ import { SpeedSliderOverlay } from "./PlayerOverlays";
  *   - useLibraryNav — computes play-next/play-previous targets + the data
  *     the Playlist panel needs; used directly by the skip buttons in this
  *     file, so it stays here rather than moving with PlaylistPanel itself.
- *   - IconBtn, AspectToggleButton, LoopIcon, VolumeControl, TimeDisplay,
+ *   - IconBtn, AspectToggleButton, LoopIcon, VolumeControl, SeekTimeRow,
  *     QuickIconRow — these ARE the visible control-bar elements themselves,
  *     not panel content, so they stay.
  */
 
 // ─── Library navigation (Playlist sidebar + Play Next/Previous) ─────────────
 //
-// ASSUMPTIONS FLAGGED — I don't have api/media.js or api/history.js in this
-// project, so these are raw, self-contained fetches rather than using
-// whatever wrapper functions those files export elsewhere. Confirmed from
-// earlier in this project: grouper.js's real output shape is
-//   { movies: [...], series: [...], anime: [...] }
-// where each series/anime entry has .seasons = { [num]: { seasonNumber,
-// episodes: [{ id, episode, name, streamUrl, parsed, title, ... }] } } —
-// that part is solid. What's NOT confirmed: the exact endpoint paths
-// (guessed /api/media and /api/history, matching the route files seen in
-// the project's file tree) and the history entry shape (guessed
-// { mediaId, updatedAt }-ish — adjust the two small accessor spots below if
-// the real shape differs).
+// ASSUMPTIONS FLAGGED — I don't have api/media.js in this project, so this is
+// a raw, self-contained fetch rather than using whatever wrapper function
+// that file exports elsewhere. Confirmed from earlier in this project:
+// grouper.js's real output shape is { movies: [...], series: [...], anime:
+// [...] } where each series/anime entry has .seasons = { [num]: {
+// seasonNumber, episodes: [{ id, episode, name, streamUrl, parsed, title,
+// ... }] } } — that part is solid. What's NOT confirmed: the exact endpoint
+// path (guessed /api/media, matching the route files seen in the project's
+// file tree).
+//
+// Next AND Previous are both derived purely from this library/playlist
+// order (movies array order; same-season → previous/next season → previous/
+// next series' first/last episode for series+anime) — Previous used to be
+// based on watch history instead ("whatever you watched right before this"),
+// which is why it looked like it jumped to a random video instead of the
+// actual previous item in the playlist.
 function normalizeTitle(t) {
     return (t || "")
         .toLowerCase()
@@ -138,7 +142,6 @@ function findEpisodeInBucket(bucket, mediaId) {
 
 function useLibraryNav(mediaId) {
     const [library, setLibrary] = useState(null);
-    const [history, setHistory] = useState([]);
 
     useEffect(() => {
         let cancelled = false;
@@ -146,13 +149,6 @@ function useLibraryNav(mediaId) {
         // type — exactly the { movies, series, anime } shape this hook needs.
         getMedia()
             .then((d) => !cancelled && setLibrary(d))
-            .catch(() => {});
-        // getHistory() shape isn't fully confirmed (history entry field
-        // names are guessed further below as mediaId/updatedAt) — if
-        // "previous" ends up always disabled, that's the actual real
-        // history response shape differing from this guess.
-        getHistory()
-            .then((d) => !cancelled && setHistory(d?.history || d || []))
             .catch(() => {});
         return () => {
             cancelled = true;
@@ -224,12 +220,52 @@ function useLibraryNav(mediaId) {
             }
         }
 
-        // ── Previous: the history entry watched right before this one ──────
-        // Guessed shape: { mediaId, updatedAt }. Adjust field names here if
-        // api/history.js's real response differs.
-        const sortedHistory = [...history].sort((a, b) => new Date(b.updatedAt || b.watchedAt || 0) - new Date(a.updatedAt || a.watchedAt || 0));
-        const curIdx = sortedHistory.findIndex((h) => (h.mediaId || h.id) === mediaId);
-        const prevMediaId = curIdx >= 0 ? sortedHistory[curIdx + 1]?.mediaId || sortedHistory[curIdx + 1]?.id || null : null;
+        // ── Previous: mirror of the Next logic above, walking the SAME
+        // playlist/library order backward — same movies array, same
+        // season→previous season→previous series/anime chain for episodes.
+        // FIX: this used to be "whatever history entry was watched right
+        // before this one" — completely unrelated to playlist order, which
+        // is exactly why Previous looked like it played a random video (it
+        // played whatever you happened to watch earlier, not what's
+        // actually previous in the playlist/series).
+        let prevMediaId = null;
+        if (currentType === "movie") {
+            if (currentMovie?.partId && movieParts.length) {
+                const idx = movieParts.findIndex((m) => m.id === mediaId);
+                prevMediaId = idx > 0 ? movieParts[idx - 1].id : null;
+            } else {
+                const idx = movies.findIndex((m) => m.id === mediaId);
+                prevMediaId = idx > 0 ? movies[idx - 1].id : null;
+            }
+        } else if (active) {
+            const { series, seasonNum, episode } = active;
+            const seasonNums = Object.keys(series.seasons)
+                .map(Number)
+                .sort((a, b) => a - b);
+            const season = series.seasons[seasonNum];
+            const epIdx = (season.episodes || []).findIndex((e) => e.id === episode.id);
+            if (epIdx > 0) {
+                prevMediaId = season.episodes[epIdx - 1].id;
+            } else {
+                const prevSeasonNum = [...seasonNums].reverse().find((n) => n < seasonNum);
+                if (prevSeasonNum != null) {
+                    const prevEpisodes = series.seasons[prevSeasonNum].episodes || [];
+                    prevMediaId = prevEpisodes[prevEpisodes.length - 1]?.id || null;
+                } else {
+                    const bucket = inSeries ? seriesList : animeList;
+                    const idx = bucket.findIndex((s) => s.id === series.id);
+                    const prevSeries = idx > 0 ? bucket[idx - 1] : null;
+                    if (prevSeries) {
+                        const prevSeasonNums = Object.keys(prevSeries.seasons)
+                            .map(Number)
+                            .sort((a, b) => a - b);
+                        const lastSeasonNum = prevSeasonNums[prevSeasonNums.length - 1];
+                        const lastEpisodes = prevSeries.seasons[lastSeasonNum]?.episodes || [];
+                        prevMediaId = lastEpisodes[lastEpisodes.length - 1]?.id || null;
+                    }
+                }
+            }
+        }
 
         return {
             loading: false,
@@ -246,7 +282,7 @@ function useLibraryNav(mediaId) {
             nextMediaId,
             prevMediaId,
         };
-    }, [library, history, mediaId]);
+    }, [library, mediaId]);
 }
 
 const AUDIO_FLAGS = {
@@ -413,20 +449,91 @@ const VolumeControl = memo(function VolumeControl() {
     );
 });
 
-function TimeDisplay({ style = {} }) {
-    const { state } = usePlayerState();
-    const remaining = state.duration - state.currentTime;
+// FIX: was a single combined "current / duration (-remaining)" string.
+// Per request: left side of the seek bar shows current-time / buffered-so-far
+// (NOT total duration) — right side shows total duration by default, but
+// toggles to remaining time on click/tap, staying on whichever the person
+// picked until they toggle it again. Local useState is intentional here: this
+// component remounts fresh every time a new video loads (PlayerPage keys its
+// player subtree by mediaId), so the toggle naturally resets to the default
+// (duration) on every new play/start without any extra reset logic needed.
+// FIX: showRemaining used to be local useState — but this component lives
+// inside the part of PlayerControls that fully unmounts whenever controls
+// auto-hide (see the controlsVisible early-return above), so local state
+// here was being wiped on every single tap, resetting the toggle back to
+// "showing duration" each time. Moved to shared player state
+// (state.showRemainingTime / actions.toggleRemainingTime in
+// UsePlayerState.jsx), whose Provider lives up in PlayerPage and does NOT
+// unmount when controls hide — so it now only resets when it's actually
+// supposed to: a genuinely new video (this whole hook re-initializes per
+// mediaId).
+function SeekTimeRow({ style = {} }) {
+    const { state, actions } = usePlayerState();
+
+    const bufferedSec = (() => {
+        const b = state.buffered;
+        if (!b || !b.length) return 0;
+        let maxEnd = 0;
+        for (let i = 0; i < b.length; i++) {
+            if (b.end(i) > maxEnd) maxEnd = b.end(i);
+        }
+        return maxEnd;
+    })();
+    const remaining = Math.max(0, state.duration - state.currentTime);
+
+    // FIX: was hardcoded to a monospace font stack, which — being an inline
+    // style — overrode index.css's global `* { font-family:
+    // var(--flux-font-family) }` rule (inline always wins over any external
+    // stylesheet, regardless of selector specificity). That's the app's
+    // actual configured theme font (Inter by default, user-changeable),
+    // used everywhere else — this row was the one place quietly not
+    // matching it. Both x/p and y/z now explicitly reference the same CSS
+    // variable, so there's no possibility of them drifting from each other.
+    const valueStyle = {
+        fontFamily: "var(--flux-font-family)",
+        fontSize: 12,
+        fontWeight: 600,
+        color: "rgba(255,255,255,0.9)",
+    };
+
     return (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "ui-monospace,'SF Mono',monospace", fontSize: 12, color: "rgba(255,255,255,0.6)", whiteSpace: "nowrap", ...style }}>
-            <span style={{ color: "rgba(255,255,255,0.9)", fontWeight: 600 }}>{formatTime(state.currentTime)}</span>
-            <span style={{ opacity: 0.4 }}>/</span>
-            <span>{formatTime(state.duration)}</span>
-            {state.duration > 0 && (
-                <span style={{ opacity: 0.35, fontSize: 11 }}>
-                    ({"-"}
-                    {formatTime(remaining)})
-                </span>
-            )}
+        <div
+            style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                whiteSpace: "nowrap",
+                ...style,
+            }}>
+            {/* Top-left: current time / buffered-so-far */}
+            <div style={{ display: "flex", alignItems: "center", gap: 4, lineHeight: "normal", ...valueStyle }}>
+                <span>{formatTime(state.currentTime)}</span>
+                {/* FIX: was opacity 0.4 — raised per request ("/" too dim
+                    compared to the values around it). */}
+                <span style={{ opacity: 0.75 }}>/</span>
+                <span>{formatTime(bufferedSec)}</span>
+            </div>
+            {/* Top-right: duration ↔ remaining toggle.
+                FIX: was a <button> — even with every font property set
+                explicitly inline, some browsers still apply their own
+                user-agent line-height/font-smoothing to <button> elements
+                that plain text doesn't get, which can make it LOOK like a
+                different font even when the declared properties match
+                exactly. A <span> has none of that baggage to fight against. */}
+            <span
+                role="button"
+                tabIndex={0}
+                onClick={actions.toggleRemainingTime}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        actions.toggleRemainingTime();
+                    }
+                }}
+                aria-label={state.showRemainingTime ? "Showing remaining time — tap to show total duration" : "Showing total duration — tap to show remaining time"}
+                style={{ ...valueStyle, cursor: "pointer", lineHeight: "normal" }}>
+                {state.showRemainingTime ? `-${formatTime(remaining)}` : formatTime(state.duration)}
+            </span>
         </div>
     );
 }
@@ -607,7 +714,7 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
                 gridAutoFlow: "column",
                 gridAutoColumns: "max-content",
                 alignItems: "start",
-                gap: 6,
+                gap: 0,
                 overflowX: "auto",
                 overflowY: "hidden",
                 paddingBottom: 2,
@@ -732,19 +839,68 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
 
 // ─── PlayerControls ───────────────────────────────────────────────────────────
 
-export default function PlayerControls({ mediaInfo, videoRef, containerRef, subtitles = [], onBack, onShowControls, controlsPhase = "VISIBLE", isPortraitOverride = false, onSwitchQuality, mediaId }) {
+export default function PlayerControls({
+    mediaInfo,
+    videoRef,
+    containerRef,
+    subtitles = [],
+    onBack,
+    onShowControls,
+    controlsPhase = "VISIBLE",
+    isPortraitOverride = false,
+    onSwitchQuality,
+    mediaId,
+    onSwitchChannel,
+    showResumeDialog,
+    resumeDialogFading,
+    resumePoint,
+    onResume,
+    onStartOver,
+    onDismissResumeDialog,
+    sessionTimeOffsetRef,
+}) {
     const navigate = useNavigate();
     const nav = useLibraryNav(mediaId);
+    // FIX (back button required one click per media switch instead of one
+    // click total): this used to be a plain push navigate() — every playlist
+    // switch (or Next/Previous tap) added a NEW entry to browser/router
+    // history. So Back/the chevron/Android back only ever popped ONE
+    // switch at a time, landing on the previous video instead of leaving the
+    // player. replace:true swaps the current history entry instead of
+    // pushing a new one — no matter how many times media gets switched,
+    // there's still only one entry for "the player" in history, so Back
+    // always exits in a single click.
     const goToMedia = useCallback(
         (id) => {
             if (!id) return;
-            navigate(`/player/${id}`);
+            navigate(`/player/${id}`, { replace: true });
         },
         [navigate],
     );
     const { state, actions } = usePlayerState();
     const isMobile = useIsMobile();
     const [openMenu, setOpenMenu] = useState(null);
+
+    // Resume dialog needs to sit right above the seek bar with a small gap —
+    // measured, not guessed, since the seek bar's screen position varies by
+    // device/orientation/mobile-vs-desktop layout. seekRowRef is attached to
+    // the small wrapper directly around SeekTimeRow+SeekBar further down.
+    const seekRowRef = useRef(null);
+    const [seekRowTop, setSeekRowTop] = useState(null);
+    useEffect(() => {
+        const measure = () => {
+            if (seekRowRef.current) setSeekRowTop(seekRowRef.current.getBoundingClientRect().top);
+        };
+        measure();
+        window.addEventListener("resize", measure);
+        window.addEventListener("orientationchange", measure);
+        const id = setInterval(measure, 500); // catches layout shifts (controls fading in/out, menu open/close) without needing a ResizeObserver per element
+        return () => {
+            window.removeEventListener("resize", measure);
+            window.removeEventListener("orientationchange", measure);
+            clearInterval(id);
+        };
+    }, []);
 
     const activeQualityLabel = state.activeQuality === -1 ? (state.qualityLevels.length ? "Auto" : "") : state.qualityLevels[state.activeQuality]?.label || "";
 
@@ -781,13 +937,16 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
     const toggleFullscreen = () => containerRef.current?._toggleFullscreen?.();
     const togglePiP = () => containerRef.current?._togglePiP?.();
 
-    const title = mediaInfo?.title || "";
-    const subtitle =
-        mediaInfo?.type === "series" && mediaInfo.season && mediaInfo.episode
-            ? `S${mediaInfo.season}E${mediaInfo.episode}${mediaInfo.episodeTitle ? ` — ${mediaInfo.episodeTitle}` : ""}`
-            : mediaInfo?.year
-              ? String(mediaInfo.year)
-              : "";
+    // FIX: was `const title = mediaInfo?.title` shown alone in the top bar,
+    // plus a separate `subtitle` string that was computed but never actually
+    // rendered anywhere (dead code) — so series/anime only ever showed the
+    // show name, no episode info. Now builds one combined line for
+    // series/anime: "Show Name • Episode Name • S01 E02". Movies unaffected
+    // — just the plain title, same as before.
+    const isEpisodic = (mediaInfo?.type === "series" || mediaInfo?.type === "anime") && mediaInfo?.season && mediaInfo?.episode;
+    const displayTitle = isEpisodic
+        ? [mediaInfo.title, mediaInfo.episodeTitle, `SE-${String(mediaInfo.season).padStart(2, "0")} E-${String(mediaInfo.episode).padStart(2, "0")}`].filter(Boolean).join(" • ")
+        : mediaInfo?.title || "";
 
     const iconMain = isMobile ? 30 : 26;
     const iconSub = isMobile ? 22 : 18;
@@ -798,52 +957,160 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
     // red bg"). Tap-to-toggle (wired in PlayerPage/PlayerGestures) is now
     // the ONLY way to bring controls back on mobile. Desktop already
     // returned null here (mouse movement reveals controls there).
+    // ══════════════════════════════════════════════════════════════════════
+    // RESUME DIALOG — moved here from PlayerPage.jsx. Computed as its own
+    // stable element BEFORE the controlsVisible early-return below, and
+    // rendered as a sibling OUTSIDE the controls tree that early-return
+    // guards (see the final return statement) — NOT nested inside it.
+    //
+    // FIX (was reappearing on every tap): this used to live INSIDE the big
+    // controls <div>, which this whole component stops rendering entirely
+    // (`if (!state.controlsVisible) return null`) whenever controls
+    // auto-hide. Every tap remounts that whole subtree from scratch, and a
+    // freshly-mounted element can't be "mid-fade" — it just paints at
+    // whatever its current style evaluates to, i.e. fully opaque again,
+    // regardless of how much of the real 6s timeout had already elapsed.
+    // That's what looked like "the resume overlay reappears on touch": it
+    // wasn't reappearing, it was being destroyed and rebuilt at full
+    // opacity on every single controls-visibility toggle.
+    // Keeping it as a separate, always-present sibling (Fragment, see
+    // bottom) means it only ever mounts/unmounts when showResumeDialog
+    // itself changes — never because of controlsVisible — so its fade
+    // timing (driven by useProgress's dialogFadeTimer, unchanged) plays out
+    // for real, once, and stays gone after either the 6s timeout or the X.
+    // ══════════════════════════════════════════════════════════════════════
+    // RESUME DIALOG auto-close — OWNED HERE, not just relying on
+    // useProgress.jsx's own internal timer. This is deliberately redundant:
+    // whatever the exact reason the upstream timer wasn't reliably closing
+    // this (report was "still not closing after 4s" even with that timer
+    // verified correct on paper), a SECOND independent timer living right
+    // next to where the dialog actually renders removes any dependency on
+    // however many effects/props sit between here and useProgress. Calls the
+    // same onDismissResumeDialog the X button already uses — identical
+    // effect, just triggered by time instead of a click.
+    const [localResumeFading, setLocalResumeFading] = useState(false);
+    useEffect(() => {
+        if (!showResumeDialog) {
+            setLocalResumeFading(false);
+            return undefined;
+        }
+        setLocalResumeFading(false);
+        const fadeTimer = setTimeout(() => {
+            setLocalResumeFading(true);
+            setTimeout(() => onDismissResumeDialog?.(), 300);
+        }, 4000);
+        return () => clearTimeout(fadeTimer);
+    }, [showResumeDialog, onDismissResumeDialog]);
+    const resumeIsFading = resumeDialogFading || localResumeFading;
+
+    const resumeDialogEl = showResumeDialog && (
+        <div
+            className="fixed left-0 right-0 z-60 flex justify-center px-4"
+            style={{
+                // FIX: was "absolute inset-0 ... items-end ... pb-28" — a fixed
+                // 112px guess that put it mid-screen on some layouts instead
+                // of hugging the seek bar. Now positioned using the actually
+                // measured top edge of the seek bar row (seekRowTop), with an
+                // 8px gap, and translateY(-100%) so it sits fully ABOVE that
+                // line regardless of the dialog's own height.
+                top: seekRowTop != null ? seekRowTop - 8 : undefined,
+                bottom: seekRowTop == null ? 96 : undefined, // fallback before first measurement
+                transform: seekRowTop != null ? "translateY(-100%)" : undefined,
+                opacity: resumeIsFading ? 0 : 1,
+                transition: "opacity 280ms ease",
+                pointerEvents: "none",
+            }}>
+            {/* FIX: was one single horizontal row (text + both buttons all
+                inline), with the X absolutely positioned on top of that same
+                row — it ended up visually overlapping/competing with the
+                Resume/Start Over buttons, which is the "weird" look. Now a
+                proper card: header row (title/subtitle + X, X has its own
+                clear corner with nothing else there) then a separate
+                full-width button row underneath. */}
+            <div
+                className="relative pointer-events-auto flex flex-col gap-3 px-5 py-4
+                            rounded-2xl bg-black/80 backdrop-blur-md border border-white/15
+                            shadow-2xl max-w-sm w-full">
+                <button
+                    onClick={onDismissResumeDialog}
+                    aria-label="Dismiss"
+                    className="absolute top-3 right-3 w-6 h-6 rounded-full
+                               flex items-center justify-center text-white/40
+                               hover:text-white hover:bg-white/10 transition-colors">
+                    <X size={14} strokeWidth={2} />
+                </button>
+                <div className="pr-6">
+                    <p className="text-white text-sm font-semibold leading-tight">Resume watching?</p>
+                    <p className="text-white/50 text-xs mt-0.5">
+                        Paused at {Math.floor((resumePoint?.position || 0) / 60)}m {Math.floor((resumePoint?.position || 0) % 60)}s
+                    </p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={onStartOver}
+                        className="flex-1 px-3 py-2 rounded-lg bg-white/10 text-white/70 text-xs
+                                   hover:bg-white/20 transition-colors">
+                        Start Over
+                    </button>
+                    <button
+                        onClick={onResume}
+                        className="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-xs
+                                   font-semibold hover:bg-red-500 transition-colors">
+                        Resume
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
     if (!state.controlsVisible) {
-        return null;
+        return resumeDialogEl || null;
     }
 
     return (
-        <div
-            className="absolute inset-0 z-30 flex flex-col justify-between"
-            style={{
-                // FIX (no fade-in on appear): ANIMATING_IN and VISIBLE both
-                // previously mapped to opacity:1 — but this component is
-                // UNMOUNTED while HIDDEN and remounts fresh when controls
-                // reappear. React's first painted frame on a fresh mount
-                // can't "transition into" a value; it just IS that value.
-                // Since ANIMATING_IN's first paint was already opacity:1,
-                // there was nothing for the CSS transition to animate FROM
-                // — hide worked (1→0 across two renders while staying
-                // mounted) but show silently didn't (mounted already at 1).
-                // ANIMATING_IN now paints at 0 on that first frame; the
-                // next render (phase flips to VISIBLE after FADE_IN_MS)
-                // changes it to 1, which is what the transition actually
-                // animates.
-                opacity: controlsPhase === "ANIMATING_OUT" || controlsPhase === "ANIMATING_IN" ? 0 : 1,
-                transition: controlsPhase === "ANIMATING_OUT" ? "opacity 300ms linear" : "opacity 150ms cubic-bezier(0.16, 1, 0.3, 1)",
-                // FIX ("nothing happens on second tap"): this was
-                // pointerEvents:"auto", making the ENTIRE full-screen
-                // overlay one giant hit-test box — including the visually
-                // empty middle area over the video. Every tap there got
-                // swallowed by this element instead of reaching the
-                // gesture layer below, so toggleControls() (which lives on
-                // PlayerGestures/VideoCore) never fired on that second tap.
-                // pointer-events:none here lets empty-area taps pass
-                // through; auto is re-enabled only on the actual bars
-                // below (top/center/bottom), which already had
-                // pointer-events-auto — the capture handler that marks
-                // activity moved onto those three specifically instead of
-                // sitting on this full-screen root.
-                pointerEvents: "none",
-            }}>
-            {/* Sleep Timer — full-screen overlay, not an anchored popup like
-                the others (matches reference screenshot's full-coverage
-                layout). Rendered at this level since QuickIconRow's own
-                container doesn't span the whole player. */}
-            <SleepTimerPanel open={openMenu === "sleepTimer"} onClose={() => setOpenMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />
-            <SpeedSliderOverlay open={openMenu === "speedSlider"} onClose={() => setOpenMenu(null)} />
+        <>
+            {resumeDialogEl}
+            <div
+                className="absolute inset-0 z-30 flex flex-col justify-between"
+                style={{
+                    // FIX (no fade-in on appear): ANIMATING_IN and VISIBLE both
+                    // previously mapped to opacity:1 — but this component is
+                    // UNMOUNTED while HIDDEN and remounts fresh when controls
+                    // reappear. React's first painted frame on a fresh mount
+                    // can't "transition into" a value; it just IS that value.
+                    // Since ANIMATING_IN's first paint was already opacity:1,
+                    // there was nothing for the CSS transition to animate FROM
+                    // — hide worked (1→0 across two renders while staying
+                    // mounted) but show silently didn't (mounted already at 1).
+                    // ANIMATING_IN now paints at 0 on that first frame; the
+                    // next render (phase flips to VISIBLE after FADE_IN_MS)
+                    // changes it to 1, which is what the transition actually
+                    // animates.
+                    opacity: controlsPhase === "ANIMATING_OUT" || controlsPhase === "ANIMATING_IN" ? 0 : 1,
+                    transition: controlsPhase === "ANIMATING_OUT" ? "opacity 300ms linear" : "opacity 150ms cubic-bezier(0.16, 1, 0.3, 1)",
+                    // FIX ("nothing happens on second tap"): this was
+                    // pointerEvents:"auto", making the ENTIRE full-screen
+                    // overlay one giant hit-test box — including the visually
+                    // empty middle area over the video. Every tap there got
+                    // swallowed by this element instead of reaching the
+                    // gesture layer below, so toggleControls() (which lives on
+                    // PlayerGestures/VideoCore) never fired on that second tap.
+                    // pointer-events:none here lets empty-area taps pass
+                    // through; auto is re-enabled only on the actual bars
+                    // below (top/center/bottom), which already had
+                    // pointer-events-auto — the capture handler that marks
+                    // activity moved onto those three specifically instead of
+                    // sitting on this full-screen root.
+                    pointerEvents: "none",
+                }}>
+                {/* Sleep Timer — full-screen overlay, not an anchored popup like
+                    the others (matches reference screenshot's full-coverage
+                    layout). Rendered at this level since QuickIconRow's own
+                    container doesn't span the whole player. */}
+                <SleepTimerPanel open={openMenu === "sleepTimer"} onClose={() => setOpenMenu(null)} isMobile={isMobile} controlsPhase={controlsPhase} />
+                <SpeedSliderOverlay open={openMenu === "speedSlider"} onClose={() => setOpenMenu(null)} />
 
-            {/* ══════════════════════════════════════════════════════════════════
+                {/* ══════════════════════════════════════════════════════════════════
                 TOP BAR
                 Order left→right: Back button → Title → [Quality] [Audio Track]
                 [Subtitle] [Decoder] [More ⋮] → Quick icon row (mobile only,
@@ -851,117 +1118,117 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                 To reorder the right-side icons, just move their numbered
                 blocks (1-5) up/down inside the "shrink-0 ml-2" div below.
                 ══════════════════════════════════════════════════════════════════ */}
-            <div
-                className="flex flex-col gap-3 px-3 pt-5 flux-controls-top"
-                style={{
-                    pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
-                    opacity: openMenu === "speedSlider" ? 0 : 1,
-                    transition: "opacity 200ms ease",
-                }}
-                onClickCapture={onShowControls}
-                onPointerDownCapture={onShowControls}>
-                <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <button onClick={onBack} className="flux-icon-btn p-2 shrink-0" aria-label="Go back" style={{ color: "rgba(255,255,255,0.9)" }}>
-                            <ChevronLeft size={24} strokeWidth={2.5} />
-                        </button>
-                        <div className="min-w-0 flex-1">
-                            <p className="text-white font-semibold text-sm sm:text-base leading-tight truncate">{title}</p>
+                <div
+                    className="flex flex-col gap-3 px-3 pt-5 flux-controls-top"
+                    style={{
+                        pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
+                        opacity: openMenu === "speedSlider" ? 0 : 1,
+                        transition: "opacity 200ms ease",
+                    }}
+                    onClickCapture={onShowControls}
+                    onPointerDownCapture={onShowControls}>
+                    <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <button onClick={onBack} className="flux-icon-btn p-2 shrink-0" aria-label="Go back" style={{ color: "rgba(255,255,255,0.9)" }}>
+                                <ChevronLeft size={24} strokeWidth={2.5} />
+                            </button>
+                            <div className="min-w-0 flex-1">
+                                <p className="text-white font-semibold text-sm sm:text-base leading-tight truncate">{displayTitle}</p>
+                            </div>
                         </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                        {activeQualityLabel && !isMobile && <span className="flux-quality-badge">{activeQualityLabel}</span>}
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                            {activeQualityLabel && !isMobile && <span className="flux-quality-badge">{activeQualityLabel}</span>}
 
-                        {/* ── 1. QUALITY / RESOLUTION button ───────────────────────────
+                            {/* ── 1. QUALITY / RESOLUTION button ───────────────────────────
                             Opens <QualityPicker>. Only shows if there's more than
                             one quality level available (state.qualityLevels). */}
-                        {(state.qualityLevels.length > 0 || onSwitchQuality) && (
-                            <div style={{ position: "relative" }}>
-                                <button onClick={() => toggleMenu("quality")} className="flux-icon-btn p-2" aria-label="Quality">
-                                    <MdOutlineHighQuality size={iconTiny} color="#fff" />
-                                </button>
-                                <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} onSwitchQuality={onSwitchQuality} />
-                            </div>
-                        )}
+                            {(state.qualityLevels.length > 0 || onSwitchQuality) && (
+                                <div style={{ position: "relative" }}>
+                                    <button onClick={() => toggleMenu("quality")} className="flux-icon-btn p-2" aria-label="Quality">
+                                        <MdOutlineHighQuality size={iconTiny} color="#fff" />
+                                    </button>
+                                    <QualityPicker open={openMenu === "quality"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} onSwitchQuality={onSwitchQuality} />
+                                </div>
+                            )}
 
-                        {/* ── 2. AUDIO TRACK button (music-note icon) ──────────────────
+                            {/* ── 2. AUDIO TRACK button (music-note icon) ──────────────────
                             Opens <AudioTrackPanel> — reads real audio tracks from
                             state.audioTracks (populated by VideoCore.jsx from
                             hls.audioTracks on MANIFEST_PARSED). Switching tracks
                             is instant — HLS.js handles it via hls.audioTrack,
                             no new request to the server, no session restart. */}
-                        <div style={{ position: "relative" }}>
-                            <button onClick={() => toggleMenu("audioTrack")} className="flux-icon-btn p-2" aria-label="Audio track">
-                                <MdMusicNote size={iconTiny} />
-                            </button>
-                            <AudioTrackPanel open={openMenu === "audioTrack"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
-                        </div>
+                            <div style={{ position: "relative" }}>
+                                <button onClick={() => toggleMenu("audioTrack")} className="flux-icon-btn p-2" aria-label="Audio track">
+                                    <MdMusicNote size={iconTiny} />
+                                </button>
+                                <AudioTrackPanel open={openMenu === "audioTrack"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                            </div>
 
-                        {/* ── 3. SUBTITLE button ────────────────────────────────────────
+                            {/* ── 3. SUBTITLE button ────────────────────────────────────────
                             Opens <SubtitlePicker>. Highlights (active state) when
                             a subtitle track is currently selected. */}
-                        <div style={{ position: "relative" }}>
-                            <IconBtn onClick={() => toggleMenu("sub")} size="sm" label="Subtitles">
-                                <MdSubtitles size={iconTiny} />
-                            </IconBtn>
-                            <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} mediaId={mediaId} />
-                        </div>
+                            <div style={{ position: "relative" }}>
+                                <IconBtn onClick={() => toggleMenu("sub")} size="sm" label="Subtitles">
+                                    <MdSubtitles size={iconTiny} />
+                                </IconBtn>
+                                <SubtitlePicker open={openMenu === "sub"} onClose={closeMenu} subtitles={subtitles} isMobile={isMobile} controlsPhase={controlsPhase} mediaId={mediaId} />
+                            </div>
 
-                        {/* ── 4. DECODER badge (HW / HW+ / SW) ──────────────────────────
+                            {/* ── 4. DECODER badge (HW / HW+ / SW) ──────────────────────────
                             Opens <DecoderModePanel>. Text label always shows the
                             current mode — see DECODER_LABELS for the short names. */}
-                        <div style={{ position: "relative" }}>
-                            <button
-                                onClick={() => toggleMenu("decoder")}
-                                className="flux-icon-btn"
-                                style={{ padding: "6px 10px", fontSize: 13, fontWeight: 700, color: "#fff" }}
-                                aria-label="Decoder mode">
-                                {DECODER_LABELS[state.decoderMode]}
-                            </button>
-                            <DecoderModePanel open={openMenu === "decoder"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
-                        </div>
+                            <div style={{ position: "relative" }}>
+                                <button
+                                    onClick={() => toggleMenu("decoder")}
+                                    className="flux-icon-btn"
+                                    style={{ padding: "6px 10px", fontSize: 13, fontWeight: 700, color: "#fff" }}
+                                    aria-label="Decoder mode">
+                                    {DECODER_LABELS[state.decoderMode]}
+                                </button>
+                                <DecoderModePanel open={openMenu === "decoder"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                            </div>
 
-                        {/* ── 5. OVERFLOW (3-dot) menu ──────────────────────────────────
+                            {/* ── 5. OVERFLOW (3-dot) menu ──────────────────────────────────
                             Opens a small <MenuShell> with placeholder rows (Cast/
                             Share/Details). Add real rows here as features land —
                             just add more <DisabledRow>/<MenuItem> children below. */}
-                        <div style={{ position: "relative" }}>
-                            <button onClick={() => toggleMenu("overflow")} className="flux-icon-btn p-2" aria-label="More options">
-                                <MoreVertical size={20} strokeWidth={2} /> {/* iconTiny */}
-                            </button>
-                            <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={openMenu === "overflow"} onClose={closeMenu} title="More" align="left">
-                                <DisabledRow label="Cast" />
-                                <DisabledRow label="Share" />
-                                <DisabledRow label="Details" />
-                            </MenuShell>
+                            <div style={{ position: "relative" }}>
+                                <button onClick={() => toggleMenu("overflow")} className="flux-icon-btn p-2" aria-label="More options">
+                                    <MoreVertical size={20} strokeWidth={2} /> {/* iconTiny */}
+                                </button>
+                                <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={openMenu === "overflow"} onClose={closeMenu} title="More" align="left">
+                                    <DisabledRow label="Cast" />
+                                    <DisabledRow label="Share" />
+                                    <DisabledRow label="Details" />
+                                </MenuShell>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* ── Quick icon row (mobile only — matches MX Player reference) ──
+                    {/* ── Quick icon row (mobile only — matches MX Player reference) ──
                     Lives inside the top bar div now (same gradient background,
                     same fade-out lifecycle) instead of as a separate sibling.
                     Gap to the header row above is the gap-3 (12px) on the
                     parent flex-col — adjust that single class to retune. */}
-                {isMobile && (
-                    <QuickIconRow
-                        videoRef={videoRef}
-                        containerRef={containerRef}
-                        openMenu={openMenu}
-                        toggleMenu={toggleMenu}
-                        controlsPhase={controlsPhase}
-                        isPortraitOverride={isPortraitOverride}
-                        isMobile={isMobile}
-                    />
-                )}
-            </div>
+                    {isMobile && (
+                        <QuickIconRow
+                            videoRef={videoRef}
+                            containerRef={containerRef}
+                            openMenu={openMenu}
+                            toggleMenu={toggleMenu}
+                            controlsPhase={controlsPhase}
+                            isPortraitOverride={isPortraitOverride}
+                            isMobile={isMobile}
+                        />
+                    )}
+                </div>
 
-            {/* Center controls (desktop) removed per request — PC no longer
+                {/* Center controls (desktop) removed per request — PC no longer
                 shows a big center play/pause/skip cluster over the video.
                 Mobile's own center cluster (further down, near the seek bar)
                 is untouched. */}
 
-            {/* ══════════════════════════════════════════════════════════════════
+                {/* ══════════════════════════════════════════════════════════════════
                 BOTTOM BAR
                 Top row (mobile only): current time / duration.
                 Seek bar.
@@ -970,38 +1237,38 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                 Desktop has its own separate big center-play cluster further
                 up the file (look for "Center controls (desktop)").
                 ══════════════════════════════════════════════════════════════════ */}
-            <div
-                className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flux-controls-bottom"
-                style={{
-                    pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
-                    opacity: openMenu === "speedSlider" ? 0 : 1,
-                    transition: "opacity 200ms ease",
-                }}
-                onClickCapture={onShowControls}
-                onPointerDownCapture={onShowControls}>
-                {isMobile && (
-                    <div className="flex items-center justify-between px-1 mb-1.5">
-                        <TimeDisplay />
+                <div
+                    className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flux-controls-bottom"
+                    style={{
+                        pointerEvents: controlsPhase === "ANIMATING_OUT" || openMenu === "speedSlider" ? "none" : "auto",
+                        opacity: openMenu === "speedSlider" ? 0 : 1,
+                        transition: "opacity 200ms ease",
+                    }}
+                    onClickCapture={onShowControls}
+                    onPointerDownCapture={onShowControls}>
+                    <div ref={seekRowRef}>
+                        <div className="px-1 mb-1.5">
+                            <SeekTimeRow />
+                        </div>
+
+                        <SeekBar videoRef={videoRef} sessionTimeOffsetRef={sessionTimeOffsetRef} />
                     </div>
-                )}
 
-                <SeekBar videoRef={videoRef} />
+                    <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`} style={{ position: isMobile ? "relative" : "static" }}>
+                        {/* ── LOCK button (mobile, far-left) ──────────────────────────── */}
+                        {isMobile && (
+                            <button
+                                onClick={() => {
+                                    actions.setLocked(true);
+                                    actions.setControlsVisible(false);
+                                }}
+                                className="flux-icon-btn p-3"
+                                aria-label="Lock screen">
+                                <UnlockKeyhole size={20} strokeWidth={2.5} stroke="#fff" />
+                            </button>
+                        )}
 
-                <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`} style={{ position: isMobile ? "relative" : "static" }}>
-                    {/* ── LOCK button (mobile, far-left) ──────────────────────────── */}
-                    {isMobile && (
-                        <button
-                            onClick={() => {
-                                actions.setLocked(true);
-                                actions.setControlsVisible(false);
-                            }}
-                            className="flux-icon-btn p-3"
-                            aria-label="Lock screen">
-                            <UnlockKeyhole size={20} strokeWidth={2.5} stroke="#fff" />
-                        </button>
-                    )}
-
-                    {/* ── PLAYBACK cluster: play-previous / play-pause / play-next ──
+                        {/* ── PLAYBACK cluster: play-previous / play-pause / play-next ──
                         SkipBack/SkipForward changed from ±10s seeking to
                         play-previous/play-next per request — see
                         useLibraryNav above for the actual next/prev logic
@@ -1016,98 +1283,118 @@ export default function PlayerControls({ mediaInfo, videoRef, containerRef, subt
                         translateX(-50%)) so it stays centered regardless of
                         how wide the lock button or the right-side icon
                         cluster happen to be. */}
-                    {isMobile && (
-                        <div className="flex items-center gap-0.5" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
-                            <button
-                                type="button"
-                                onClick={() => goToMedia(nav.prevMediaId)}
-                                disabled={!nav.prevMediaId}
-                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
-                                style={{ opacity: nav.prevMediaId ? 1 : 0.35 }}
-                                aria-label="Play previous">
-                                <SkipBack size={iconSub} strokeWidth={1.8} />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => actions.setPlaying(!state.playing)}
-                                className="flux-icon-btn p-3"
-                                style={{ color: "#fff" }}
-                                aria-label={state.playing ? "Pause" : "Play"}>
-                                {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => goToMedia(nav.nextMediaId)}
-                                disabled={!nav.nextMediaId}
-                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
-                                style={{ opacity: nav.nextMediaId ? 1 : 0.35 }}
-                                aria-label="Play next">
-                                <SkipForward size={iconSub} strokeWidth={1.8} />
-                            </button>
-                        </div>
-                    )}
-
-                    {/* ── Desktop-only volume/time, sits where the playback cluster
-                        used to live before the mobile centering change above. ── */}
-                    {!isMobile && (
-                        <div className="flex items-center gap-0.5">
-                            <VolumeControl />
-                            <TimeDisplay style={{ marginLeft: 8 }} />
-                        </div>
-                    )}
-
-                    {!isMobile && <div style={{ flex: 1 }} />}
-
-                    {/* ── RIGHT-SIDE icon cluster (loop/speed/aspect/PiP/fullscreen) ── */}
-                    <div className={`flex items-center shrink-0 ${isMobile ? "gap-0.5" : "gap-0.5"}`}>
-                        <div style={{ position: "relative" }}>
-                            <button onClick={() => toggleMenu("playlist")} className="flux-icon-btn p-2" aria-label="Playlist">
-                                <ListVideo size={iconTiny} color="#fff" />
-                            </button>
-                            <PlaylistPanel open={openMenu === "playlist"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} mediaId={mediaId} nav={nav} onNavigate={goToMedia} />
-                        </div>
-                        {!isMobile && (
-                            <IconBtn onClick={() => actions.cycleLoop()} active={state.loop !== "none"} size="sm" label="Loop" title={`Loop: ${state.loop}`}>
-                                <LoopIcon loop={state.loop} />
-                            </IconBtn>
-                        )}
-                        {!isMobile && (
-                            <div style={{ position: "relative" }}>
+                        {isMobile && (
+                            <div className="flex items-center gap-0.5" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
                                 <button
                                     type="button"
-                                    onClick={() => toggleMenu("speed")}
-                                    style={{
-                                        borderRadius: 8,
-                                        border: "none",
-                                        background: "transparent",
-                                        color: state.playbackSpeed !== 1 ? "var(--color-primary)" : "#fff",
-                                        fontWeight: 700,
-                                        fontSize: 12,
-                                        padding: "4px 8px",
-                                        cursor: "pointer",
-                                        minHeight: "auto",
-                                        fontFamily: "ui-monospace,'SF Mono',monospace",
-                                        letterSpacing: "0.3px",
-                                        WebkitTapHighlightColor: "transparent",
-                                    }}
-                                    aria-label="Playback speed">
-                                    {state.playbackSpeed}×
+                                    onClick={() => goToMedia(nav.prevMediaId)}
+                                    disabled={!nav.prevMediaId}
+                                    className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                    style={{ opacity: nav.prevMediaId ? 1 : 0.35 }}
+                                    aria-label="Play previous">
+                                    <SkipBack size={iconSub} strokeWidth={1.8} />
                                 </button>
-                                <SpeedPicker open={openMenu === "speed"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                                <button
+                                    type="button"
+                                    onClick={() => actions.setPlaying(!state.playing)}
+                                    className="flux-icon-btn p-3"
+                                    style={{ color: "#fff" }}
+                                    aria-label={state.playing ? "Pause" : "Play"}>
+                                    {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => goToMedia(nav.nextMediaId)}
+                                    disabled={!nav.nextMediaId}
+                                    className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                    style={{ opacity: nav.nextMediaId ? 1 : 0.35 }}
+                                    aria-label="Play next">
+                                    <SkipForward size={iconSub} strokeWidth={1.8} />
+                                </button>
                             </div>
                         )}
-                        {/* --- Quality (resolution) button moved to the TOP bar --- */}
-                        {/* --- Subtitle button moved to the TOP bar --- */}
-                        <AspectToggleButton size={isMobile ? 19 : 17} />
-                        <IconBtn onClick={togglePiP} size="sm" className="hidden sm:flex" label="Picture in Picture">
-                            <PictureInPicture2 size={16} strokeWidth={1.8} />
-                        </IconBtn>
-                        <IconBtn onClick={toggleFullscreen} size={isMobile ? "md" : "sm"} label={state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
-                            {state.isFullscreen ? <Minimize size={20} strokeWidth={1.8} /> : <Maximize size={20} strokeWidth={1.8} />}
-                        </IconBtn>
+
+                        {/* ── Desktop-only volume, sits where the playback cluster
+                        used to live before the mobile centering change above.
+                        Time display moved to SeekTimeRow above the seek bar. ── */}
+                        {!isMobile && (
+                            <div className="flex items-center gap-0.5">
+                                <VolumeControl />
+                            </div>
+                        )}
+
+                        {!isMobile && <div style={{ flex: 1 }} />}
+
+                        {/* ── RIGHT-SIDE icon cluster (loop/speed/aspect/PiP/fullscreen) ── */}
+                        <div className={`flex items-center shrink-0 ${isMobile ? "gap-0.5" : "gap-0.5"}`}>
+                            <div style={{ position: "relative" }}>
+                                <button onClick={() => toggleMenu("playlist")} className="flux-icon-btn p-2" aria-label="Playlist">
+                                    <ListVideo size={iconTiny} color="#fff" />
+                                </button>
+                                {mediaInfo?.type === "live" ? (
+                                    <LiveChannelsPanel
+                                        open={openMenu === "playlist"}
+                                        onClose={closeMenu}
+                                        isMobile={isMobile}
+                                        controlsPhase={controlsPhase}
+                                        currentChannelUrl={mediaInfo?.url}
+                                        onSwitchChannel={onSwitchChannel}
+                                    />
+                                ) : (
+                                    <PlaylistPanel
+                                        open={openMenu === "playlist"}
+                                        onClose={closeMenu}
+                                        isMobile={isMobile}
+                                        controlsPhase={controlsPhase}
+                                        mediaId={mediaId}
+                                        nav={nav}
+                                        onNavigate={goToMedia}
+                                    />
+                                )}
+                            </div>
+                            {!isMobile && (
+                                <IconBtn onClick={() => actions.cycleLoop()} active={state.loop !== "none"} size="sm" label="Loop" title={`Loop: ${state.loop}`}>
+                                    <LoopIcon loop={state.loop} />
+                                </IconBtn>
+                            )}
+                            {!isMobile && (
+                                <div style={{ position: "relative" }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleMenu("speed")}
+                                        style={{
+                                            borderRadius: 8,
+                                            border: "none",
+                                            background: "transparent",
+                                            color: state.playbackSpeed !== 1 ? "var(--color-primary)" : "#fff",
+                                            fontWeight: 700,
+                                            fontSize: 12,
+                                            padding: "4px 8px",
+                                            cursor: "pointer",
+                                            minHeight: "auto",
+                                            fontFamily: "ui-monospace,'SF Mono',monospace",
+                                            letterSpacing: "0.3px",
+                                            WebkitTapHighlightColor: "transparent",
+                                        }}
+                                        aria-label="Playback speed">
+                                        {state.playbackSpeed}×
+                                    </button>
+                                    <SpeedPicker open={openMenu === "speed"} onClose={closeMenu} isMobile={isMobile} controlsPhase={controlsPhase} />
+                                </div>
+                            )}
+                            {/* --- Quality (resolution) button moved to the TOP bar --- */}
+                            {/* --- Subtitle button moved to the TOP bar --- */}
+                            <AspectToggleButton size={isMobile ? 19 : 17} />
+                            <IconBtn onClick={togglePiP} size="sm" className="hidden sm:flex" label="Picture in Picture">
+                                <PictureInPicture2 size={16} strokeWidth={1.8} />
+                            </IconBtn>
+                            <IconBtn onClick={toggleFullscreen} size={isMobile ? "md" : "sm"} label={state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+                                {state.isFullscreen ? <Minimize size={20} strokeWidth={1.8} /> : <Maximize size={20} strokeWidth={1.8} />}
+                            </IconBtn>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+        </>
     );
 }

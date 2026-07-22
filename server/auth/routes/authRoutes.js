@@ -64,18 +64,18 @@ function getDeviceInfo(req) {
     const fpBase = `${browser}-${browserVersion}-${os}-${osVersion}-${deviceType}-${deviceModel}-${deviceVendor}`;
     const deviceFingerprint = crypto.createHash("sha256").update(fpBase).digest("hex");
 
-    return { 
-        browser, 
+    return {
+        browser,
         browserVersion,
-        os, 
+        os,
         osVersion,
         deviceType,
         deviceModel,
         deviceVendor,
         userAgent: ua,
-        ip, 
-        deviceName, 
-        deviceFingerprint 
+        ip,
+        deviceName,
+        deviceFingerprint
     };
 }
 
@@ -420,7 +420,7 @@ router.patch("/me", authenticateJWT, async (req, res) => {
         const body = req.body || {};
         const { name, avatar, username, password } = body;
         const data = {};
-        
+
         if (name !== undefined) {
             const n = name ? String(name).trim() : null;
             if (n) data.name = n;
@@ -447,7 +447,7 @@ router.patch("/me", authenticateJWT, async (req, res) => {
                 parallelism: 1,
             });
         }
-        
+
         if (!Object.keys(data).length) return res.status(400).json({ error: "Nothing to update" });
 
         const user = await prisma.user.update({ where: { id: req.user.id }, data });

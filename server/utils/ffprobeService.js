@@ -10,6 +10,14 @@ const execFileAsync = promisify(execFile);
 // Override with FFPROBE_PATH env var if ffprobe isn't on PATH.
 const FFPROBE_PATH = process.env.FFPROBE_PATH || "ffprobe";
 
+// Finite timeout for a single ffprobe run. Without this, a corrupt/truncated
+// file or a network-mounted path that stalls mid-read can hang the probe
+// indefinitely — since scanner.js runs probes through a bounded concurrency
+// queue (MEDIAINFO_SCAN_CONCURRENCY, default 3), one stuck probe permanently
+// occupies one of those slots and slows every file behind it. Overridable via
+// FFPROBE_TIMEOUT_MS env var.
+const FFPROBE_TIMEOUT_MS = parseInt(process.env.FFPROBE_TIMEOUT_MS || "30000", 10);
+
 // Run once at module load — tells you IMMEDIATELY on server start whether
 // ffprobe is even reachable, instead of finding out on the first request.
 let _checked = false;
@@ -36,7 +44,8 @@ checkFfprobe();
  * server/data/mediainfo.json store (see mediaInfoStore.js) — no more
  * mediainfo.json sidecar files scattered across your media folders.
  *
- * Never throws — logs loudly and resolves null on any failure.
+ * Never throws — logs loudly and resolves null on any failure, including
+ * a timeout (which frees the scanner's probe slot instead of holding it open).
  */
 async function createMediaInfoCache(videoPath) {
     if (!videoPath || typeof videoPath !== "string") {
@@ -58,11 +67,21 @@ async function createMediaInfoCache(videoPath) {
 
     let stdout, stderr;
     try {
-        const result = await execFileAsync(FFPROBE_PATH, ["-v", "error", "-show_format", "-show_streams", "-print_format", "json", absPath], { maxBuffer: 1024 * 1024 * 20 });
+        const result = await execFileAsync(FFPROBE_PATH, ["-v", "error", "-show_format", "-show_streams", "-print_format", "json", absPath], {
+            maxBuffer: 1024 * 1024 * 20,
+            timeout: FFPROBE_TIMEOUT_MS,
+        });
         stdout = result.stdout;
         stderr = result.stderr;
         if (stderr) console.warn(`[FFprobe] stderr for "${absPath}": ${stderr}`);
     } catch (err) {
+        // err.killed + err.signal set when Node's own `timeout` option fired —
+        // distinct from ffprobe itself failing, so log it clearly rather than
+        // lumping it in with a generic probe failure.
+        if (err.killed) {
+            console.error(`[FFprobe] ⏱ Probe TIMED OUT after ${FFPROBE_TIMEOUT_MS}ms for "${absPath}" — file may be corrupt, truncated, or on a stalled network mount.`);
+            return null;
+        }
         console.error(`[FFprobe] ❌ Probe FAILED for "${absPath}"`);
         console.error(`[FFprobe]    command: ${FFPROBE_PATH} -v error -show_format -show_streams -print_format json "${absPath}"`);
         console.error(`[FFprobe]    error: ${err.message}`);

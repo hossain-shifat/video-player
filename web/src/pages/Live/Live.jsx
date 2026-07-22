@@ -5,6 +5,34 @@ import { Tv, Search, ChevronLeft, ChevronRight, Radio, Play } from "lucide-react
 import { getLiveChannels, getLiveCategories, getFeaturedEvents, getSportsEventChannels } from "../../api/live";
 import { useAuth } from "../../auth/useAuth";
 
+// Reads the Settings → Live tab preference directly — same "flux-prefs"
+// localStorage key Settings.jsx already writes to via setPref(). Read fresh
+// (not cached in a ref) since the user may change it in another tab/visit
+// and come back to Live without a full app reload.
+function getLiveChannelMode() {
+    try {
+        const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+        // Default to "active" — curated/working set out of the box. "all"
+        // only kicks in once the person explicitly flips it in Settings.
+        return prefs.liveChannelMode === "all" ? "all" : "active";
+    } catch {
+        return "active";
+    }
+}
+
+// Reads Settings → Live tab "Hide non-working channels" pref. Was never
+// read anywhere in this file — every query hardcoded workingOnly: true,
+// so the toggle had zero effect on this page even though the backend
+// (getChannels) fully supports the workingOnly query param.
+function getLiveWorkingOnlyPref() {
+    try {
+        const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+        return prefs.liveWorkingOnly === true;
+    } catch {
+        return false;
+    }
+}
+
 const SEARCH_DEBOUNCE_MS = 350;
 const ROW_LIMIT = 20;
 const BANNER_INTERVAL = 5000; // ms per slide
@@ -36,13 +64,29 @@ function getTimeLeft(current) {
     return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
 }
 
+// Matches now span a rolling multi-day window (today + a few days ahead),
+// not just today — so a bare time ("7:30 PM") is ambiguous about which day.
+// Shows "Today 7:30 PM" / "Tomorrow 7:30 PM" / "Fri 7:30 PM" as appropriate.
+function formatMatchWhen(kickoff) {
+    if (!kickoff) return "";
+    const d = new Date(kickoff);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86400000);
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (dayDiff === 0) return `Today ${time}`;
+    if (dayDiff === 1) return `Tomorrow ${time}`;
+    return `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 // ── Skeletons ─────────────────────────────────────────────────────────────────
 function BannerSkeleton() {
-    return <div className="w-full rounded-2xl bg-base-300 animate-pulse" style={{ minHeight: 220 }} />;
+    return <div className="w-full rounded-2xl bg-base-300 animate-pulse min-h-[160px] sm:min-h-[220px]" />;
 }
 function CardSkeleton() {
     return (
-        <div className="shrink-0 w-36 sm:w-44">
+        <div className="shrink-0 w-32 sm:w-36 md:w-44">
             <div className="aspect-video rounded-xl bg-base-300 animate-pulse" />
             <div className="h-3 w-3/4 rounded bg-base-300 animate-pulse mt-2" />
             <div className="h-2.5 w-1/2 rounded bg-base-300 animate-pulse mt-1.5" />
@@ -52,7 +96,8 @@ function CardSkeleton() {
 
 // ── LiveBrowseCard — logo-focused, smaller, for category rows ─────────────────
 // Separate from LiveCard (which is the wider EPG-aware card used elsewhere).
-// Routes to /live/watch/:base64url same as LiveCard.
+// Routes to /live/watch/:base64url same as LiveCard. Logo now object-cover
+// (fills the whole card) instead of object-contain+padding.
 function LiveBrowseCard({ item }) {
     const [imgErr, setImgErr] = useState(false);
     const name = item.cleanName || item.name || "Channel";
@@ -64,17 +109,17 @@ function LiveBrowseCard({ item }) {
         <Link
             to={`/live/watch/${toBase64Url(item.url)}`}
             state={{ streamUrl: item.url, channelName: name, channelLogo: item.logo }}
-            className="group shrink-0 w-36 sm:w-44 cursor-pointer select-none no-underline flex flex-col gap-1.5">
+            className="group shrink-0 w-32 sm:w-36 md:w-44 cursor-pointer select-none no-underline flex flex-col gap-1.5">
             <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-base-300 ring-1 ring-white/5 transition-transform duration-200 group-hover:scale-[1.03] group-hover:shadow-xl group-hover:ring-white/20">
                 {thumb ? (
-                    <img src={thumb} alt={name} className="w-full h-full object-contain p-2 bg-black/20" loading="lazy" draggable={false} onError={() => setImgErr(true)} />
+                    <img src={thumb} alt={name} className="w-full h-full object-cover" loading="lazy" draggable={false} onError={() => setImgErr(true)} />
                 ) : (
                     <div className="w-full h-full flex items-center justify-center bg-base-200">
                         <Tv size={20} className="text-base-content/20" />
                     </div>
                 )}
 
-                <div className="absolute inset-0 bg-linear-to-t from-black/50 via-transparent to-transparent" />
+                <div className="absolute inset-0 bg-linear-to-t from-black/60 via-black/10 to-transparent" />
                 <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-error/90 text-white">LIVE</span>
 
                 {progress !== null && (
@@ -95,6 +140,10 @@ function LiveBrowseCard({ item }) {
 // ── Carousel banner ───────────────────────────────────────────────────────────
 // Auto-advances every BANNER_INTERVAL ms. Shows channel logo, name,
 // current EPG event (programme title / time left), and a Watch button.
+// This is the fallback banner shown for the Active/All channel set when
+// there's no sports hero — it already threads channelMode + workingOnly
+// (see the bannerData query below), so it reflects whichever set the
+// person picked (Active Only by default, or All Channel).
 function CarouselBanner({ channels }) {
     const [idx, setIdx] = useState(0);
     const timerRef = useRef(null);
@@ -142,7 +191,7 @@ function CarouselBanner({ channels }) {
     }
 
     return (
-        <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none" style={{ minHeight: 220 }}>
+        <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none min-h-[160px] sm:min-h-[220px]">
             {/* Blurred backdrop */}
             {ch.logo && <img src={ch.logo} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover opacity-10 blur-2xl scale-110" loading="lazy" />}
 
@@ -151,41 +200,41 @@ function CarouselBanner({ channels }) {
             <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent" />
 
             {/* Content */}
-            <div className="relative z-10 flex items-center gap-5 p-6 sm:p-8 h-full min-h-[220px]">
+            <div className="relative z-10 flex items-center gap-3 sm:gap-5 p-4 sm:p-6 md:p-8 h-full min-h-[160px] sm:min-h-[220px]">
                 {/* Logo */}
-                <div className="shrink-0 w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-white/10 flex items-center justify-center ring-1 ring-white/10">
-                    {ch.logo ? <img src={ch.logo} alt={name} className="w-full h-full object-contain p-2" loading="lazy" /> : <Tv size={28} className="text-white/30" />}
+                <div className="shrink-0 w-14 h-14 sm:w-20 sm:h-20 md:w-24 md:h-24 rounded-2xl overflow-hidden bg-white/10 flex items-center justify-center ring-1 ring-white/10">
+                    {ch.logo ? <img src={ch.logo} alt={name} className="w-full h-full object-contain p-2" loading="lazy" /> : <Tv size={24} className="text-white/30" />}
                 </div>
 
                 {/* Info */}
-                <div className="flex-1 min-w-0 flex flex-col gap-2">
+                <div className="flex-1 min-w-0 flex flex-col gap-1.5 sm:gap-2">
                     {/* LIVE badge + category */}
                     <div className="flex items-center gap-2 flex-wrap">
                         <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-error text-white">
                             <Radio size={7} className="animate-pulse" /> LIVE
                         </span>
                         {ch.category && ch.category !== "General" && <span className="text-[10px] text-white/40 font-medium">{ch.category}</span>}
-                        {ch.country && ch.country !== "Unknown" && <span className="text-[10px] text-white/30">{ch.country}</span>}
+                        {ch.country && ch.country !== "Unknown" && <span className="text-[10px] text-white/30 hidden sm:inline">{ch.country}</span>}
                     </div>
 
                     {/* Channel name */}
-                    <h2 className="text-white font-bold text-xl sm:text-3xl leading-tight truncate">{name}</h2>
+                    <h2 className="text-white font-bold text-base sm:text-xl md:text-3xl leading-tight truncate">{name}</h2>
 
                     {/* Current programme */}
                     {progTitle && (
                         <div className="flex flex-col gap-1">
-                            <p className="text-white/80 text-sm font-medium truncate">▶ {progTitle}</p>
-                            {timeLeft && <p className="text-white/40 text-xs">{timeLeft}</p>}
+                            <p className="text-white/80 text-xs sm:text-sm font-medium truncate">▶ {progTitle}</p>
+                            {timeLeft && <p className="text-white/40 text-[10px] sm:text-xs">{timeLeft}</p>}
 
                             {/* Progress bar */}
                             {progress !== null && (
-                                <div className="w-full max-w-xs h-1 rounded-full bg-white/10 overflow-hidden">
+                                <div className="w-full max-w-[200px] sm:max-w-xs h-1 rounded-full bg-white/10 overflow-hidden">
                                     <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${progress}%` }} />
                                 </div>
                             )}
 
                             {/* Next programme */}
-                            {nextProg && <p className="text-white/25 text-[10px] truncate">Next: {nextProg}</p>}
+                            {nextProg && <p className="text-white/25 text-[10px] truncate hidden sm:block">Next: {nextProg}</p>}
                         </div>
                     )}
 
@@ -193,8 +242,8 @@ function CarouselBanner({ channels }) {
                     <Link
                         to={`/live/watch/${toBase64Url(ch.url)}`}
                         state={{ streamUrl: ch.url, channelName: name, channelLogo: ch.logo }}
-                        className="mt-1 self-start inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-primary text-primary-content font-semibold text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
-                        <Play size={13} fill="currentColor" /> Watch Now
+                        className="mt-1 self-start inline-flex items-center gap-2 px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl bg-primary text-primary-content font-semibold text-xs sm:text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
+                        <Play size={12} fill="currentColor" /> Watch Now
                     </Link>
                 </div>
             </div>
@@ -204,17 +253,17 @@ function CarouselBanner({ channels }) {
                 <>
                     <button
                         onClick={prev}
-                        className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center text-white transition-colors border-none cursor-pointer">
-                        <ChevronLeft size={16} />
+                        className="absolute left-1.5 sm:left-2 top-1/2 -translate-y-1/2 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center text-white transition-colors border-none cursor-pointer">
+                        <ChevronLeft size={15} />
                     </button>
                     <button
                         onClick={next}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center text-white transition-colors border-none cursor-pointer">
-                        <ChevronRight size={16} />
+                        className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center text-white transition-colors border-none cursor-pointer">
+                        <ChevronRight size={15} />
                     </button>
 
                     {/* Dots */}
-                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
+                    <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
                         {channels.map((_, i) => (
                             <button
                                 key={i}
@@ -245,12 +294,12 @@ function SportsHero({ event, fallbackChannel, loading }) {
         const isLive = event.status === "live";
         const primaryChannel = event.channels?.[0];
         return (
-            <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none" style={{ minHeight: 240 }}>
+            <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none min-h-[180px] sm:min-h-[240px]">
                 {event.thumbnail && <img src={event.thumbnail} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover opacity-15 blur-2xl scale-110" loading="lazy" />}
                 <div className="absolute inset-0 bg-linear-to-r from-black/90 via-black/60 to-transparent" />
                 <div className="absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent" />
 
-                <div className="relative z-10 flex flex-col justify-center gap-3 p-6 sm:p-8 h-full min-h-[240px]">
+                <div className="relative z-10 flex flex-col justify-center gap-2.5 sm:gap-3 p-4 sm:p-6 md:p-8 h-full min-h-[180px] sm:min-h-[240px]">
                     <div className="flex items-center gap-2 flex-wrap">
                         {isLive ? (
                             <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-error text-white">
@@ -262,32 +311,38 @@ function SportsHero({ event, fallbackChannel, loading }) {
                         {event.league && <span className="text-xs text-white/60 font-medium truncate">{event.league}</span>}
                     </div>
 
-                    <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
-                        <p className="text-white font-bold text-lg sm:text-2xl truncate">{event.homeTeam}</p>
+                    <div className="flex items-center gap-2 sm:gap-4 md:gap-6 flex-wrap">
+                        <p className="text-white font-bold text-sm sm:text-lg md:text-2xl truncate">{event.homeTeam}</p>
                         {event.score?.home != null ? (
-                            <span className="text-white font-black text-2xl sm:text-3xl shrink-0">
+                            <span className="text-white font-black text-lg sm:text-2xl md:text-3xl shrink-0">
                                 {event.score.home} – {event.score.away}
                             </span>
                         ) : (
-                            <span className="text-white/40 text-sm font-medium shrink-0">VS</span>
+                            <span className="text-white/40 text-xs sm:text-sm font-medium shrink-0">VS</span>
                         )}
-                        <p className="text-white font-bold text-lg sm:text-2xl truncate">{event.awayTeam}</p>
+                        <p className="text-white font-bold text-sm sm:text-lg md:text-2xl truncate">{event.awayTeam}</p>
                     </div>
 
-                    <div className="flex items-center gap-3 flex-wrap text-white/50 text-xs">
+                    <div className="flex items-center gap-2 sm:gap-3 flex-wrap text-white/50 text-[10px] sm:text-xs">
                         {event.kickoff && <span>{new Date(event.kickoff).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span>}
-                        {event.venue && <span>· {event.venue}</span>}
+                        {event.venue && <span className="hidden sm:inline">· {event.venue}</span>}
                         <span>
                             · {event.channels?.length ?? 0} channel{event.channels?.length !== 1 ? "s" : ""}
                         </span>
                     </div>
+                    {primaryChannel && (
+                        <p className="text-white/40 text-[10px] sm:text-xs truncate">
+                            📺 Streaming on <span className="text-white/70 font-medium">{primaryChannel.cleanName || primaryChannel.name}</span>
+                            {event.channels?.length > 1 && ` +${event.channels.length - 1} more`}
+                        </p>
+                    )}
 
                     {primaryChannel && (
                         <Link
                             to={`/live/watch/${toBase64Url(primaryChannel.url)}`}
                             state={{ streamUrl: primaryChannel.url, channelName: primaryChannel.cleanName || primaryChannel.name, channelLogo: primaryChannel.logo }}
-                            className="mt-1 self-start inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-primary text-primary-content font-semibold text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
-                            <Play size={13} fill="currentColor" /> Watch Now
+                            className="mt-1 self-start inline-flex items-center gap-2 px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl bg-primary text-primary-content font-semibold text-xs sm:text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
+                            <Play size={12} fill="currentColor" /> Watch Now
                         </Link>
                     )}
                 </div>
@@ -299,31 +354,31 @@ function SportsHero({ event, fallbackChannel, loading }) {
     const name = fallbackChannel.channelName || "Live Channel";
     const prog = fallbackChannel.programme;
     return (
-        <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none" style={{ minHeight: 220 }}>
+        <div className="relative w-full rounded-2xl overflow-hidden bg-base-200 select-none min-h-[160px] sm:min-h-[220px]">
             {fallbackChannel.channelLogo && (
                 <img src={fallbackChannel.channelLogo} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover opacity-10 blur-2xl scale-110" loading="lazy" />
             )}
             <div className="absolute inset-0 bg-linear-to-r from-black/90 via-black/50 to-transparent" />
-            <div className="relative z-10 flex items-center gap-5 p-6 sm:p-8 h-full min-h-[220px]">
-                <div className="shrink-0 w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-white/10 flex items-center justify-center ring-1 ring-white/10">
+            <div className="relative z-10 flex items-center gap-3 sm:gap-5 p-4 sm:p-6 md:p-8 h-full min-h-[160px] sm:min-h-[220px]">
+                <div className="shrink-0 w-14 h-14 sm:w-20 sm:h-20 md:w-24 md:h-24 rounded-2xl overflow-hidden bg-white/10 flex items-center justify-center ring-1 ring-white/10">
                     {fallbackChannel.channelLogo ? (
                         <img src={fallbackChannel.channelLogo} alt={name} className="w-full h-full object-contain p-2" loading="lazy" />
                     ) : (
-                        <Tv size={28} className="text-white/30" />
+                        <Tv size={24} className="text-white/30" />
                     )}
                 </div>
-                <div className="flex-1 min-w-0 flex flex-col gap-2">
+                <div className="flex-1 min-w-0 flex flex-col gap-1.5 sm:gap-2">
                     <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-error text-white w-fit">
                         <Radio size={7} className="animate-pulse" /> LIVE
                     </span>
-                    <h2 className="text-white font-bold text-xl sm:text-3xl leading-tight truncate">{name}</h2>
-                    {prog?.title && <p className="text-white/70 text-sm truncate">▶ {prog.title}</p>}
+                    <h2 className="text-white font-bold text-base sm:text-xl md:text-3xl leading-tight truncate">{name}</h2>
+                    {prog?.title && <p className="text-white/70 text-xs sm:text-sm truncate">▶ {prog.title}</p>}
                     {fallbackChannel.streamUrl && (
                         <Link
                             to={`/live/watch/${toBase64Url(fallbackChannel.streamUrl)}`}
                             state={{ streamUrl: fallbackChannel.streamUrl, channelName: name, channelLogo: fallbackChannel.channelLogo }}
-                            className="mt-1 self-start inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-primary text-primary-content font-semibold text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
-                            <Play size={13} fill="currentColor" /> Watch Now
+                            className="mt-1 self-start inline-flex items-center gap-2 px-4 sm:px-5 py-1.5 sm:py-2 rounded-xl bg-primary text-primary-content font-semibold text-xs sm:text-sm hover:opacity-90 active:scale-95 transition-all no-underline">
+                            <Play size={12} fill="currentColor" /> Watch Now
                         </Link>
                     )}
                 </div>
@@ -345,7 +400,7 @@ function SportsEventCarousel({ matches, selectedId, onSelect, loading }) {
     if (loading) {
         return (
             <section>
-                <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3">Today&rsquo;s Matches</h2>
+                <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3">Upcoming Matches</h2>
                 <div className="flex gap-3 overflow-hidden">
                     {Array.from({ length: 4 }).map((_, i) => (
                         <CardSkeleton key={i} />
@@ -358,10 +413,10 @@ function SportsEventCarousel({ matches, selectedId, onSelect, loading }) {
     if (!matches.length) {
         return (
             <section>
-                <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3">Today&rsquo;s Matches</h2>
+                <h2 className="text-base sm:text-lg font-semibold text-base-content mb-3">Upcoming Matches</h2>
                 <div className="rounded-xl bg-base-200 ring-1 ring-white/5 py-8 px-4 text-center">
-                    <p className="text-sm text-base-content/50">No sporting events found for today.</p>
-                    <p className="text-xs text-base-content/30 mt-1">This depends on the sports data provider having fixtures for today — check back later.</p>
+                    <p className="text-sm text-base-content/50">No sporting events found in the next few days.</p>
+                    <p className="text-xs text-base-content/30 mt-1">This depends on the sports data provider having fixtures — check back later.</p>
                 </div>
             </section>
         );
@@ -370,7 +425,7 @@ function SportsEventCarousel({ matches, selectedId, onSelect, loading }) {
     return (
         <section>
             <div className="flex items-center justify-between mb-3">
-                <h2 className="text-base sm:text-lg font-semibold text-base-content">Today&rsquo;s Matches</h2>
+                <h2 className="text-base sm:text-lg font-semibold text-base-content">Upcoming Matches</h2>
                 <div className="hidden sm:flex gap-1">
                     <button
                         onClick={() => scroll(-1)}
@@ -396,20 +451,19 @@ function SportsEventCarousel({ matches, selectedId, onSelect, loading }) {
                             type="button"
                             onClick={() => onSelect(ev.id)}
                             aria-pressed={active}
-                            className={`shrink-0 w-40 sm:w-48 text-left rounded-xl p-2.5 border-none cursor-pointer transition-colors ${
+                            className={`shrink-0 w-36 sm:w-40 md:w-48 text-left rounded-xl p-2.5 border-none cursor-pointer transition-colors ${
                                 active ? "bg-primary/15 ring-1 ring-primary/50" : "bg-base-200 hover:bg-base-300/70 ring-1 ring-white/5"
                             }`}>
                             <div className="flex items-center justify-between gap-2">
                                 <span className="text-[9px] text-base-content/40 font-semibold uppercase tracking-wide truncate">{ev.league || ev.sport}</span>
-                                {isLive ? (
-                                    <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-error/90 text-white shrink-0">
-                                        <Radio size={7} className="animate-pulse" /> LIVE
-                                    </span>
-                                ) : (
-                                    <span className="text-[9px] text-base-content/35 shrink-0">
-                                        {ev.kickoff ? new Date(ev.kickoff).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
-                                    </span>
-                                )}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                    {isLive && (
+                                        <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-error/90 text-white">
+                                            <Radio size={7} className="animate-pulse" /> LIVE
+                                        </span>
+                                    )}
+                                    {ev.kickoff && <span className="text-[9px] text-base-content/35">{formatMatchWhen(ev.kickoff)}</span>}
+                                </div>
                             </div>
                             <div className="flex flex-col gap-0.5 mt-1.5">
                                 <div className="flex items-center justify-between gap-2">
@@ -421,6 +475,11 @@ function SportsEventCarousel({ matches, selectedId, onSelect, loading }) {
                                     {ev.score?.away != null && <p className="text-xs font-bold text-base-content">{ev.score.away}</p>}
                                 </div>
                             </div>
+                            {/* Which channel(s) are streaming this match — from sportsService's
+                                lightweight enriched channel list on todayMatches */}
+                            {ev.channels?.length > 0 && (
+                                <p className="text-[9px] text-base-content/35 truncate mt-1.5 pt-1.5 border-t border-white/5">📺 {ev.channels.map((c) => c.name).join(", ")}</p>
+                            )}
                         </button>
                     );
                 })}
@@ -509,7 +568,7 @@ function EpgSportsRow({ channels }) {
                         key={ch.channelId ?? i}
                         to={ch.streamUrl ? `/live/watch/${toBase64Url(ch.streamUrl)}` : "#"}
                         state={{ streamUrl: ch.streamUrl, channelName: ch.channelName, channelLogo: ch.channelLogo }}
-                        className="group shrink-0 w-40 sm:w-48 no-underline flex flex-col gap-1.5 rounded-xl bg-base-200 hover:bg-base-300/70 transition-colors p-2.5 ring-1 ring-white/5">
+                        className="group shrink-0 w-36 sm:w-40 md:w-48 no-underline flex flex-col gap-1.5 rounded-xl bg-base-200 hover:bg-base-300/70 transition-colors p-2.5 ring-1 ring-white/5">
                         <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-white/5">
                                 {ch.channelLogo ? <img src={ch.channelLogo} alt="" className="w-full h-full object-contain" loading="lazy" /> : <Tv size={14} className="text-base-content/30" />}
@@ -528,11 +587,11 @@ function EpgSportsRow({ channels }) {
 }
 
 // ── Category row ──────────────────────────────────────────────────────────────
-function CategoryRow({ category, enabled }) {
+function CategoryRow({ category, enabled, mode, workingOnly }) {
     const rowRef = useRef(null);
     const { data, isLoading } = useQuery({
-        queryKey: ["live", "channels", { category: category.name, page: 1, limit: ROW_LIMIT }],
-        queryFn: () => getLiveChannels({ category: category.name, page: 1, limit: ROW_LIMIT, workingOnly: true }),
+        queryKey: ["live", "channels", { category: category.name, page: 1, limit: ROW_LIMIT, mode, workingOnly }],
+        queryFn: () => getLiveChannels({ category: category.name, page: 1, limit: ROW_LIMIT, workingOnly, all: mode === "all" }),
         enabled,
         staleTime: 60 * 1000,
     });
@@ -543,13 +602,13 @@ function CategoryRow({ category, enabled }) {
 
     return (
         <section>
-            <div className="flex items-center justify-between mb-3">
-                <Link to={`/live/category/${encodeURIComponent(category.name.toLowerCase())}`} className="flex items-center gap-2 no-underline group/cat">
-                    <h2 className="text-base sm:text-lg font-semibold text-base-content group-hover/cat:text-primary transition-colors">{category.name}</h2>
-                    {total > 0 && <span className="text-xs text-base-content/35 bg-base-300 px-2 py-0.5 rounded-full">{total}</span>}
-                    <ChevronRight size={15} className="text-base-content/30 group-hover/cat:text-primary transition-colors" />
+            <div className="flex items-center justify-between mb-3 gap-2">
+                <Link to={`/live/category/${encodeURIComponent(category.name.toLowerCase())}`} className="flex items-center gap-2 no-underline group/cat min-w-0">
+                    <h2 className="text-sm sm:text-base md:text-lg font-semibold text-base-content group-hover/cat:text-primary transition-colors truncate">{category.name}</h2>
+                    {total > 0 && <span className="text-xs text-base-content/35 bg-base-300 px-2 py-0.5 rounded-full shrink-0">{total}</span>}
+                    <ChevronRight size={15} className="text-base-content/30 group-hover/cat:text-primary transition-colors shrink-0" />
                 </Link>
-                <div className="hidden sm:flex gap-1">
+                <div className="hidden sm:flex gap-1 shrink-0">
                     <button
                         onClick={() => scroll(-1)}
                         aria-label="Scroll left"
@@ -564,7 +623,7 @@ function CategoryRow({ category, enabled }) {
                     </button>
                 </div>
             </div>
-            <div ref={rowRef} className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+            <div ref={rowRef} className="flex gap-2.5 sm:gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                 {isLoading ? Array.from({ length: 8 }).map((_, i) => <CardSkeleton key={i} />) : channels.map((ch, i) => <LiveBrowseCard key={ch.id ?? ch.url ?? i} item={ch} />)}
             </div>
         </section>
@@ -572,16 +631,16 @@ function CategoryRow({ category, enabled }) {
 }
 
 // ── Search grid ───────────────────────────────────────────────────────────────
-function SearchGrid({ q, enabled }) {
+function SearchGrid({ q, enabled, mode, workingOnly }) {
     const PAGE_LIMIT = 25;
     const [page, setPage] = useState(1);
     useEffect(() => {
         setPage(1);
-    }, [q]);
+    }, [q, mode, workingOnly]);
 
     const { data, isLoading, isFetching, error } = useQuery({
-        queryKey: ["live", "channels", { q, page }],
-        queryFn: () => getLiveChannels({ q, page, limit: PAGE_LIMIT, workingOnly: true }),
+        queryKey: ["live", "channels", { q, page, mode, workingOnly }],
+        queryFn: () => getLiveChannels({ q, page, limit: PAGE_LIMIT, workingOnly, all: mode === "all" }),
         enabled: enabled && !!q,
         staleTime: 60 * 1000,
     });
@@ -592,7 +651,7 @@ function SearchGrid({ q, enabled }) {
     if (error) return <p className="text-sm text-error">Search failed: {error.message}</p>;
     if (isLoading)
         return (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
                 {Array.from({ length: PAGE_LIMIT }).map((_, i) => (
                     <CardSkeleton key={i} />
                 ))}
@@ -605,7 +664,7 @@ function SearchGrid({ q, enabled }) {
             <p className="text-xs text-base-content/40 mb-3">
                 {total} result{total !== 1 ? "s" : ""} for &ldquo;{q}&rdquo;
             </p>
-            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 transition-opacity ${isFetching ? "opacity-60" : ""}`}>
+            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4 transition-opacity ${isFetching ? "opacity-60" : ""}`}>
                 {channels.map((ch, i) => (
                     <LiveBrowseCard key={ch.id ?? ch.url ?? i} item={ch} />
                 ))}
@@ -637,6 +696,24 @@ function SearchGrid({ q, enabled }) {
 export default function Live() {
     const { isAuthenticated, isApproved, loading: authLoading } = useAuth();
     const enabled = !authLoading && isAuthenticated && isApproved;
+
+    // Page-level toggle — reactive (unlike a plain localStorage read, this
+    // actually re-renders + refetches the moment it's flipped). Seeded from
+    // the same "flux-prefs" key Settings → Live writes to, and written back
+    // on change so the two stay in sync either direction.
+    const [channelMode, setChannelMode] = useState(getLiveChannelMode);
+    function changeChannelMode(next) {
+        setChannelMode(next);
+        try {
+            const prefs = JSON.parse(localStorage.getItem("flux-prefs") || "{}");
+            localStorage.setItem("flux-prefs", JSON.stringify({ ...prefs, liveChannelMode: next }));
+        } catch {}
+    }
+
+    // "Hide non-working channels" — Settings-only toggle (no in-page control
+    // here), so a plain mount-time read is enough; re-opening this page after
+    // changing it in Settings picks up the new value same as channelMode does.
+    const [workingOnly] = useState(getLiveWorkingOnlyPref);
 
     const [searchInput, setSearchInput] = useState("");
     const [q, setQ] = useState("");
@@ -677,13 +754,18 @@ export default function Live() {
     const activeEventId = selectedEventId ?? topEvent?.id ?? null;
 
     // Last-resort fallback banner (no sports events AND no recommended channel
-    // from the backend) — reuses whatever channels exist in the first category.
+    // from the backend) — pulls straight from the toggled channel set (no
+    // category filter) so it reflects whatever channelMode/workingOnly the
+    // person picked. Previously this filtered by categories[0].name, but that
+    // category comes from the unfiltered category list — if the Active-only
+    // set happened to have zero channels in that specific category, the query
+    // returned empty and the banner was stuck on the skeleton forever, which
+    // looked like "the banner doesn't work for Active Only".
     const hasSportsHero = !featuredLoading && (topEvent || recommendedChannels[0]);
-    const bannerCat = categories[0]?.name ?? null;
     const { data: bannerData } = useQuery({
-        queryKey: ["live", "channels", { category: bannerCat, page: 1, limit: 12 }],
-        queryFn: () => getLiveChannels({ category: bannerCat || undefined, page: 1, limit: 12, workingOnly: true }),
-        enabled: enabled && !!bannerCat && !featuredLoading && !hasSportsHero,
+        queryKey: ["live", "channels", { page: 1, limit: 12, mode: channelMode, workingOnly }],
+        queryFn: () => getLiveChannels({ page: 1, limit: 12, workingOnly, all: channelMode === "all" }),
+        enabled: enabled && !featuredLoading && !hasSportsHero,
         staleTime: 60 * 1000,
     });
     const bannerChannels = (() => {
@@ -697,7 +779,7 @@ export default function Live() {
 
     if (!authLoading && !enabled) {
         return (
-            <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
+            <div className="flex flex-col items-center justify-center py-20 gap-3 text-center px-4">
                 <Tv size={36} className="text-base-content/25" />
                 <p className="text-base-content/50 text-sm">Sign in to watch Live TV.</p>
             </div>
@@ -705,34 +787,52 @@ export default function Live() {
     }
 
     return (
-        <div className="space-y-8">
+        <div className="space-y-6 sm:space-y-8">
             {/* Header */}
-            <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="flex items-center gap-2">
-                    <Tv size={22} className="text-primary" />
-                    <h1 className="text-2xl sm:text-3xl font-bold text-base-content">Live TV</h1>
+                    <Tv size={20} className="text-primary shrink-0" />
+                    <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-base-content">Live TV</h1>
                 </div>
-                <div className="flex items-center gap-2 bg-base-300 rounded-md px-3 h-9 w-full sm:w-64">
-                    <Search size={16} className="text-base-content/50 shrink-0" />
-                    <input
-                        type="text"
-                        value={searchInput}
-                        onChange={(e) => handleSearchChange(e.target.value)}
-                        placeholder="Search channels..."
-                        className="bg-transparent outline-none text-sm text-base-content placeholder:text-base-content/40 w-full"
-                    />
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+                    {/* Active Only / All Channel — full-width equal-split buttons on mobile
+                        so both are comfortably tappable instead of a cramped pill. */}
+                    <div className="grid grid-cols-2 sm:inline-flex sm:items-center w-full sm:w-auto rounded-md border border-base-content/10 bg-base-300 p-0.5 shrink-0">
+                        {[
+                            { v: "active", l: "Active Only" },
+                            { v: "all", l: "All Channel" },
+                        ].map((o) => (
+                            <button
+                                key={o.v}
+                                onClick={() => changeChannelMode(o.v)}
+                                className={`px-2 sm:px-3 py-2 sm:py-1.5 rounded text-xs font-semibold transition-colors border-none cursor-pointer whitespace-nowrap
+                                    ${channelMode === o.v ? "bg-primary text-primary-content" : "bg-transparent text-base-content/50 hover:text-base-content/80"}`}>
+                                {o.l}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-2 bg-base-300 rounded-md px-3 h-9 w-full sm:w-64">
+                        <Search size={16} className="text-base-content/50 shrink-0" />
+                        <input
+                            type="text"
+                            value={searchInput}
+                            onChange={(e) => handleSearchChange(e.target.value)}
+                            placeholder="Search channels..."
+                            className="bg-transparent outline-none text-sm text-base-content placeholder:text-base-content/40 w-full min-w-0"
+                        />
+                    </div>
                 </div>
             </div>
 
             {/* Search mode → grid */}
             {q ? (
-                <SearchGrid q={q} enabled={enabled} />
+                <SearchGrid q={q} enabled={enabled} mode={channelMode} workingOnly={workingOnly} />
             ) : (
-                <div className="space-y-10">
+                <div className="space-y-8 sm:space-y-10">
                     {/* Sports Hero — Featured Sports Event API, backend-picked */}
                     {hasSportsHero ? (
                         <SportsHero event={topEvent} fallbackChannel={!topEvent ? recommendedChannels[0] : null} loading={featuredLoading} />
-                    ) : catLoading || featuredLoading || bannerChannels.length === 0 ? (
+                    ) : featuredLoading || bannerChannels.length === 0 ? (
                         <BannerSkeleton />
                     ) : (
                         <CarouselBanner channels={bannerChannels} />
@@ -760,9 +860,9 @@ export default function Live() {
                             </section>
                         ))
                     ) : categories.length === 0 ? (
-                        <p className="text-base-content/40 text-sm py-10 text-center">No live channels yet. Add a source from the admin dashboard (IPTV tab).</p>
+                        <p className="text-base-content/40 text-sm py-10 text-center px-4">No live channels yet. Add a source from the admin dashboard (IPTV tab).</p>
                     ) : (
-                        categories.map((cat) => <CategoryRow key={cat.name} category={cat} enabled={enabled} />)
+                        categories.map((cat) => <CategoryRow key={cat.name} category={cat} enabled={enabled} mode={channelMode} workingOnly={workingOnly} />)
                     )}
                 </div>
             )}

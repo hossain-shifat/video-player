@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const DATA_DIR = path.join(__dirname, "..", "data");
 const SOURCES_FILE = path.join(DATA_DIR, "iptv-sources.json");
 const LIVE_FILE = path.join(DATA_DIR, "live.json");
+const ACTIVE_LIVE_FILE = path.join(DATA_DIR, "active_live.json"); // admin-curated "Active" channels only — see channelStateStore.syncActiveLiveFile
 const UPLOADS_DIR = path.join(DATA_DIR, "iptv-uploads");
 
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -31,7 +32,13 @@ async function atomicWrite(file, data) {
     const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
     const fd = await fs.promises.open(tmp, "w");
     try {
-        await fd.writeFile(JSON.stringify(data, null, 2), "utf-8");
+        // No pretty-print indentation — this file can hold thousands of IPTV
+        // channels (especially live.json after a bulk health-check write),
+        // and JSON.stringify(data, null, 2) builds a string 2-3x bigger than
+        // the compact form purely for indentation whitespace. That's real
+        // memory pressure on a small NAS/CasaOS box exactly when the caller
+        // (runBulkStreamCheck) already has the full channel list resident.
+        await fd.writeFile(JSON.stringify(data), "utf-8");
         await fd.sync();
     } finally {
         await fd.close();
@@ -42,6 +49,7 @@ async function atomicWrite(file, data) {
 // Serialize writes per-file so concurrent saves never race
 let sourcesQueue = Promise.resolve();
 let liveQueue = Promise.resolve();
+let activeLiveQueue = Promise.resolve();
 
 function writeSources(sources) {
     sourcesQueue = sourcesQueue.catch(() => {}).then(() => atomicWrite(SOURCES_FILE, sources));
@@ -51,6 +59,21 @@ function writeSources(sources) {
 function writeLive(live) {
     liveQueue = liveQueue.catch(() => {}).then(() => atomicWrite(LIVE_FILE, live));
     return liveQueue;
+}
+
+// ActiveLive.json — admin-marked-Active channels only, full details, grouped
+// like live.json. Deliberately its OWN file/queue: ingest/refresh/delete only
+// ever call writeLive(), never this — so deleting a source (which can empty
+// live.json) never touches ActiveLive.json. It's only written by
+// channelStateStore.syncActiveLiveFile() when the admin actually
+// activates/deactivates/edits/hides a channel.
+function getActiveLive() {
+    return readJson(ACTIVE_LIVE_FILE, { date: nowStamp(), channels: {} });
+}
+
+function writeActiveLive(live) {
+    activeLiveQueue = activeLiveQueue.catch(() => {}).then(() => atomicWrite(ACTIVE_LIVE_FILE, live));
+    return activeLiveQueue;
 }
 
 // ─── Sources ─────────────────────────────────────────────────────────────────
@@ -184,6 +207,8 @@ module.exports = {
     deleteSource,
     getLive,
     writeLive,
+    getActiveLive,
+    writeActiveLive,
     getPublicLive,
     getPublicLiveRich,
     mergeChannelsForSource,

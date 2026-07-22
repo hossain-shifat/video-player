@@ -22,7 +22,19 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //          guestStars, networks, collection, contentRating, imdbId
 //   10  — "date" field added: ISO timestamp of when the file was FIRST added
 //          to the server (first ever cache write). Preserved across refreshes.
-const PARSER_VERSION = 10;
+//   11  — _sourceTitle self-heal: every entry (found + _notFound) now stores
+//          the parsed title that was used to produce it. getMetadata() compares
+//          the LIVE parsed title against _sourceTitle on every read — if they
+//          differ (i.e. nameParser output changed for this file, e.g. a site-
+//          prefix stripping fix), the cache entry is treated as stale and
+//          re-fetched regardless of _parserVersion or _notFound TTL. This is
+//          what actually fixes "parser improved but old _notFound sticks
+//          forever" — before v11 that class of bug required a manual
+//          PARSER_VERSION bump to force a global purge. Old entries (no
+//          _sourceTitle) are untouched by this check and fall back to the
+//          normal version/TTL validity path — they self-heal the next time
+//          they're written (setCache/setNotFound always stamp _sourceTitle now).
+const PARSER_VERSION = 11;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
 // from a bad API key or transient network failure blocking real lookups.
@@ -126,6 +138,20 @@ function isCacheValid(entry) {
     return true;
 }
 
+// Self-heal check: does the LIVE parsed title (from current nameParser output)
+// differ from the title that was actually used to produce this cache entry?
+// If yes, the parser changed behavior for this file since it was cached —
+// treat the entry as stale regardless of _parserVersion/TTL. This is what
+// lets a nameParser fix (e.g. site-prefix stripping) self-correct old
+// _notFound entries without a manual global PARSER_VERSION bump.
+// Entries written before v11 have no _sourceTitle and are simply skipped here
+// (they fall back to the normal isCacheValid() path) — they gain a
+// _sourceTitle the next time they're written and self-heal from then on.
+function hasTitleDrifted(entry, liveTitle) {
+    if (!entry || !entry._sourceTitle) return false;
+    return entry._sourceTitle !== liveTitle;
+}
+
 // Returns the "added" date to persist — reuses an existing entry's date if
 // one is already on record (even a stale/invalid one), otherwise stamps now.
 // This guarantees "date" always reflects the FIRST time the file was ever
@@ -142,7 +168,10 @@ async function getCached(fileId) {
     return entry;
 }
 
-function setCache(fileId, metadata) {
+// setCache(fileId, metadata, sourceTitle)
+// sourceTitle = the parsed.title that produced this TMDB hit — stamped as
+// _sourceTitle so future reads can detect parser-output drift (self-heal).
+function setCache(fileId, metadata, sourceTitle) {
     // ── FIX: Do NOT persist the 'parsed' object into the cache ────────────────
     // parsed is internal parser data (episodes array, confidence score, codec,
     // resolution, languages, etc.) that is useful during enrichment but bloats
@@ -157,6 +186,7 @@ function setCache(fileId, metadata) {
     store.set(fileId, {
         ...cleanMetadata,
         date,
+        _sourceTitle: sourceTitle,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
     });
@@ -169,6 +199,7 @@ function setNotFound(fileId, title) {
     store.set(fileId, {
         _notFound: true,
         _title: title,
+        _sourceTitle: title, // same value — uniform drift-check field
         date,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
@@ -211,10 +242,11 @@ async function purgeStaleEntries() {
  * Given { id, name } returns enriched TMDB metadata (or null if no match).
  *
  * Cache behaviour:
- *   HIT  (valid version, not _notFound) → return immediately, no network call
- *   HIT  (_notFound, within TTL)        → return null immediately
- *   HIT  (_notFound, expired)           → purge + re-fetch
- *   MISS or stale version               → fetch from TMDB, cache result
+ *   HIT  (valid version, not _notFound, title NOT drifted) → return immediately
+ *   HIT  (_notFound, within TTL, title NOT drifted)        → return null immediately
+ *   HIT  (_notFound, expired)                              → purge + re-fetch
+ *   HIT  but title DRIFTED (parser output changed)         → purge + re-fetch (self-heal)
+ *   MISS or stale version                                  → fetch from TMDB, cache result
  *
  * Network/auth errors are NOT cached — next request will retry TMDB.
  * Genuine "no result" responses ARE cached (for NOT_FOUND_TTL_MS).
@@ -222,19 +254,33 @@ async function purgeStaleEntries() {
  * "date" field: always the ISO timestamp of the FIRST time this file was
  * ever cached — i.e. the "added to server" date. Survives version bumps
  * and refreshes because resolveAddedDate() carries it forward.
+ *
+ * "_sourceTitle" field: the parsed.title used to produce the cache entry.
+ * Compared against the live parse on every call — a mismatch (parser fix
+ * changed the output title for this file) invalidates the entry even if
+ * _parserVersion/TTL still say it's valid. This is what makes a nameParser
+ * fix self-heal old bad cache entries (e.g. stale _notFound from garbage
+ * titles) without requiring a manual PARSER_VERSION bump.
  */
 async function getMetadata(file) {
     await loadStore();
 
+    // Parse up-front — needed both for the TMDB lookup AND the drift check.
+    const parsed = parseFilename(file.name);
+
     const cached = store.get(file.id);
-    if (cached && isCacheValid(cached)) {
+    const driftedStale = hasTitleDrifted(cached, parsed.title);
+
+    if (cached && isCacheValid(cached) && !driftedStale) {
         if (cached._notFound) return null;
         return cached;
     }
 
-    // Stale or missing — re-fetch
-    const parsed = parseFilename(file.name);
+    if (driftedStale) {
+        console.log(`[Metadata] Self-heal: source title changed "${cached._sourceTitle}" → "${parsed.title}" for ${file.id} — re-fetching`);
+    }
 
+    // Stale, missing, or drifted — re-fetch
     console.log(
         `[Metadata] Fetching: "${parsed.title}"` +
             ` type=${parsed.type}` +
@@ -259,8 +305,8 @@ async function getMetadata(file) {
         return null;
     }
 
-    // Store clean TMDB data (no 'parsed' internals) + date
-    setCache(file.id, metadata);
+    // Store clean TMDB data (no 'parsed' internals) + date + sourceTitle
+    setCache(file.id, metadata, parsed.title);
     return store.get(file.id); // return the stored version (without parsed)
 }
 

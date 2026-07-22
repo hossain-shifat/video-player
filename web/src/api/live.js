@@ -30,6 +30,7 @@ export function getLiveChannels(params = {}) {
     if (params.country) qs.set("country", params.country);
     if (params.language) qs.set("language", params.language);
     if (params.quality) qs.set("quality", params.quality);
+    if (params.all) qs.set("all", "true"); // All Channel vs Active Only toggle (Live.jsx / LiveCategory.jsx)
     const query = qs.toString();
     return api.get(`/api/live/channels${query ? `?${query}` : ""}`);
 }
@@ -185,6 +186,21 @@ export async function checkLiveStreamStatus(url, signal) {
     return res.data;
 }
 
+/**
+ * POST /api/live/check/bulk — starts a full server-side re-check of every
+ * channel's streamStatus. Fire this from a "Reload" button; don't poll
+ * per-row on every page view — the badge should read the persisted
+ * streamStatus from the channel list response instead.
+ */
+export function startLiveBulkCheck() {
+    return api.post("/api/live/check/bulk");
+}
+
+/** GET /api/live/check/status — { running: boolean } */
+export function getLiveBulkCheckStatus() {
+    return api.get("/api/live/check/status");
+}
+
 // ─── Channel State — Active / Edit / Delete (DashIPTV.jsx) ─────────────────────
 // Backed by channelStateStore.js on the server (server/data/channel-state.json).
 // Separate from source management above — these act on individual channels.
@@ -225,4 +241,32 @@ export function deleteLiveChannel(id) {
 /** POST /api/live/channels/:id/restore — undo a hide */
 export function restoreLiveChannel(id) {
     return api.post(`/api/live/channels/${encodeURIComponent(id)}/restore`);
+}
+
+// ─── Active-tab full CRUD (writes only to active_live.json) ───────────────
+
+/**
+ * PATCH /api/live/active/:id — edit any field on an Active-tab entry
+ * (name, logo, category, country, group, url, ...). Separate from
+ * updateLiveChannel() above, which patches the main Channels-tab list.
+ * @param {string} id
+ * @param {object} data
+ */
+export function updateActiveLiveChannel(id, data) {
+    return api.patch(`/api/live/active/${encodeURIComponent(id)}`, data);
+}
+
+/**
+ * POST /api/live/active/:id/logo — uploads an image file to imgbb and saves
+ * the returned URL as this Active channel's logo.
+ * @param {string} id
+ * @param {File} file
+ */
+export async function uploadActiveLiveLogo(id, file) {
+    const form = new FormData();
+    form.append("logo", file);
+    const res = await axiosInstance.post(`/api/live/active/${encodeURIComponent(id)}/logo`, form, {
+        headers: { "Content-Type": undefined },
+    });
+    return res.data;
 }

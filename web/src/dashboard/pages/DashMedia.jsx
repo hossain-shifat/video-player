@@ -1074,8 +1074,11 @@ export default function DashMedia() {
             // Series/anime: use the most recently added episode's real date
             // (seriesLatestAdded, computed above from addedDatesMap). Only
             // fall back to metadata.date (TMDB-fetch-time, not a real file
-            // date) if neither real source is available yet.
-            const added = type === "movie" ? item.addedAt || item.metadata?.date || 0 : seriesLatestAdded || item.metadata?.date || 0;
+            // date) if neither real source is available yet. No 0 fallback —
+            // an unavailable date must stay nullish, not become new Date(0)
+            // (epoch / Jan 1 1970), which fmtDate would render as a real
+            // (wrong) date instead of "—".
+            const added = type === "movie" ? item.addedAt || item.metadata?.date || null : seriesLatestAdded || item.metadata?.date || null;
 
             let poster = item.metadata?.poster;
             if (poster && poster.startsWith("/")) poster = `https://image.tmdb.org/t/p/w200${poster}`;
@@ -1090,7 +1093,7 @@ export default function DashMedia() {
                 _originalTitle: originalTitle,
                 _year: year,
                 _size: realSize || size, // real probed bytes when available, else scanner bytes (movies only have scanner fallback — series never had one)
-                _added: new Date(added),
+                _added: added ? new Date(added) : null,
                 _duration: repInfo?.container?.durationSeconds || duration,
                 _library: item.folderLabel || libs.get(item.folderId) || "Unknown",
                 _libraryId: item.folderId,

@@ -487,26 +487,57 @@ function parseXML(content, fallbackSource) {
         return parseM3U(stripped, fallbackSource);
     }
 
-    // Basic XMLTV channel extraction: <channel id="..."><display-name>Name</display-name>
-    // <icon src="logo"/></channel> — note: XMLTV normally has no stream URLs,
-    // so most <channel> blocks will be dropped by normalizeChannel(!url check).
+    // Generic XML channel extraction — covers far more shapes than plain
+    // XMLTV, since real-world "channel list" XML exports vary a lot:
+    //   <channel id=".."><display-name>Name</display-name><icon src=".."/><url>..</url></channel>
+    //   <channel name="X" url="Y" logo="Z" group="W" country="C"/>        (self-closing, attrs)
+    //   <item><name>X</name><stream>Y</stream></item>                    (alt tag names)
+    //   <url><![CDATA[http://..]]></url>                                 (CDATA-wrapped)
+    // Root cause of the old bug: the previous regex required a *closing*
+    // </channel> tag and only read <url>text</url> with no CDATA support —
+    // self-closing tags and CDATA-wrapped urls silently produced zero matches.
     const channels = [];
-    const channelRe = /<channel[^>]*>([\s\S]*?)<\/channel>/gi;
+    const blockRe = /<(channel|item)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/gi;
     let m;
-    while ((m = channelRe.exec(content)) !== null) {
-        const block = m[1];
-        const nameM = block.match(/<display-name[^>]*>([^<]+)<\/display-name>/i);
-        const iconM = block.match(/<icon[^>]*src="([^"]+)"/i);
-        const urlM = block.match(/<url[^>]*>([^<]+)<\/url>/i);
-        const groupM = block.match(/<category[^>]*>([^<]+)<\/category>/i);
-        if (!nameM) continue;
+    while ((m = blockRe.exec(content)) !== null) {
+        const attrsStr = m[2] || "";
+        const inner = m[4] || ""; // empty string for self-closing tags
+
+        const attr = (key) => {
+            const am = attrsStr.match(new RegExp(`${key}\\s*=\\s*"([^"]*)"`, "i")) || attrsStr.match(new RegExp(`${key}\\s*=\\s*'([^']*)'`, "i"));
+            return am ? am[1] : null;
+        };
+
+        // Reads text from the first matching child tag, unwrapping CDATA,
+        // or falls back to a self-closing child's src/href attribute
+        // (e.g. <icon src=".."/>).
+        const child = (tagNames) => {
+            for (const tag of tagNames) {
+                const openClose = new RegExp(`<${tag}[^>]*>\\s*(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([^<]*))\\s*<\\/${tag}>`, "i");
+                const cm = inner.match(openClose);
+                if (cm && (cm[1] || cm[2])) return (cm[1] ?? cm[2] ?? "").trim();
+                const selfClosing = new RegExp(`<${tag}[^>]*\\b(?:src|href)\\s*=\\s*"([^"]*)"[^>]*\\/?>`, "i");
+                const sm = inner.match(selfClosing);
+                if (sm) return sm[1].trim();
+            }
+            return null;
+        };
+
+        const name = attr("name") || child(["display-name", "name", "title"]);
+        const url = attr("url") || attr("stream") || attr("link") || child(["url", "stream", "link", "stream-url"]);
+        const logo = attr("logo") || attr("icon") || child(["icon", "logo"]);
+        const group = attr("group") || attr("category") || child(["category", "group"]);
+        const country = attr("country") || child(["country"]);
+
+        if (!name) continue;
         channels.push(
             normalizeChannel(
                 {
-                    name: nameM[1].trim(),
-                    logo: iconM ? iconM[1] : null,
-                    url: urlM ? urlM[1].trim() : null,
-                    group: groupM ? groupM[1].trim() : null,
+                    name: name.trim(),
+                    logo: logo ? logo.trim() : null,
+                    url: url ? url.trim() : null,
+                    group: group ? group.trim() : null,
+                    country: country ? country.trim() : null,
                 },
                 fallbackSource,
             ),

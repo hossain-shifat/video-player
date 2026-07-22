@@ -41,8 +41,8 @@ function useLandscapeLock(enabled, containerRef) {
 // Strips noise tokens (HD, SD, 4K, codec tags, bracket junk) from IPTV channel
 // names and returns a clean display name + resolution metadata.
 
-const RES_TOKENS = /(4k|uhd|2160p?|fhd|1080[ip]?|hd|720p?|sd|480[ip]?|576[ip]?)/gi;
-const CODEC_TOKENS = /(h\.?264|h\.?265|hevc|avc|av1|vp9|aac|mp3|ac3|opus)/gi;
+const RES_TOKENS = /(4k|uhd|2160p?|fhd|1080[ip]?|hd|720p?|sd|480[ip]?|576[ip]?)/gi;
+const CODEC_TOKENS = /(h\.?264|h\.?265|hevc|avc|av1|vp9|aac|mp3|ac3|opus)/gi;
 const BRACKET_NOISE = /[\[(][^\])]*(hd|sd|4k|uhd|fhd|hevc|h\.?26[45]|avc)[^\])]*[\])]/gi;
 
 function extractNameMeta(rawName = "") {
@@ -111,9 +111,49 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
     const [videoError, setVideoError] = useState(false);
     const hlsRef = useRef(null);
     const [subtitles, setSubtitles] = useState([]);
+    // FIX (resolution badge not showing): the top-bar badge used to come
+    // ONLY from extractNameMeta(channel.name) — text-parsing tokens like
+    // "HD"/"4K"/"1080p" out of the channel's NAME string. Channels whose
+    // name doesn't happen to contain one of those tokens never showed a
+    // badge at all, regardless of actual stream quality. This derives it
+    // from the real HLS level height instead (set in MANIFEST_PARSED below)
+    // — the technical truth, not a naming convention.
+    const [streamResolution, setStreamResolution] = useState(null);
+
+    // Called from LiveChannelsPanel (via PlayerControls' onSwitchChannel) when
+    // the person picks a different channel from the playlist.
+    //
+    // FIX (click just kept playing whatever was already on): channel objects
+    // come in two shapes in this codebase — regular getLiveChannels results
+    // use {url, name, cleanName, logo}, but "active"/fallback channel
+    // objects elsewhere (Live.jsx's fallbackChannel) use {streamUrl,
+    // channelName, channelLogo}. This only ever read the first shape — for
+    // the second shape ch.url was undefined, so the channel object built
+    // here had no url, and the HLS effect's guard (`if (!channel?.url)
+    // return`) silently did nothing, leaving the previous stream running
+    // untouched. Reading both shapes closes that gap.
+    const switchChannel = useCallback((ch) => {
+        setChannel({
+            name: ch.cleanName || ch.name || ch.channelName || "Live Channel",
+            url: ch.url || ch.streamUrl,
+            logo: ch.logo || ch.channelLogo || null,
+        });
+    }, []);
 
     // ── Landscape lock — fires once channel is ready on mobile
     useLandscapeLock(isMobile && !!channel, containerRef);
+
+    // FIX (orientation flips to portrait on channel switch): the landscape
+    // lock above only fires once (its `enabled` boolean doesn't change
+    // between switches, so that effect never reruns). Some mobile browsers
+    // silently drop screen.orientation.lock() during a media source swap
+    // even though fullscreen itself is untouched. This re-asserts JUST the
+    // orientation lock on every switch — not fullscreen, so there's no
+    // flicker/exit-reenter — closing that gap.
+    useEffect(() => {
+        if (!isMobile || !channel?.url || !screen.orientation?.lock) return;
+        screen.orientation.lock("landscape").catch(() => {});
+    }, [isMobile, channel?.url]);
 
     // ── Pinch-zoom ──────────────────────────────────────────────────────────
     const [zoomState, setZoomState] = useState({ scale: 1, panX: 0, panY: 0 });
@@ -254,19 +294,39 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
         showControls();
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Sync quality level → HLS engine
-    useEffect(() => {
-        if (!hlsRef.current) return;
-        hlsRef.current.currentLevel = state.activeQuality; // -1 = auto
-    }, [state.activeQuality]);
+    // FIX (autoplay not triggering): unmuted autoplay can be silently blocked
+    // by the browser's autoplay policy — video.play() rejects and the old
+    // code just left it paused with no explanation ("need to manually hit
+    // play"). Muted autoplay is always permitted, so fall back to that
+    // instead of giving up. The mute button already reflects/controls
+    // video.muted, so unmuting afterward is one tap away.
+    const attemptAutoplay = useCallback((video) => {
+        video
+            .play()
+            .then(() => actions.setPlaying(true))
+            .catch(() => {
+                video.muted = true;
+                video
+                    .play()
+                    .then(() => actions.setPlaying(true))
+                    .catch(() => actions.setPlaying(false));
+            });
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── HLS engine ───────────────────────────────────────────────────────────
+    // Restored to the known-working shape: ONE effect keyed on [channel] that
+    // creates a fresh Hls instance per channel (loadSource THEN attachMedia,
+    // hls.js's own documented order) and tears it fully down on cleanup. A
+    // previous attempt to split this into "create once / loadSource on
+    // switch" for faster channel switching caused the exact regression
+    // reported (stuck on buffering, autoplay never firing) — reverted.
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !channel?.url) return;
 
         setVideoError(false);
         actions.setReady(false);
+        actions.setBuffering(true);
         let hls;
 
         const onTimeUpdate = () => actions.setCurrentTime(video.currentTime);
@@ -325,6 +385,31 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                             .sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0)),
                     );
                     actions.setActiveQuality(-1);
+                    // Real technical resolution from the highest available
+                    // level's height — independent of whatever's in the
+                    // channel's name text.
+                    const maxHeight = Math.max(0, ...hls.levels.map((l) => l.height || 0));
+                    if (maxHeight >= 2160) setStreamResolution("4K");
+                    else if (maxHeight >= 1080) setStreamResolution("1080p");
+                    else if (maxHeight >= 720) setStreamResolution("HD");
+                    else if (maxHeight > 0) setStreamResolution("SD");
+                    else setStreamResolution(null);
+                } else {
+                    setStreamResolution(null);
+                }
+                // Extract audio tracks (EXT-X-MEDIA TYPE=AUDIO) — same shape
+                // AudioTrackPanel expects: { index, id, name, lang, default }.
+                if (hls.audioTracks?.length > 0) {
+                    actions.setAudioTracks(
+                        hls.audioTracks.map((t, i) => ({
+                            index: i,
+                            id: t.id ?? i,
+                            name: t.name || t.lang || `Track ${i + 1}`,
+                            lang: t.lang || "und",
+                            default: !!t.default,
+                        })),
+                    );
+                    actions.setActiveAudioTrack(hls.audioTrack ?? 0);
                 }
                 // Extract embedded HLS subtitle tracks (EXT-X-MEDIA TYPE=SUBTITLES)
                 if (hls.subtitleTracks?.length > 0) {
@@ -337,12 +422,11 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                         codec: "webvtt",
                     }));
                     setSubtitles(hlsSubs);
+                } else {
+                    setSubtitles([]);
                 }
 
-                video
-                    .play()
-                    .then(() => actions.setPlaying(true))
-                    .catch(() => actions.setPlaying(false));
+                attemptAutoplay(video);
             });
 
             hls.on(Hls.Events.LEVEL_SWITCHED, () => {
@@ -354,13 +438,11 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
             });
         } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
             video.src = channel.url;
-            video.addEventListener("loadedmetadata", () => {
+            const onLoadedMetadata = () => {
                 actions.setReady(true);
-                video
-                    .play()
-                    .then(() => actions.setPlaying(true))
-                    .catch(() => actions.setPlaying(false));
-            });
+                attemptAutoplay(video);
+            };
+            video.addEventListener("loadedmetadata", onLoadedMetadata);
             video.addEventListener("error", () => setVideoError(true));
         }
 
@@ -377,10 +459,12 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
             actions.setPlaying(false);
             actions.setReady(false);
             actions.setQualityLevels([]);
+            actions.setAudioTracks([]);
             actions.setCurrentTime(0);
             actions.setDuration(0);
+            setStreamResolution(null);
         };
-    }, [channel]);
+    }, [channel]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Sync active subtitle → HLS engine for HLS-native subtitle tracks
     useEffect(() => {
@@ -399,13 +483,25 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
         if (videoRef.current) videoRef.current.playbackRate = state.playbackSpeed;
     }, [state.playbackSpeed]);
 
-    // Sync quality level → HLS engine
-    // PlayerControls.QualityPicker writes to state via actions.setActiveQuality.
-    // Mirror into hlsRef.currentLevel so the stream actually switches.
+    // Sync quality level → HLS engine.
+    // FIX: was `hlsRef.current.currentLevel = ...` (duplicated in two
+    // separate effects in the file this was restored from) — currentLevel
+    // flushes the buffer and restarts decode immediately, causing a visible
+    // stutter/black-frame on every quality change. nextLevel applies the
+    // switch at the next keyframe boundary instead, buffer-preserving — the
+    // established fix already used elsewhere in this project (PlayerPage.jsx).
     useEffect(() => {
         if (!hlsRef.current) return;
-        hlsRef.current.currentLevel = state.activeQuality; // -1 = auto
+        hlsRef.current.nextLevel = state.activeQuality; // -1 = auto
     }, [state.activeQuality]);
+
+    // Sync active audio track → HLS engine
+    useEffect(() => {
+        if (!hlsRef.current) return;
+        if (hlsRef.current.audioTracks?.length > 1) {
+            hlsRef.current.audioTrack = state.activeAudioTrack;
+        }
+    }, [state.activeAudioTrack]);
 
     // Fullscreen change sync
     useEffect(() => {
@@ -466,6 +562,7 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
         episodeTitle: null,
         poster: channel?.logo || null,
         year: null,
+        url: channel?.url || null,
     };
 
     // ── Loading / Error screens ───────────────────────────────────────────────
@@ -559,10 +656,15 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                     )}
                     {(() => {
                         const meta = extractNameMeta(channel.cleanName || channel.name);
+                        // Prefer a resolution token actually in the name
+                        // (e.g. a channel literally named "...4K"); otherwise
+                        // fall back to the real measured HLS level height.
+                        const resLabel = meta.resolution || streamResolution;
+                        const isHD = meta.isHD || (streamResolution && streamResolution !== "SD");
                         return (
                             <>
                                 <span className="text-white text-sm font-semibold truncate">{meta.cleanName}</span>
-                                {meta.resolution && (
+                                {resLabel && (
                                     <span
                                         style={{
                                             flexShrink: 0,
@@ -571,11 +673,11 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                                             letterSpacing: "0.08em",
                                             padding: "1px 5px",
                                             borderRadius: 4,
-                                            background: meta.resolution === "4K" ? "rgba(255,200,50,0.2)" : meta.isHD ? "rgba(229,62,62,0.2)" : "rgba(255,255,255,0.12)",
-                                            color: meta.resolution === "4K" ? "#ffc832" : meta.isHD ? "#e53e3e" : "rgba(255,255,255,0.6)",
-                                            border: `1px solid ${meta.resolution === "4K" ? "rgba(255,200,50,0.4)" : meta.isHD ? "rgba(229,62,62,0.35)" : "rgba(255,255,255,0.2)"}`,
+                                            background: resLabel === "4K" ? "rgba(255,200,50,0.2)" : isHD ? "rgba(229,62,62,0.2)" : "rgba(255,255,255,0.12)",
+                                            color: resLabel === "4K" ? "#ffc832" : isHD ? "#e53e3e" : "rgba(255,255,255,0.6)",
+                                            border: `1px solid ${resLabel === "4K" ? "rgba(255,200,50,0.4)" : isHD ? "rgba(229,62,62,0.35)" : "rgba(255,255,255,0.2)"}`,
                                         }}>
-                                        {meta.resolution}
+                                        {resLabel}
                                     </span>
                                 )}
                             </>
@@ -584,7 +686,9 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                 </div>
             </div>
 
-            {/* ── PlayerControls — VOD-only buttons hidden via CSS scope ── */}
+            {/* ── PlayerControls — VOD-only buttons hidden via CSS scope. Back
+                inside containerRef's subtree (required — containerRef is also
+                PlayerGestures' fullscreen target). ── */}
             <style>{`
                 [data-live-player] [aria-label="Back 10 seconds"],
                 [data-live-player] [aria-label="Forward 10 seconds"],
@@ -594,9 +698,14 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                 [data-live-player] .flux-seek-thumb,
                 [data-live-player] .flux-seek-tooltip { display: none !important; }
             `}</style>
+            {/* pointerEvents:"none" here (not forced "auto") lets PlayerControls'
+                own per-bar pointer-events do the job — same as PlayerPage.jsx
+                (VOD) — instead of blocking gestures across the whole screen
+                whenever controls are visible. */}
             <div data-live-player style={{ position: "absolute", inset: 0, zIndex: 30, pointerEvents: "none" }}>
                 <PlayerControls
                     mediaInfo={mediaInfo}
+                    onSwitchChannel={switchChannel}
                     videoRef={videoRef}
                     containerRef={containerRef}
                     subtitles={subtitles}

@@ -25,10 +25,8 @@ const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
 const adminDashboardRouter = require("./routes/adminDashboard");
 const liveRouter = require("./routes/live");
-const epgRouter = require("./routes/epg");
 const mediaInfoRouter = require("./routes/mediainfo");
 const permissionsRouter = require("./routes/permissions");
-const epgScheduler = require("./utils/epgScheduler");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
 const authRouter = require("./auth/routes/authRoutes");
@@ -100,7 +98,6 @@ app.use("/api/user", userRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/live", liveRouter);
-app.use("/api/epg", epgRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -162,11 +159,6 @@ async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
     subtitleWorker.stop();
-    try {
-        epgScheduler.stop();
-    } catch {
-        /* already stopped or never started */
-    }
     await transcoderService.killAllSessions();
     console.log("[Server] All transcoding sessions terminated. Bye.");
     process.exit(0);
@@ -198,7 +190,6 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    Library: /api/library`);
     console.log(`    Media:   /api/media`);
     console.log(`    Live TV: /api/live/channels`);
-    console.log(`    EPG:     /api/epg/now`);
     console.log(`    MediaInfo: /api/mediainfo`);
     console.log(`    Permissions: /api/permissions`);
     console.log(`    Stream:  /stream/video/:id\n`);
@@ -296,17 +287,6 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     } catch (err) {
         console.error("[Server] Subtitle system init error:", err.message);
         console.error(err.stack);
-    }
-
-    // ── EPG + Sports Event scheduler ──────────────────────────────────────────
-    // epgScheduler.start() also boots sportsScheduler internally (see
-    // utils/epgScheduler.js) — one call wires up both background engines.
-    // Non-blocking: ingest runs in the background, never delays server startup.
-    try {
-        epgScheduler.start();
-    } catch (err) {
-        console.error("[Server] EPG scheduler failed to start:", err.message);
-        // Server continues running — EPG/sports features degrade gracefully
     }
 });
 

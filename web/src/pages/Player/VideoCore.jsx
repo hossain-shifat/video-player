@@ -157,6 +157,38 @@ function computeLetterboxBox(containerW, containerH, videoW, videoH) {
 
 // ─── Adaptive HLS config by network / media type ──────────────────────────────
 
+/**
+ * attemptAutoplay — tries video.play() normally first; if the browser's
+ * autoplay policy rejects it (very common for unmuted video without a prior
+ * user gesture — Chrome/Safari mobile both do this), retries muted, which
+ * browsers always allow. Without this, video.play()'s rejected promise was
+ * being silently swallowed by a bare .catch(() => {}) while
+ * actions.setPlaying(true) had ALREADY fired — so the UI showed "playing"
+ * (pause icon, unsuppressed timeupdate, etc) while the actual <video>
+ * element sat frozen/paused. That mismatch is exactly what looks like "the
+ * player auto-paused itself" right after opening — nothing actually paused
+ * it; autoplay silently never started in the first place.
+ * On the muted retry succeeding, reflects the real mute state back into
+ * shared player state so the UI's mute icon/toggle stays honest — same
+ * "autoplay muted, tap to unmute" pattern most video sites use.
+ */
+function attemptAutoplay(video, actions) {
+    if (!video) return;
+    const playPromise = video.play();
+    if (!playPromise?.catch) return; // older browsers: play() returns undefined, nothing to catch
+    playPromise.catch(() => {
+        video.muted = true;
+        actions.setMuted(true);
+        video.play().catch(() => {
+            // Even muted autoplay was blocked (rare — some embedded/webview
+            // contexts, or the tab isn't foregrounded yet). Nothing more to
+            // do here without an explicit user gesture; state.playing will
+            // stay true optimistically but the native "pause"/"play" events
+            // reconcile it once the person actually taps play.
+        });
+    });
+}
+
 function getHlsConfig() {
     return {
         enableWorker: true,
@@ -175,10 +207,27 @@ function getHlsConfig() {
         // Back-buffer: keep 90s behind so user can seek back without refetch
         backBufferLength: 90,
 
-        // Forward buffer: 30s is optimal for most connections
-        // HLS.js will auto-grow up to maxMaxBufferLength during smooth playback
+        // Forward buffer: 30s is the target hls.js actively tries to
+        // maintain during normal playback ticks.
         maxBufferLength: 30,
-        maxMaxBufferLength: 120,
+        // FIX: was 120 (2 minutes ahead), which is why buffering appeared to
+        // "stop" — it wasn't tied to play/pause at all, it was just hitting
+        // this ceiling. During playback the buffer keeps getting consumed
+        // from the front as currentTime advances, making room to load more,
+        // so it's harder to notice; paused, position is frozen so the
+        // buffer fills straight up to this cap and visibly plateaus. Per
+        // request ("load no matter playing or paused, until I close the
+        // player"), raised to a size that's effectively "the rest of any
+        // reasonably-long file" (4 hours) rather than a small rolling
+        // window — hls.js will still stop naturally once it reaches the end
+        // of the manifest or this ceiling, whichever comes first.
+        maxMaxBufferLength: 14400,
+        // Not set before — hls.js's own default here is only 60MB, which for
+        // 1080p/4K bitrates can be hit (and silently stop further loading)
+        // well before the 14400s ceiling above ever matters. Raised to 2GB,
+        // generous enough that the time-based ceiling above is what
+        // actually governs how much loads ahead, not this byte cap.
+        maxBufferSize: 2000 * 1000 * 1000,
 
         // Start loading fragments before play is triggered for instant start
         startFragPrefetch: true,
@@ -237,7 +286,10 @@ function getHlsConfig() {
  *  5. Adaptive buffering config for large remux/4K files.
  *  6. Network error auto-retry with exponential backoff.
  */
-const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated, zoomScale = 1, panX = 0, panY = 0 }, ref) {
+const VideoCore = forwardRef(function VideoCore(
+    { streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated, suppressTimeUpdateRef, sessionTimeOffsetRef, zoomScale = 1, panX = 0, panY = 0 },
+    ref,
+) {
     const videoRef = useRef(null);
     const wrapperRef = useRef(null);
     const hlsRef = useRef(null);
@@ -374,7 +426,18 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                 // Native HLS (Safari / iPhone)
                 if (!Hls.isSupported()) {
+                    console.log(
+                        "[QUALITY] Hls.isSupported() === false — using native <video> HLS playback, NOT the hls.js branch above. This is why none of the [QUALITY] MANIFEST_PARSED logs ever fire.",
+                    );
                     video.src = streamUrl;
+                    video.addEventListener(
+                        "loadedmetadata",
+                        () => {
+                            console.log("[QUALITY] native HLS loadedmetadata — calling onReadyToSeek (native-path equivalent of MANIFEST_PARSED)");
+                            latestOnReadyToSeek.current?.();
+                        },
+                        { once: true },
+                    );
                     return;
                 }
 
@@ -428,9 +491,32 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
 
                     actions.setError(null);
                     actions.setReady(true);
+                    console.log("[QUALITY] Metadata Ready (MANIFEST_PARSED) — suppressTimeUpdateRef before onReadyToSeek call:", suppressTimeUpdateRef?.current);
                     latestOnReadyToSeek.current?.();
-                    actions.setPlaying(true);
-                    video.play().catch(() => {});
+                    console.log("[QUALITY] after onReadyToSeek call — suppressTimeUpdateRef:", suppressTimeUpdateRef?.current, "video.currentTime:", video.currentTime);
+                    // FIX: was unconditional `actions.setPlaying(true); video.play()`
+                    // right here, every single MANIFEST_PARSED — including for a
+                    // quality-switch reload. That started REAL playback from the
+                    // fresh element's actual position (0) immediately, before
+                    // deferredSeek (triggered above, inside the onReadyToSeek call)
+                    // had a chance to land the real seek — so the video genuinely
+                    // played from 0:00 for a moment, not just a display glitch.
+                    // suppressTimeUpdateRef is already true by this point (set
+                    // synchronously inside handleReadyToSeek's pending-restore
+                    // branch, called on the line above) whenever this manifest
+                    // parse is a quality-switch reload — skip the play() call
+                    // here in that case; PlayerPage's own onSeekLanded callback
+                    // calls play() once the seek has actually landed. Fresh/
+                    // first-time loads (no quality switch in flight) are
+                    // unaffected — suppressTimeUpdateRef is only ever set true
+                    // by the quality-switch restore path.
+                    if (!suppressTimeUpdateRef?.current) {
+                        console.log("[QUALITY] MANIFEST_PARSED: suppress NOT active — calling play() immediately (fresh-video path)");
+                        actions.setPlaying(true);
+                        attemptAutoplay(video, actions);
+                    } else {
+                        console.log("[QUALITY] MANIFEST_PARSED: suppress active — skipping immediate play(), waiting for deferredSeek's onSeekLanded");
+                    }
                 });
 
                 // ── LEVEL_LOADED (duration source) ──────────────────────
@@ -562,10 +648,28 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
                 // ── FRAG_LOADED (clear buffering indicator) ─────────────────
                 hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
                     if (cancelled) return;
-                    // Update duration from loaded fragment data (HLS live/event streams)
+                    // FIX: was unconditionally `actions.setDuration(v.duration)`.
+                    // v.duration here is whatever the CURRENTLY ACTIVE variant's
+                    // own EVENT playlist reports right now — which, for a
+                    // still-transcoding rendition (or a rendition just switched
+                    // to via quality change, whose own manifest may be less far
+                    // along than the one just left), is only "how much has been
+                    // transcoded so far", not the real full-length duration.
+                    // FRAG_LOADED fires on every single fragment — far more often
+                    // than LEVEL_LOADED — so without this same mediaDuration
+                    // preference LEVEL_LOADED already uses, this handler was
+                    // immediately re-clobbering the correct duration moments
+                    // after LEVEL_LOADED set it, which is exactly the "duration
+                    // shows 7:00 (how much transcoded)" symptom, and — since the
+                    // seek bar's played-percent is currentTime/duration — that
+                    // wrong shrunk denominator is also what made the seek bar
+                    // look reset/wrong even though currentTime itself was fine.
                     if (data?.frag?.duration) {
                         const v = videoRef.current;
-                        if (v && isFinite(v.duration) && v.duration > 0) {
+                        const realDur = mediaDuration && mediaDuration > 0 ? mediaDuration : 0;
+                        if (realDur > 0) {
+                            actions.setDuration(realDur);
+                        } else if (v && isFinite(v.duration) && v.duration > 0) {
                             actions.setDuration(v.duration);
                         }
                     }
@@ -692,9 +796,37 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         // autoLevelEnabled is a read-only getter in current HLS.js — it can't
         // be assigned directly (that's what was throwing "Cannot set property
         // autoLevelEnabled... which has only a getter"). The documented way
-        // to re-enable automatic quality switching is currentLevel = -1, the
-        // same sentinel used everywhere else in HLS.js for "go back to auto".
-        hlsRef.current.currentLevel = state.activeQuality === -1 ? -1 : state.activeQuality;
+        // to re-enable automatic quality switching is level = -1, the same
+        // sentinel used everywhere else in HLS.js for "go back to auto".
+        //
+        // FIX: was `hlsRef.current.currentLevel = ...`. currentLevel is
+        // HLS.js's IMMEDIATE switch — it aborts the in-flight fragment and
+        // flushes already-buffered data for the old level, which is exactly
+        // the "noticeable loading delay" (a real stall while the new level's
+        // first segment re-fetches) users were seeing on manual quality
+        // change. `nextLevel` is the gentle/deferred switch: it only changes
+        // which level the NEXT fragment loads at — the buffer already
+        // downloaded for the current level keeps playing uninterrupted, so
+        // there's no flush and no stall. This is also what stops the visible
+        // currentTime jump back toward 0: currentLevel's flush path re-seeks
+        // the media element to (re)establish a buffered range, and that
+        // reseek's fallback target is hls.startPosition — which was pinned
+        // to 0 back in MANIFEST_PARSED (see the Report-21 fix above) and
+        // never updated since. nextLevel never enters that reseek codepath
+        // at all, so it can't hit that stale value.
+        const targetLevel = state.activeQuality === -1 ? -1 : state.activeQuality;
+
+        // Belt-and-suspenders: keep hls.startPosition tracking the REAL
+        // current position (instead of the permanently-stale 0 from
+        // MANIFEST_PARSED) so that if any OTHER HLS.js internal path ever
+        // falls back to startPosition for a reseek, it lands on the actual
+        // playback position instead of 0. Harmless no-op for nextLevel
+        // itself (which doesn't reseek), pure safety net for the future.
+        if (videoRef.current) {
+            hlsRef.current.startPosition = videoRef.current.currentTime || 0;
+        }
+
+        hlsRef.current.nextLevel = targetLevel;
     }, [state.activeQuality]);
 
     // ── Sync audio track by HLS ID (not array index) ─────────────────────────
@@ -973,7 +1105,7 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
         const video = videoRef.current;
         if (!video) return;
         if (state.playing) {
-            video.play().catch(() => {});
+            attemptAutoplay(video, actions);
         } else {
             video.pause();
         }
@@ -992,11 +1124,41 @@ const VideoCore = forwardRef(function VideoCore({ streamUrl, onVideoClick, onRet
     const handleTimeUpdate = () => {
         const v = videoRef.current;
         if (!v) return;
-        actions.setCurrentTime(v.currentTime);
+        // FIX (this is the other half of the quality-switch 0:00-restart
+        // fix): after a quality-switch session restart, v.currentTime is
+        // relative to THAT session's own normalized-to-zero timeline, not
+        // the real absolute position — sessionTimeOffsetRef holds what
+        // that session's own 0 actually represents (0 for a fresh/resume
+        // session). Adding it converts back to absolute for display,
+        // matching state.duration (which is always the real full-file
+        // length, never session-relative).
+        const absoluteTime = v.currentTime + (sessionTimeOffsetRef?.current || 0);
+        console.log("[TIMEUPDATE]", v.currentTime, "+ offset", sessionTimeOffsetRef?.current || 0, "=", absoluteTime, suppressTimeUpdateRef?.current ? "(SUPPRESSED)" : "(applied)");
+        // While PlayerPage's quality-switch restore has set this true, the
+        // real position hasn't landed yet (deferredSeek is still polling for
+        // a seekable range) — v.currentTime here is stale/pre-seek and would
+        // stomp the optimistic value PlayerPage already set. Buffered range
+        // is harmless to keep updating either way.
+        if (!suppressTimeUpdateRef?.current) {
+            console.log("[STATE] currentTime =", absoluteTime, "(from timeupdate)");
+            actions.setCurrentTime(absoluteTime);
+        }
         actions.setBuffered(v.buffered);
     };
 
     const handleDurationChange = () => {
+        // FIX: same class of bug as FRAG_LOADED above — the native <video>
+        // element's own .duration reflects whichever variant's manifest is
+        // currently active, which for HLS EVENT playlists is "how much has
+        // transcoded so far," not the true full-length duration. Prefer the
+        // real ffprobe duration (mediaDuration prop) whenever it's known;
+        // only fall back to the raw video.duration when it isn't (e.g. very
+        // first load before PlayerPage has resolved it).
+        const realDur = mediaDuration && mediaDuration > 0 ? mediaDuration : 0;
+        if (realDur > 0) {
+            actions.setDuration(realDur);
+            return;
+        }
         const dur = videoRef.current?.duration;
         if (dur && isFinite(dur) && dur > 0) actions.setDuration(dur);
     };

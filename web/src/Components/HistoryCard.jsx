@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useRef, useState } from "react";
 import { Link } from "react-router";
-import { EllipsisVertical, Film, Tv, Trash2, Heart, Bookmark, BookmarkCheck, Copy, Share2, Check, CheckCircle, Circle } from "lucide-react";
+import { EllipsisVertical, Film, Tv } from "lucide-react";
 import { api } from "../api/client";
 import { getOrCreateClientId } from "../api/stream";
-import { useApi } from "../Context/apiContext";
+import FloatingActionMenu from "./FloatingActionMenu";
 
 // ─── Icon fallback — only if ffmpeg frame AND poster both fail ─────────────
 function IconFallback({ title, type }) {
@@ -40,16 +39,10 @@ function buildSeriesLabel(item) {
  * onRemove(item) — fires after "Remove From History" confirmed in menu.
  */
 export default function HistoryCard({ item, onRemove }) {
-    const { isFavourite, toggleFavourite, isInWatchlist, toggleWatchlist } = useApi();
-
     const [thumbError, setThumbError] = useState(false);
     const [posterError, setPosterError] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
-    const [menuVisible, setMenuVisible] = useState(false);
-    const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
-    const [copied, setCopied] = useState(false);
     const btnRef = useRef(null);
-    const menuRef = useRef(null);
 
     const mediaType = item.mediaType || item.type || "movie";
     const isSeries = mediaType === "series" || mediaType === "anime";
@@ -68,102 +61,14 @@ export default function HistoryCard({ item, onRemove }) {
     const seriesLabel = isSeries ? buildSeriesLabel(item) : null;
     const partLabel = !isSeries && item.partNumber != null ? `Part ${item.partNumber}` : null;
 
-    // ── useApi state — same pattern as MediaCard ────────────────────────────
-    const favourited = isFavourite(item.id);
-    const watchlisted = isInWatchlist(item.id);
-    const payload = { name: item.title, poster: item.poster, type: mediaType };
-
-    function closeMenu() {
-        setMenuVisible(false);
-        setTimeout(() => setMenuOpen(false), 150);
-    }
-
-    useEffect(() => {
-        if (!menuOpen) return;
-        const raf = requestAnimationFrame(() => setMenuVisible(true));
-        function handleClick(e) {
-            if (menuRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return;
-            closeMenu();
-        }
-        function handleScroll() {
-            closeMenu();
-        }
-        document.addEventListener("mousedown", handleClick);
-        window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-        window.addEventListener("resize", handleScroll, { passive: true });
-        return () => {
-            cancelAnimationFrame(raf);
-            document.removeEventListener("mousedown", handleClick);
-            window.removeEventListener("scroll", handleScroll, { capture: true });
-            window.removeEventListener("resize", handleScroll);
-        };
-    }, [menuOpen]);
-
-    function handleToggleMenu(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (menuOpen) {
-            closeMenu();
-            return;
-        }
-        if (btnRef.current) {
-            const r = btnRef.current.getBoundingClientRect();
-            setMenuPos({ top: r.bottom + 4, left: r.right - 192 });
-        }
-        setMenuVisible(false);
-        setMenuOpen(true);
-    }
-
-    function handleAction(e, action) {
-        e.preventDefault();
-        e.stopPropagation();
-        switch (action) {
-            case "favourite":
-                toggleFavourite(item.id, payload);
-                break;
-            case "watchlist":
-                toggleWatchlist(item.id, payload);
-                break;
-            case "copy": {
-                const url = item.streamUrl || `${window.location.origin}/player/${encodeURIComponent(item.id)}`;
-                navigator.clipboard
-                    ?.writeText(url)
-                    .then(() => {
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                    })
-                    .catch(() => {});
-                break;
-            }
-            case "share": {
-                const shareUrl = `${window.location.origin}/media/${encodeURIComponent(item.id)}`;
-                if (navigator.share) {
-                    // Must be called synchronously inside a user-gesture handler.
-                    // setTimeout breaks the gesture context on mobile browsers.
-                    navigator
-                        .share({
-                            title: item.title || "Watch on FLUX",
-                            text: item.title || "",
-                            url: shareUrl,
-                        })
-                        .then(() => closeMenu())
-                        .catch(() => closeMenu());
-                } else {
-                    navigator.clipboard?.writeText(shareUrl).catch(() => {});
-                    closeMenu();
-                }
-                break;
-            }
-            case "trailer":
-                closeMenu();
-                // Not yet functional — trailer URL not stored in history
-                break;
-            case "remove":
-                closeMenu();
-                onRemove?.(item);
-                break;
-        }
-    }
+    // media shape FloatingActionMenu expects — same as MediaCard/MediaDetails
+    const media = {
+        id: item.id,
+        title: item.title,
+        poster: item.poster,
+        type: mediaType,
+        streamUrl: item.streamUrl || `${window.location.origin}/player/${encodeURIComponent(item.id)}`,
+    };
 
     return (
         <Link
@@ -241,99 +146,20 @@ export default function HistoryCard({ item, onRemove }) {
                 <button
                     ref={btnRef}
                     type="button"
-                    onClick={handleToggleMenu}
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpen((v) => !v);
+                    }}
                     className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white/60 hover:text-white cursor-pointer transition-colors">
                     <EllipsisVertical size={14} />
                 </button>
 
-                {menuOpen &&
-                    createPortal(
-                        <div
-                            ref={menuRef}
-                            style={{
-                                position: "fixed",
-                                top: menuPos.top,
-                                left: menuPos.left,
-                                opacity: menuVisible ? 1 : 0,
-                                transform: menuVisible ? "scale(1)" : "scale(0.95)",
-                                transformOrigin: "top right",
-                                transition: "opacity 150ms ease, transform 150ms ease",
-                                zIndex: 9999,
-                            }}
-                            className="w-52 rounded-xl bg-[oklch(15%_0.01_260/0.97)] backdrop-blur-md shadow-2xl border border-white/10 py-1.5"
-                            onClick={(e) => e.stopPropagation()}>
-                            {/* Add to Favorites — toggleFavourite (same as MediaCard) */}
-                            <MenuItem
-                                icon={favourited ? Heart : Heart}
-                                label={favourited ? "Remove from Favorites" : "Add to Favorites"}
-                                active={favourited}
-                                iconClass={favourited ? "text-error" : "text-white/45"}
-                                onClick={(e) => handleAction(e, "favourite")}
-                            />
-
-                            {/* Add to Watchlist — toggleWatchlist (same as MediaCard) */}
-                            <MenuItem
-                                icon={watchlisted ? BookmarkCheck : Bookmark}
-                                label={watchlisted ? "Remove from Watchlist" : "Add to Watchlist"}
-                                active={watchlisted}
-                                iconClass={watchlisted ? "text-accent" : "text-white/45"}
-                                onClick={(e) => handleAction(e, "watchlist")}
-                            />
-
-                            {/* Mark as Watched / Unwatched — item.completed drives label */}
-                            <MenuItem
-                                icon={item.completed ? CheckCircle : Circle}
-                                label={item.completed ? "Mark as Unwatched" : "Mark as Watched"}
-                                active={item.completed}
-                                iconClass={item.completed ? "text-success" : "text-white/45"}
-                                onClick={(e) => handleAction(e, "watched")}
-                            />
-
-                            <Divider />
-
-                            {/* Watch Trailer — not yet functional */}
-                            <MenuItem icon={Film} label="Watch Trailer" iconClass="text-white/45" onClick={(e) => handleAction(e, "trailer")} />
-
-                            {/* Copy Stream Link — clipboard functional */}
-                            <MenuItem
-                                icon={copied ? Check : Copy}
-                                label={copied ? "Copied!" : "Copy Stream Link"}
-                                active={copied}
-                                iconClass={copied ? "text-success" : "text-white/45"}
-                                onClick={(e) => handleAction(e, "copy")}
-                            />
-
-                            {/* Share — Web Share API */}
-                            <MenuItem icon={Share2} label="Share" iconClass="text-white/45" onClick={(e) => handleAction(e, "share")} />
-
-                            <Divider />
-
-                            {/* Remove from History */}
-                            <MenuItem icon={Trash2} label="Remove From History" iconClass="text-white/45" textClass="text-error/80 hover:text-error" onClick={(e) => handleAction(e, "remove")} />
-                        </div>,
-                        document.body,
-                    )}
+                {/* All option logic lives in FloatingActionMenu — same menu everywhere */}
+                <div onClick={(e) => e.preventDefault()}>
+                    <FloatingActionMenu open={menuOpen} anchorRef={btnRef} onClose={() => setMenuOpen(false)} media={media} watched={item.completed} onRemove={() => onRemove?.(item)} />
+                </div>
             </div>
         </Link>
     );
-}
-
-// ─── Shared menu item component ───────────────────────────────────────────────
-function MenuItem({ icon: Icon, label, onClick, iconClass = "text-white/45", textClass = "text-white/80", active }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium cursor-pointer
-                        hover:bg-white/8 active:bg-white/12 transition-colors duration-100
-                        ${textClass}`}>
-            <Icon size={14} strokeWidth={1.8} className={`shrink-0 ${iconClass}`} fill={active && Icon.name === "Heart" ? "currentColor" : "none"} />
-            {label}
-        </button>
-    );
-}
-
-// ─── Divider ──────────────────────────────────────────────────────────────────
-function Divider() {
-    return <div className="my-1 mx-3 border-t border-white/8" />;
 }

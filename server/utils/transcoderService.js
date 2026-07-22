@@ -44,6 +44,49 @@ const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || "10", 10);
 const SEGMENT_GAP_RESTART_SECONDS = parseInt(process.env.HLS_GAP_RESTART_SECONDS || "60", 10);
 const SEGMENT_GAP_RESTART = Math.ceil(SEGMENT_GAP_RESTART_SECONDS / SEGMENT_DURATION);
 
+// ─── Multi-quality (ABR) config ────────────────────────────────────────────
+// Feature-flagged, OFF by default — with this unset, buildFFmpegArgs/
+// createSession behave IDENTICALLY to before (single video rendition).
+// Set ENABLE_MULTI_QUALITY=1 to have FULL_TRANSCODE sessions encode several
+// resolution renditions in ONE ffmpeg process (same technique already used
+// here for multi-audio: one -var_stream_map, many -map 0:v:0 outputs, each
+// with its own stream-specifier suffix), all listed in one master.m3u8, so
+// the client can switch resolution via hls.currentLevel with zero session
+// restart and zero playback-position loss. Only applies to FULL_TRANSCODE —
+// DIRECT_STREAM/AUDIO_TRANSCODE use "-c:v copy" (no re-encode happening, so
+// there's nothing to ladder).
+const ENABLE_MULTI_QUALITY = process.env.ENABLE_MULTI_QUALITY === "1";
+
+// Ladder of quality labels considered for ABR, highest first. Actual tiers
+// used for a given session are whichever of these are <= the source height
+// AND <= the originally-requested/decided quality — see buildQualityLadder().
+const QUALITY_LADDER_ORDER = ["1080p", "720p", "480p", "360p"];
+
+function heightForQualityLabel(label) {
+    const preset = QUALITY_PRESETS[label];
+    return preset ? preset.height : 0;
+}
+
+/**
+ * buildQualityLadder(targetQualityLabel, sourceHeight)
+ * Returns an array of quality-preset labels (highest first) to encode as
+ * separate renditions, capped at 3 tiers to keep concurrent-encode cost
+ * bounded on a single-user LAN box. Always includes at least the target
+ * quality itself, even if that means a ladder of length 1.
+ */
+function buildQualityLadder(targetQualityLabel, sourceHeight) {
+    const targetHeight = heightForQualityLabel(targetQualityLabel) || sourceHeight;
+    const capHeight = Math.min(targetHeight, sourceHeight || targetHeight);
+    const tiers = QUALITY_LADDER_ORDER.filter((label) => heightForQualityLabel(label) <= capHeight);
+    if (!tiers.length) tiers.push(targetQualityLabel);
+    if (!tiers.includes(targetQualityLabel) && QUALITY_PRESETS[targetQualityLabel]) {
+        tiers.unshift(targetQualityLabel);
+    }
+    // Dedup, cap to 3, keep highest-first order
+    const deduped = [...new Set(tiers)].sort((a, b) => heightForQualityLabel(b) - heightForQualityLabel(a));
+    return deduped.slice(0, 3);
+}
+
 // ─── HW Profile Cache ─────────────────────────────────────────────────────────
 // detectHW() runs 3–4 test encodes (3–36s total) on first call.
 // Cache the result so createSession() never blocks on subsequent plays.
@@ -410,6 +453,12 @@ function buildFFmpegArgs({
     }
 
     const args = [];
+    // Set true inside the multi-quality ladder branch below once it has
+    // already pushed its own "-map 0:v:0" per tier — prevents the later
+    // unconditional "if (hasVideo) -map 0:v:0" calls (single-rendition
+    // paths, written before ABR existed) from adding a duplicate/mismatched
+    // video map on top of the ladder's own maps.
+    let videoMapsAddedByLadder = false;
 
     // ── Global ────────────────────────────────────────────────────────────────
     args.push("-hide_banner", "-loglevel", "warning");
@@ -449,8 +498,77 @@ function buildFFmpegArgs({
         } else if (videoCodec === "hevc" || videoCodec === "h265" || videoCodec === "hvc1") {
             args.push("-bsf:v", "hevc_mp4toannexb");
         }
+    } else if (ENABLE_MULTI_QUALITY && mediaInfo?.video && (mediaInfo?.audio || []).length > 0) {
+        // ── Full transcode — MULTI-QUALITY LADDER (ABR) path ─────────────────
+        // Same effect as the single-rendition branch below, repeated once per
+        // quality tier, each output using ffmpeg's per-stream specifier
+        // suffix (":v:K") the same way the multi-audio block below already
+        // does for audio (":a:K"). One ffmpeg process, N video renditions,
+        // one -var_stream_map, one master.m3u8 — no extra ffmpeg processes,
+        // no extra sessions, so nothing about session lifecycle/gap-restart/
+        // cleanup below has to change to support this.
+        const sourceHeight = mediaInfo.video.height || preset.height;
+        const ladder = buildQualityLadder(params.quality || "1080p", sourceHeight);
+        // Exposed on mediaInfo so createSession (which builds the session
+        // object AFTER this function returns) can record it without
+        // recomputing the ladder or re-deriving it from args.
+        mediaInfo._qualityLadder = ladder;
+
+        const encoderFor = (hwType) =>
+            hwType === "vaapi" || hwType === "qsv" || hwType === "nvenc" || hwType === "amf" || hwType === "videotoolbox" || hwType === "v4l2m2m" ? hw.encodeCodecH264 : "libx264";
+        const encoder = encoderFor(hw.type);
+
+        const fpsRaw = mediaInfo?.video?.fps || "24/1";
+        const [fpsNum, fpsDen] = fpsRaw.split("/").map(Number);
+        const fps = fpsDen && fpsDen > 0 ? Math.round(fpsNum / fpsDen) : fpsNum || 24;
+        const gopSize = SEGMENT_DURATION * fps;
+
+        ladder.forEach((qualityLabel, vIdx) => {
+            const tierPreset = QUALITY_PRESETS[qualityLabel] || preset;
+            args.push("-map", "0:v:0");
+            args.push(`-c:v:${vIdx}`, encoder);
+
+            const scaleFilter =
+                hw.type === "vaapi"
+                    ? `scale_vaapi=w=${tierPreset.width}:h=${tierPreset.height}:force_original_aspect_ratio=decrease`
+                    : hw.type === "qsv"
+                      ? `scale_qsv=w=${tierPreset.width}:h=${tierPreset.height}:force_original_aspect_ratio=decrease`
+                      : `scale=w=${tierPreset.width}:h=${tierPreset.height}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
+            args.push(`-filter:v:${vIdx}`, scaleFilter);
+            args.push(`-b:v:${vIdx}`, tierPreset.videoBitrate);
+            args.push(`-maxrate:v:${vIdx}`, tierPreset.maxrate);
+            args.push(`-bufsize:v:${vIdx}`, tierPreset.bufsize);
+
+            if (encoder === "libx264") {
+                const cpuPreset = process.env.CPU_ENCODE_PRESET || "superfast";
+                args.push(`-preset:v:${vIdx}`, cpuPreset, `-profile:v:${vIdx}`, "high", `-level:v:${vIdx}`, "4.1");
+                args.push(`-x264-params:${vIdx}`, "rc-lookahead=10:ref=1");
+            } else if (encoder === "h264_nvenc") {
+                args.push(`-preset:v:${vIdx}`, "p4", `-rc:v:${vIdx}`, "vbr");
+            } else if (encoder === "h264_qsv") {
+                args.push(`-preset:v:${vIdx}`, "faster", `-look_ahead:v:${vIdx}`, "0");
+            } else if (encoder === "h264_vaapi") {
+                args.push(`-rc_mode:v:${vIdx}`, "VBR");
+            } else if (encoder === "h264_amf") {
+                args.push(`-quality:v:${vIdx}`, "speed", `-rc:v:${vIdx}`, "vbr_latency");
+            } else if (encoder === "h264_videotoolbox") {
+                args.push(`-realtime:v:${vIdx}`, "1");
+            }
+            // h264_v4l2m2m: no extra per-tier flags, same as single-rendition path.
+
+            if (hw.type === "cpu") {
+                args.push(`-pix_fmt:v:${vIdx}`, "yuv420p");
+            }
+
+            args.push(`-force_key_frames:v:${vIdx}`, `expr:gte(t,n_forced*${SEGMENT_DURATION})`);
+            args.push(`-g:v:${vIdx}`, String(gopSize));
+            args.push(`-keyint_min:v:${vIdx}`, String(gopSize));
+            args.push(`-sc_threshold:v:${vIdx}`, "0");
+        });
+        videoMapsAddedByLadder = true;
     } else {
-        // Full transcode
+        // Full transcode — single rendition (unchanged original behavior;
+        // this is also what runs when ENABLE_MULTI_QUALITY is unset/0).
         const encoder =
             hw.type === "vaapi"
                 ? hw.encodeCodecH264
@@ -602,7 +720,11 @@ function buildFFmpegArgs({
     if (!isMultiAudioPath) {
         // Single audio track (any decision type): original simple behavior
         // unchanged (see the audio block above for the -c:a decision).
-        if (hasVideo) args.push("-map", "0:v:0");
+        // NOTE: FULL_TRANSCODE with any audio present never reaches this
+        // branch (isMultiAudioPath is true whenever decision !== DIRECT_STREAM
+        // and audio.length > 0) — the videoMapsAddedByLadder guard below only
+        // matters for the rare audio-less FULL_TRANSCODE+ladder case.
+        if (hasVideo && !videoMapsAddedByLadder) args.push("-map", "0:v:0");
         const primaryAudio = allAudioTracks.find((a) => a.default) || allAudioTracks[0];
         if (hasAudio && primaryAudio?.index != null) {
             args.push("-map", `0:${primaryAudio.index}?`);
@@ -634,8 +756,10 @@ function buildFFmpegArgs({
     // relative position "0:a:N" would mean), each with ITS OWN -c:a:K codec
     // decision so only tracks that actually need conversion get transcoded.
     // All audio tracks join the same agroup so the player sees one set of
-    // alternate audio renditions for the single video variant.
-    if (hasVideo) args.push("-map", "0:v:0");
+    // alternate audio renditions across whichever video variant(s) exist
+    // (one for the original single-rendition path, or one per ladder tier
+    // — see videoMapsAddedByLadder — for a multi-quality ABR session).
+    if (hasVideo && !videoMapsAddedByLadder) args.push("-map", "0:v:0");
 
     const AGROUP = "audio";
     allAudioTracks.forEach((track, i) => {
@@ -752,14 +876,32 @@ function buildFFmpegArgs({
         const displayName = resolveAudioDisplayName(track.language, i, filenameLangHints, mediaInfo?.parsedLanguages || []);
         varStreamParts.push(`a:${i},agroup:${AGROUP},default:${isDefault ? 1 : 0},language:${lang},name:${displayName}`);
     });
-    varStreamParts.push(`v:0,agroup:${AGROUP}`);
+    // Multi-quality: one v:N entry per ladder tier (N = 0..tiers-1, matching
+    // the ":v:N" stream-specifier index used when building each tier's
+    // encode args above) instead of the original single "v:0" entry. Each
+    // gets its own NAME= so the player's quality picker can label them
+    // (e.g. "1080p"/"720p") straight from the master manifest, same idea as
+    // the audio NAME= tags above.
+    if (mediaInfo?._qualityLadder?.length) {
+        mediaInfo._qualityLadder.forEach((qualityLabel, vIdx) => {
+            varStreamParts.push(`v:${vIdx},agroup:${AGROUP},name:${qualityLabel}`);
+        });
+    } else {
+        varStreamParts.push(`v:0,agroup:${AGROUP}`);
+    }
     args.push("-var_stream_map", varStreamParts.join(" "));
 
-    // Output: video lands at index allAudioTracks.length, audio tracks at 0..N-1.
-    // Example with 2 audio tracks:
+    // Output layout:
+    //   Original (no ladder): outputDir/0../N-1 = audio tracks, outputDir/N = video, master.m3u8
+    //   Multi-quality ladder: outputDir/0../N-1 = audio tracks,
+    //                         outputDir/N../N+T-1 = one dir per quality tier
+    //                         (T = mediaInfo._qualityLadder.length), master.m3u8
+    // Example with 2 audio tracks + 3-tier ladder:
     //   outputDir/0/index.m3u8  (Hindi audio segments)
     //   outputDir/1/index.m3u8  (English audio segments)
-    //   outputDir/2/index.m3u8  (video segments)
+    //   outputDir/2/index.m3u8  (1080p video segments)
+    //   outputDir/3/index.m3u8  (720p video segments)
+    //   outputDir/4/index.m3u8  (480p video segments)
     //   outputDir/master.m3u8   (master playlist)
     args.push("-y", path.join(outputDir, "%v", "index.m3u8"));
 
@@ -855,19 +997,6 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
     // recreate() is safe either way since mkdir is recursive.
     await fsp.mkdir(sessionDir, { recursive: true });
 
-    // Pre-create one subdirectory per variant (audio tracks 0..N-1, video
-    // at index N) for the multi-audio HLS layout. FFmpeg's %v pattern is
-    // documented to auto-create these, but doing it explicitly here avoids
-    // relying on that across FFmpeg versions/platforms.
-    {
-        const audioCount = (mediaInfo?.audio || []).length;
-        const isMultiAudio = audioCount > 1 || (decision.decision !== DECISION.DIRECT_STREAM && audioCount > 0);
-        const variantCount = !isMultiAudio || audioCount === 0 ? 0 : audioCount + 1; // +1 for video
-        for (let v = 0; v < variantCount; v++) {
-            await fsp.mkdir(path.join(sessionDir, String(v)), { recursive: true });
-        }
-    }
-
     const hwProfile = await getHWProfile(); // BUG-02 FIX: cached, not re-detected per session
     const args = buildFFmpegArgs({
         inputPath: filePath,
@@ -877,6 +1006,27 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
         mediaInfo,
         startSegment,
     });
+    // buildFFmpegArgs (above) sets mediaInfo._qualityLadder as a side effect
+    // ONLY when ENABLE_MULTI_QUALITY is on and this session actually took
+    // the ladder branch (FULL_TRANSCODE + has video) — undefined otherwise,
+    // same as before this feature existed.
+    const qualityLadder = mediaInfo?._qualityLadder || null;
+
+    // Pre-create one subdirectory per variant (audio tracks 0..N-1, then
+    // video — either a single dir at index N, or one dir per ladder tier
+    // at indices N..N+T-1 for a multi-quality session) for the multi-audio
+    // HLS layout. FFmpeg's %v pattern is documented to auto-create these,
+    // but doing it explicitly here avoids relying on that across FFmpeg
+    // versions/platforms.
+    {
+        const audioCount = (mediaInfo?.audio || []).length;
+        const isMultiAudio = audioCount > 1 || (decision.decision !== DECISION.DIRECT_STREAM && audioCount > 0);
+        const videoVariantCount = qualityLadder?.length || 1;
+        const variantCount = !isMultiAudio || audioCount === 0 ? 0 : audioCount + videoVariantCount;
+        for (let v = 0; v < variantCount; v++) {
+            await fsp.mkdir(path.join(sessionDir, String(v)), { recursive: true });
+        }
+    }
 
     console.log(`[Transcoder] Session ${sessionId} — ${decision.decision} — seg${startSegment} — ${path.basename(filePath)}`);
 
@@ -903,15 +1053,31 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
     const videoDir = isMultiAudioPath ? path.join(sessionDir, String(videoVariantIndex)) : sessionDir;
     const masterPlaylistPath = isMultiAudioPath ? path.join(sessionDir, "master.m3u8") : path.join(sessionDir, "index.m3u8");
 
+    // Multi-quality: one variant dir per ladder tier, at %v indices
+    // audioTrackCount..audioTrackCount+tiers-1. videoVariantIndex/videoDir
+    // above still point at tier 0 (the FIRST/highest-quality tier) so every
+    // existing single-rendition caller (gap-restart check, downloadPositionSec,
+    // getSessionStats, etc) keeps working unmodified against "the" video
+    // rendition. videoVariantIndices/qualityLadder are the NEW fields a
+    // multi-quality-aware caller (e.g. streamController's gap-detection,
+    // generalized to check "is this dir any video variant") should use.
+    const isMultiQualityPath = isMultiAudioPath && Array.isArray(qualityLadder) && qualityLadder.length > 0;
+    const videoVariantIndices = isMultiQualityPath ? qualityLadder.map((_, i) => audioTrackCount + i) : [videoVariantIndex];
+    const videoDirs = videoVariantIndices.map((i) => path.join(sessionDir, String(i)));
+
     const session = {
         id: sessionId,
         mediaId,
         filePath,
         sessionDir,
         isMultiAudioPath,
+        isMultiQualityPath,
+        qualityLadder: isMultiQualityPath ? qualityLadder : null,
         audioTrackCount,
         videoVariantIndex,
         videoDir,
+        videoVariantIndices,
+        videoDirs,
         m3u8Path: masterPlaylistPath,
         ffmpegProcess,
         lastAccessedAt: Date.now(),
@@ -1194,4 +1360,5 @@ module.exports = {
     SESSION_TIMEOUT_MS,
     SEGMENT_DURATION,
     SEGMENT_GAP_RESTART,
+    ENABLE_MULTI_QUALITY,
 };

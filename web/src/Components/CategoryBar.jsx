@@ -20,9 +20,7 @@ const CategoryBar = ({ onSelect }) => {
                     className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden pt-1 pb-2 w-full"
                     style={{ scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch" }}>
                     {loading.categories
-                        ? Array.from({ length: 8 }).map((_, i) => (
-                              <div key={i} className="shrink-0 h-8 w-20 sm:w-24 rounded-md border border-dashed border-base-content/10 animate-pulse shadow-none" />
-                          ))
+                        ? Array.from({ length: 8 }).map((_, i) => <div key={i} className="shrink-0 h-8 w-20 sm:w-24 rounded-full border border-base-content/10 animate-pulse shadow-none" />)
                         : categories.map((cat) => (
                               <Link
                                   key={cat.name}
