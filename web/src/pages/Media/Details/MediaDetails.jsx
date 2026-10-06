@@ -33,7 +33,7 @@ import {
     RefreshCw,
 } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
-import { useSeasonDetail } from "../../../hooks/useMedia";
+import { useSeasonDetail } from "../../../Hooks/useMedia";
 import { getMediaById } from "../../../api";
 import { api } from "../../../api/client";
 import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
@@ -674,8 +674,6 @@ function EpisodesAccordion({ season, seasonNum, onPlay }) {
 // ─── TMDB-only titles (not in the local library) ─────────────────────────────
 // ids look like "tmdb-movie-123" / "tmdb-tv-456". Person page + Known For link
 // here for titles the user does not own, so the details page can still render.
-const TMDB_KEY = import.meta.env.VITE_TMDB_API_KEY;
-const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMG = "https://image.tmdb.org/t/p";
 const TMDB_ID_RE = /^tmdb-(movie|tv)-(\d+)$/;
 const KEY_CREW_JOBS = ["Director", "Writer", "Screenplay", "Story", "Creator", "Producer", "Executive Producer", "Original Music Composer", "Director of Photography"];
@@ -683,13 +681,14 @@ const KEY_CREW_JOBS = ["Director", "Writer", "Screenplay", "Story", "Creator", "
 async function fetchTmdbItem(fullId) {
     const match = TMDB_ID_RE.exec(fullId);
     if (!match) throw new Error("Media not found");
-    if (!TMDB_KEY) throw new Error("Set VITE_TMDB_API_KEY in web/.env");
     const [, kind, tmdbId] = match;
     const isTv = kind === "tv";
 
-    const r = await fetch(`${TMDB_BASE}/${kind}/${tmdbId}?api_key=${TMDB_KEY}&language=en-US&append_to_response=credits,videos,external_ids`);
-    if (!r.ok) throw new Error("Media not found");
-    const d = await r.json();
+    // Server-side proxy (uses the server's tmdbFetch) — the TMDB key never ships in the bundle.
+    const d = await api.get(`/api/metadata/tmdb/${kind}/${tmdbId}`).catch(() => {
+        throw new Error("Media not found");
+    });
+    if (!d) throw new Error("Media not found");
 
     const title = isTv ? d.name : d.title;
     const dateIso = (isTv ? d.first_air_date : d.release_date) || null;

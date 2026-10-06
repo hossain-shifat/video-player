@@ -25,7 +25,16 @@ import { Link } from "react-router";
  */
 export default function HorizontalCard({ to, state, onClick, thumbnail, badge, centerOverlay, progress, footerText, title, menu, ring = true, aspect = "video" }) {
     const Wrapper = to ? Link : "div";
-    const wrapperProps = to ? { to, state } : { onClick, role: onClick ? "button" : undefined, tabIndex: onClick ? 0 : undefined };
+    // Click-only cards render as keyboard-operable buttons: Enter / Space activate onClick.
+    // target check keeps nested controls (e.g. the ⋮ menu) from also firing the card.
+    const handleKeyDown = (e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.(e);
+        }
+    };
+    const wrapperProps = to ? { to, state } : onClick ? { onClick, onKeyDown: handleKeyDown, role: "button", tabIndex: 0 } : {};
     const isPoster = aspect === "poster";
 
     return (

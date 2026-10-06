@@ -4,7 +4,7 @@ const { readFolders } = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
 const { getMetadata, invalidate, invalidateAll, getCachedSeason, setCachedSeason } = require("../utils/metadataStore");
 const { parseFilename } = require("../utils/nameParser");
-const { getSeasonDetails } = require("../utils/tmdb");
+const { getSeasonDetails, tmdbFetch } = require("../utils/tmdb");
 const { getMediaInfo: _getMediaInfoRaw, invalidate: invalidateMediaInfo } = require("../utils/mediaInfoStore");
 
 // ── NEW: mediaInfo (ffprobe) failure must never take down metadata ─────────
@@ -113,6 +113,11 @@ async function getAllEnriched(req, res) {
 // library refresh-all. It reuses the exact same 7-day persistent season
 // cache grouper.js already writes to, so the two never fight or duplicate
 // TMDB calls for the same tmdbId+season.
+// A season is only usable when TMDB gave it a real number AND at least one episode.
+function _isValidSeason(season) {
+    return Boolean(season) && Number.isInteger(season.seasonNumber) && Array.isArray(season.episodes) && season.episodes.length > 0;
+}
+
 async function getSeasonLazy(req, res) {
     try {
         const tmdbId = parseInt(req.params.tmdbId, 10);
@@ -125,13 +130,18 @@ async function getSeasonLazy(req, res) {
             return res.status(400).json({ error: "Invalid season number" });
         }
 
-        let season = await getCachedSeason(tmdbId, seasonNumber);
-        if (!season) {
+        // ?refresh=true bypasses the persistent season cache (manual Refresh button).
+        const forceRefresh = req.query.refresh === "true";
+
+        let season = forceRefresh ? null : await getCachedSeason(tmdbId, seasonNumber);
+        // A cached entry that is empty/invalid is not trusted — refetch it.
+        if (!_isValidSeason(season)) {
             season = await getSeasonDetails(tmdbId, seasonNumber);
-            if (season) await setCachedSeason(tmdbId, seasonNumber, season);
+            // Only persist real seasons — never cache an empty/placeholder one.
+            if (_isValidSeason(season)) await setCachedSeason(tmdbId, seasonNumber, season);
         }
 
-        if (!season) return res.status(404).json({ error: "Season not found" });
+        if (!_isValidSeason(season)) return res.status(404).json({ error: "Season not found" });
         return res.json({ season });
     } catch (err) {
         console.error("[Metadata] getSeasonLazy error:", err);
@@ -139,4 +149,24 @@ async function getSeasonLazy(req, res) {
     }
 }
 
-module.exports = { getOne, refreshOne, refreshAll, parseDebug, getAllEnriched, getSeasonLazy };
+// GET /api/metadata/tmdb/:kind/:tmdbId — server-side TMDB proxy for titles NOT in the
+// library (MediaDetails "tmdb-movie-123" / "tmdb-tv-456" ids). Uses the server's
+// tmdbFetch so the TMDB credential never reaches the browser bundle or network tab.
+async function getTmdbItem(req, res) {
+    try {
+        const { kind } = req.params;
+        const tmdbId = parseInt(req.params.tmdbId, 10);
+
+        if (kind !== "movie" && kind !== "tv") return res.status(400).json({ error: "Invalid kind" });
+        if (!Number.isInteger(tmdbId) || tmdbId <= 0) return res.status(400).json({ error: "Invalid tmdbId" });
+
+        const data = await tmdbFetch(`/${kind}/${tmdbId}`, { append_to_response: "credits,videos,external_ids" });
+        if (!data) return res.status(404).json({ error: "Media not found" });
+        return res.json(data);
+    } catch (err) {
+        console.error("[Metadata] getTmdbItem error:", err.message);
+        return res.status(404).json({ error: "Media not found" });
+    }
+}
+
+module.exports = { getOne, refreshOne, refreshAll, parseDebug, getAllEnriched, getSeasonLazy, getTmdbItem };

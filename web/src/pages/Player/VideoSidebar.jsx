@@ -3170,7 +3170,7 @@ function TutorialOverlay({ onClose }) {
 //      currently-playable link (direct file URL or the session's .m3u8).
 // Decoder mode (hw/hw+/sw) comes straight from player state — no fetch
 // needed, it's already known locally.
-function InfoBody({ mediaId, mediaInfo }) {
+function InfoBody({ mediaId, mediaInfo, hlsUrl }) {
     const { state } = usePlayerState();
     const [entry, setEntry] = useState(null);
     const [streamUrl, setStreamUrl] = useState(null);
@@ -3244,7 +3244,15 @@ function InfoBody({ mediaId, mediaInfo }) {
     // panel (while the file is already playing) was what broke the active
     // stream. Same trigger model as the existing Share/Network Stream
     // buttons: only runs when the user explicitly asks for it.
+    //
+    // If the caller passes the ACTIVE playback's URL (hlsUrl), reuse it — no
+    // resolvePlayback()/session creation at all, so an active HLS stream is never touched.
     const fetchStreamUrl = async () => {
+        if (hlsUrl) {
+            setStreamUrl(hlsUrl);
+            setStreamUrlFailed(false);
+            return;
+        }
         setStreamUrlLoading(true);
         setStreamUrlFailed(false);
         try {
@@ -3482,7 +3490,7 @@ function InfoStatCard({ label, value }) {
     );
 }
 
-export function MoreOptionsPanel({ open, onClose, isMobile, controlsPhase, mediaId, mediaInfo, onOpenPlaylist }) {
+export function MoreOptionsPanel({ open, onClose, isMobile, controlsPhase, mediaId, mediaInfo, hlsUrl, onOpenPlaylist }) {
     const { state, actions } = usePlayerState();
     const [videoDisplayOn, setVideoDisplayOn] = useState(true);
     // "decoder" | "info" | "tutorial" | "customise" | null — which
@@ -3669,7 +3677,7 @@ export function MoreOptionsPanel({ open, onClose, isMobile, controlsPhase, media
             </MenuShell>
 
             <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={subPanel === "info"} onClose={() => setSubPanel(null)} title="Information" side="bottom" width={360}>
-                <InfoBody mediaId={mediaId} mediaInfo={mediaInfo} />
+                <InfoBody mediaId={mediaId} mediaInfo={mediaInfo} hlsUrl={hlsUrl} />
             </MenuShell>
 
             {subPanel === "tutorial" && (

@@ -111,7 +111,8 @@ function historySignalWeight(entry) {
     if (entry.completed || pct >= 0.9) base = 3;
     else if (pct >= 0.5) base = 2;
     else if (pct >= 0.2) base = 1;
-    else if (duration > 60 && pct < 0.1) base = -0.5; // opened, abandoned almost immediately — mild negative
+    else if (duration > 60 && pct < 0.1)
+        base = -0.5; // opened, abandoned almost immediately — mild negative
     else base = 0.4; // not enough data to tell either way — weak positive default
 
     const rewatchMultiplier = Math.min(entry.watchCount || 1, 4);
@@ -239,15 +240,14 @@ const STRONG_SIGNAL_MIN = 2;
 
 function categoryScore(profileMap, keys, cap) {
     let sum = 0;
-    let hit = false;
     for (const k of keys) {
         const w = profileMap[k];
-        if (w) {
-            sum += w;
-            hit = true;
-        }
+        if (w) sum += w;
     }
-    return { score: Math.max(0, Math.min(sum, cap)), hit };
+    // hit = the NET, clamped score is positive — a profile weight that nets
+    // to zero/negative (e.g. a disliked genre cancelling a liked one) is not a hit.
+    const score = Math.max(0, Math.min(sum, cap));
+    return { score, hit: score > 0 };
 }
 
 function scoreCandidate(item, profile) {
@@ -273,9 +273,10 @@ function scoreCandidate(item, profile) {
         reasons.push("Matches themes you're drawn to");
     }
 
-    const peopleKeys = [...(meta.cast || []).map((c) => (c?.tmdbPersonId != null ? `p:${c.tmdbPersonId}` : null)), ...(meta.crew || []).map((c) => (c?.tmdbPersonId != null ? `p:${c.tmdbPersonId}` : null))].filter(
-        Boolean,
-    );
+    const peopleKeys = [
+        ...(meta.cast || []).map((c) => (c?.tmdbPersonId != null ? `p:${c.tmdbPersonId}` : null)),
+        ...(meta.crew || []).map((c) => (c?.tmdbPersonId != null ? `p:${c.tmdbPersonId}` : null)),
+    ].filter(Boolean);
     const p = categoryScore(profile.people, peopleKeys, CATEGORY_CAPS.people);
     if (p.hit) {
         score += p.score;

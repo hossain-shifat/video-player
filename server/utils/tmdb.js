@@ -750,21 +750,36 @@ async function lookupMetadata(parsed) {
 // ============================================================================
 
 // Master reference tables — fetched once, reused for every title afterward.
-let _movieCertListCache = null;
-let _tvCertListCache = null;
+// Only SUCCESSFUL responses are cached (a failed fetch stays retryable), and
+// concurrent callers share one in-flight request per endpoint.
+const _certListState = {
+    movie: { cache: null, inflight: null },
+    tv: { cache: null, inflight: null },
+};
+
+async function _getCertList(kind) {
+    const state = _certListState[kind];
+    if (state.cache) return state.cache;
+    if (!state.inflight) {
+        state.inflight = (async () => {
+            try {
+                const data = await tmdbFetchSafe(`/certification/${kind}/list`);
+                if (data && data.certifications) state.cache = data.certifications;
+                return state.cache || {};
+            } finally {
+                state.inflight = null; // settled — next miss may retry
+            }
+        })();
+    }
+    return state.inflight;
+}
 
 async function _getMovieCertList() {
-    if (_movieCertListCache) return _movieCertListCache;
-    const data = await tmdbFetchSafe("/certification/movie/list");
-    _movieCertListCache = data?.certifications || {};
-    return _movieCertListCache;
+    return _getCertList("movie");
 }
 
 async function _getTVCertList() {
-    if (_tvCertListCache) return _tvCertListCache;
-    const data = await tmdbFetchSafe("/certification/tv/list");
-    _tvCertListCache = data?.certifications || {};
-    return _tvCertListCache;
+    return _getCertList("tv");
 }
 
 // Cross-references one certification code against the master list for that
@@ -995,7 +1010,9 @@ function _scoreVideoForTrailer(v) {
 }
 
 function _pickBestTrailerKey(videosResults) {
-    const list = Array.isArray(videosResults) ? videosResults : [];
+    // Only YouTube entries with a real key are eligible — a non-YouTube key
+    // can't be played by the frontend's YouTube embed.
+    const list = (Array.isArray(videosResults) ? videosResults : []).filter((v) => v && v.site === "YouTube" && v.key);
     if (!list.length) return null;
     const sorted = [...list].sort((a, b) => {
         const diff = _scoreVideoForTrailer(b) - _scoreVideoForTrailer(a);
@@ -1164,4 +1181,5 @@ module.exports = {
     getSeasonDetails,
     discoverByCompany,
     getVideosFor,
+    tmdbFetch, // server-side TMDB proxy (metadataController.getTmdbItem)
 };

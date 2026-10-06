@@ -44,8 +44,12 @@ function buildLibraryIndex(movies, series, anime) {
         const t = a.metadata?.tmdbId;
         if (!t) continue;
         const entry = { id: a.seriesKey || a.id, raw: a };
-        map.set(`tv:${t}`, entry);
-        map.set(`movie:${t}`, entry); // anime can be TV or film
+        // Pick the namespace from the anime item's own type; only when the type is
+        // unknown (anime can be TV or film) map to both. Never overwrite a key that a
+        // real movie/TV entry already owns — TMDB movie and TV id spaces are independent.
+        const type = String(a.metadata?.type || a.parsed?.type || a.type || "").toLowerCase();
+        const keys = type === "movie" ? [`movie:${t}`] : type === "tv" || type === "series" ? [`tv:${t}`] : [`tv:${t}`, `movie:${t}`];
+        for (const key of keys) if (!map.has(key)) map.set(key, entry);
     }
     return map;
 }
@@ -310,18 +314,30 @@ function buildMarathon(items, history) {
 }
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
+// TMDB dates are date-only ("YYYY-MM-DD") — new Date() parses those as UTC midnight, so
+// local-time getters/formatting shift the day in negative-offset time zones. Everything
+// below works on UTC / parsed Y-M-D components instead.
+function _ymd(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || "");
+    return m ? { y: +m[1], m: +m[2] - 1, d: +m[3] } : null;
+}
+
 function fmtDate(d) {
     if (!d) return null;
-    return new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    const p = _ymd(d);
+    const date = p ? new Date(Date.UTC(p.y, p.m, p.d)) : new Date(d);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function calcAge(birthday, deathday) {
-    if (!birthday) return null;
-    const end = deathday ? new Date(deathday) : new Date();
-    const birth = new Date(birthday);
-    let age = end.getFullYear() - birth.getFullYear();
-    const m = end.getMonth() - birth.getMonth();
-    if (m < 0 || (m === 0 && end.getDate() < birth.getDate())) age--;
+    const birth = _ymd(birthday);
+    if (!birth) return null;
+    const now = new Date();
+    const end = _ymd(deathday) || { y: now.getUTCFullYear(), m: now.getUTCMonth(), d: now.getUTCDate() };
+    let age = end.y - birth.y;
+    const m = end.m - birth.m;
+    if (m < 0 || (m === 0 && end.d < birth.d)) age--;
     return age;
 }
 

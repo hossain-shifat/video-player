@@ -469,7 +469,30 @@ router.post("/upload", uploadTemp.single("file"), async (req, res) => {
             return res.status(404).json({ error: "Library folder not found" });
         }
 
-        const destPath = path.join(folder.path, req.file.originalname);
+        // Never trust the client-supplied name as a path: keep only the basename
+        // (handles both / and \\ separators), reject empty/dot names, and make sure
+        // the resolved destination is directly inside the library folder.
+        const safeName = path.basename(String(req.file.originalname || "").replace(/\\/g, "/")).trim();
+        const folderRoot = path.resolve(folder.path);
+        const destPath = path.resolve(folderRoot, safeName);
+        if (!safeName || safeName === "." || safeName === ".." || safeName.includes("\0") || path.dirname(destPath) !== folderRoot) {
+            fs.unlink(req.file.path, () => {});
+            return res.status(400).json({ error: "Invalid file name" });
+        }
+
+        // Never overwrite an existing file (lstat so a symlink at destPath counts too).
+        const exists = await fs.promises
+            .lstat(destPath)
+            .then(() => true)
+            .catch((e) => {
+                if (e.code === "ENOENT") return false;
+                throw e;
+            });
+        if (exists) {
+            fs.unlink(req.file.path, () => {});
+            return res.status(409).json({ error: `A file named "${safeName}" already exists in this library folder` });
+        }
+
         console.log(`[AdminDash] moving to destPath="${destPath}"`); // DEBUG — same purpose as the log above
 
         try {
@@ -478,7 +501,7 @@ router.post("/upload", uploadTemp.single("file"), async (req, res) => {
             // EXDEV = temp dir and library folder are on different drives/filesystems —
             // rename can't cross that, fall back to copy + delete.
             if (err.code === "EXDEV") {
-                await fs.promises.copyFile(req.file.path, destPath);
+                await fs.promises.copyFile(req.file.path, destPath, fs.constants.COPYFILE_EXCL);
                 await fs.promises.unlink(req.file.path);
             } else {
                 throw err;
@@ -487,9 +510,9 @@ router.post("/upload", uploadTemp.single("file"), async (req, res) => {
 
         if (invalidateFolder) invalidateFolder(folder.id); // so the library reflects the new file without a manual rescan
 
-        pushLog("info", "upload", `Uploaded "${req.file.originalname}" to library "${folder.label}"`);
+        pushLog("info", "upload", `Uploaded "${safeName}" to library "${folder.label}"`);
 
-        return res.status(201).json({ uploaded: { path: destPath, size: req.file.size, name: req.file.originalname, folderId: folder.id } });
+        return res.status(201).json({ uploaded: { path: destPath, size: req.file.size, name: safeName, folderId: folder.id } });
     } catch (err) {
         console.error("[AdminDash] upload error:", err);
         fs.unlink(req.file.path, () => {});

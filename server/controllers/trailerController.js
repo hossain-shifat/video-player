@@ -140,8 +140,27 @@ function _sortByViews(items, viewsMap, trailerKeyOf) {
 // trailer once its movie released" and "drop the oldest ones" work for free:
 // anything that no longer qualifies just isn't in the new list.
 
-async function rebuildDiscoverTrailers() {
-    const { companyMap, animeCompanyIds, ownedKeys } = await buildLibraryIndex();
+// One in-flight rebuild per feed — concurrent callers (scheduler, cache-miss GETs,
+// manual refresh) await the same promise instead of repeating the TMDB walk.
+const _inflight = { discover: null, library: null };
+
+function _shareInflight(feed, work) {
+    if (_inflight[feed]) return _inflight[feed];
+    const p = (async () => work())().finally(() => {
+        if (_inflight[feed] === p) _inflight[feed] = null;
+    });
+    _inflight[feed] = p;
+    return p;
+}
+
+// `index` (optional) = a prebuilt buildLibraryIndex() result, so a refresh of BOTH
+// feeds builds the index only once. Ignored when a rebuild is already in flight.
+function rebuildDiscoverTrailers(index) {
+    return _shareInflight("discover", () => _rebuildDiscoverTrailers(index));
+}
+
+async function _rebuildDiscoverTrailers(index) {
+    const { companyMap, animeCompanyIds, ownedKeys } = index || (await buildLibraryIndex());
     const companyIds = [...companyMap.keys()];
 
     if (!companyIds.length) {
@@ -168,7 +187,15 @@ async function rebuildDiscoverTrailers() {
                 const key = `${mediaType}:${r.id}`;
                 if (ownedKeys.has(key) || seen.has(key)) continue;
 
-                const { trailer, trailerPublishedAt, videos } = await getVideosFor(r.id, mediaType);
+                let videoInfo;
+                try {
+                    videoInfo = await getVideosFor(r.id, mediaType);
+                } catch (err) {
+                    // one bad title must not abort the whole rebuild
+                    console.warn(`[Trailers] getVideosFor failed ${mediaType}:${r.id}: ${err.message}`);
+                    continue;
+                }
+                const { trailer, trailerPublishedAt, videos } = videoInfo;
                 if (!videos.length) continue; // only show items that actually have a trailer/teaser
 
                 // A "tv" result from a company you only know as an anime studio is
@@ -213,8 +240,12 @@ async function rebuildDiscoverTrailers() {
     return items;
 }
 
-async function rebuildLibraryTrailers() {
-    const { libraryItems } = await buildLibraryIndex();
+function rebuildLibraryTrailers(index) {
+    return _shareInflight("library", () => _rebuildLibraryTrailers(index));
+}
+
+async function _rebuildLibraryTrailers(index) {
+    const { libraryItems } = index || (await buildLibraryIndex());
 
     const trailerKeyOf = (it) => it.videos?.find((v) => v.type === "Trailer")?.key || it.videos?.[0]?.key || null;
     const viewsMap = await _fetchViewCounts(libraryItems.map(trailerKeyOf));
@@ -270,7 +301,8 @@ async function getDiscoverTrailers(req, res) {
 // for the next GET.
 async function refreshTrailers(req, res) {
     try {
-        const [discover, library] = await Promise.all([rebuildDiscoverTrailers(), rebuildLibraryTrailers()]);
+        const index = await buildLibraryIndex(); // built once, shared by both feeds
+        const [discover, library] = await Promise.all([rebuildDiscoverTrailers(index), rebuildLibraryTrailers(index)]);
         return res.json({ message: "Trailers rebuilt.", discover: discover.length, library: library.length });
     } catch (err) {
         console.error("[Trailers] refreshTrailers error:", err);
