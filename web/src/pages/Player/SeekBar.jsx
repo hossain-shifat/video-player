@@ -186,7 +186,8 @@ const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
 
     const playedPct = state.duration ? (state.currentTime / state.duration) * 100 : 0;
     const { endPct: bufferedEndPct } = getBufferedRange(state.buffered, state.duration, state.currentTime, sessionTimeOffsetRef?.current || 0);
-    const showThumb = isHovered || isDragging;
+    // ADD: thumb always visible (was hover/drag only). Grows on hover/drag.
+    const thumbScale = isDragging ? 1.4 : isHovered ? 1.2 : 1;
 
     return (
         <div
@@ -230,7 +231,28 @@ const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
             </div>
 
             {/* Thumb */}
-            <div ref={thumbRef} className={`flux-seek-thumb ${showThumb ? "active" : ""} ${isDragging ? "dragging" : ""}`} style={{ left: `${playedPct}%` }} />
+            <div
+                ref={thumbRef}
+                className={`flux-seek-thumb active ${isDragging ? "dragging" : ""}`}
+                style={{
+                    left: `${Math.max(0, Math.min(100, playedPct || 0))}%`,
+                    position: "absolute",
+                    top: "50%",
+                    width: 13,
+                    height: 13,
+                    borderRadius: "50%",
+                    // Red outer circle, white inner circle (thin red ring).
+                    background: "#fff",
+                    border: "2px solid var(--primary, #e50914)",
+                    boxSizing: "border-box",
+                    boxShadow: "none",
+                    opacity: 1,
+                    pointerEvents: "none",
+                    transform: `translate(-50%, -50%) scale(${thumbScale})`,
+                    transition: isDragging ? "none" : "transform 120ms ease-out",
+                    zIndex: 2,
+                }}
+            />
         </div>
     );
 });
