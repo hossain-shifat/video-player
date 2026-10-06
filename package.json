@@ -1,0 +1,29 @@
+{
+  "name": "player",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hossain-shifat/video-player.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/hossain-shifat/video-player/issues"
+  },
+  "homepage": "https://github.com/hossain-shifat/video-player#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

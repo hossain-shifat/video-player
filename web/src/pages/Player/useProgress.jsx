@@ -10,6 +10,11 @@ function historyHeaders(clientId) {
 // URL from the mediaId so history links survive server restarts.
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
+// REMOVED: RESUME_MIN_WAIT_MS fixed timer. Replaced with real readiness
+// checks (video.buffered covering the target position + video.readyState)
+// inside deferredSeek below — genuinely event-driven, not a guessed
+// duration. See deferredSeek's poll loop for the actual gate.
+
 export function useProgress({
     mediaId,
     clientId,
@@ -28,6 +33,7 @@ export function useProgress({
     actions,
     suppressTimeUpdateRef,
     sessionTimeOffsetRef,
+    getAbsoluteCurrentTime,
 }) {
     const [resumePoint, setResumePoint] = useState(() => (knownResumePosition != null && knownResumePosition > 10 ? { position: knownResumePosition } : null));
     const [showResumeDialog, setShowResumeDialog] = useState(() => knownResumePosition != null && knownResumePosition > 10);
@@ -53,15 +59,111 @@ export function useProgress({
     // seekable range grows to include the target quickly (without waiting for
     // natural playback to reach the target).
     const deferredSeek = useCallback(
-        (targetSec, onSeekLanded) => {
+        (targetSec, onSeekLanded, opts = {}) => {
+            // FIX (x resets toward 0:00 on quality/resolution switch):
+            // deferredSeek was written assuming targetSec is always the
+            // ABSOLUTE position to both display AND seek the video element
+            // to — true for the resume-dialog path (fresh video, no session
+            // offset). But PlayerPage's quality-switch restore calls this
+            // with pending.seekTarget, which is SESSION-RELATIVE
+            // (pending.time - sessionOffset) — the video element does need
+            // to seek to that relative spot, but the UI must keep showing
+            // the real absolute pending.time throughout. The old code did
+            // `actions.setCurrentTime(targetSec)` unconditionally, which
+            // immediately overwrote the correct absolute value the caller
+            // had just set with this wrong relative one, and then flipped
+            // suppressTimeUpdateRef back to false once the seek landed —
+            // permanently breaking PlayerPage's manual clock and handing
+            // display back to native timeupdate (session-relative time,
+            // since sessionTimeOffsetRef is never actually populated).
+            //
+            // opts.displayTime: what to optimistically show (defaults to
+            // targetSec, preserving old behavior for the resume-dialog path).
+            // opts.keepSuppressed: if true, never flip suppressTimeUpdateRef
+            // back to false once the seek lands — the caller (quality-switch
+            // manual clock) owns display permanently and must not be
+            // fought over by native timeupdate again.
+            const displayTime = opts.displayTime != null ? opts.displayTime : targetSec;
+            const keepSuppressed = !!opts.keepSuppressed;
+            // FIX (subtitle mismatch on resume — root cause): this used to
+            // call onSeekLanded?.() with NO arguments. PlayerPage's plain-
+            // resume callback then re-read progressProps.resumePoint?.position
+            // fresh, from a prop closure — but resumePoint can be stale or
+            // already cleared by the time this fires (buffer-poll can take
+            // seconds), so `typeof resumeTarget === "number"` silently
+            // failed and sessionTimeOffsetRef never got set (stayed 0
+            // forever). SubtitleRenderer uses that offset to convert
+            // session-relative video.currentTime back to absolute time —
+            // with it stuck at 0, every cue used the wrong clock, showing
+            // early or late. targetSec is the exact value THIS seek was
+            // asked to land at — already known here, in this closure, with
+            // zero staleness risk. Passing it through means the caller
+            // never needs to re-read anything.
+            const finishLanded = () => {
+                setIsSeekingToResume(false);
+                if (suppressTimeUpdateRef && !keepSuppressed) suppressTimeUpdateRef.current = false;
+                onSeekLanded?.(targetSec);
+            };
+
             if (!targetSec || targetSec <= 0) {
-                onSeekLanded?.();
+                onSeekLanded?.(targetSec);
                 return;
             }
             clearInterval(seekPollRef.current);
             setIsSeekingToResume(true);
+            // FIX (the actual root cause of "audio plays before overlay
+            // clears" / subtitle-audio desync surviving every previous
+            // attempt): nothing in this function ever paused the video
+            // element. If the <video> has native autoplay behavior (or the
+            // browser just starts MSE playback the instant enough data is
+            // buffered), audio+video begin playing on their own the moment
+            // segments land — completely independent of when OUR code
+            // decides to call .play(). The overlay only ever hid the
+            // picture; it never silenced the audio actually playing behind
+            // it. Explicitly pausing here, and re-pausing on every poll
+            // tick below as a safety net, ensures nothing actually plays
+            // until the real onSeekLanded callback (which calls .play()
+            // itself once everything's ready) decides to.
+            const video0 = videoRef.current;
+            if (video0 && !video0.paused) video0.pause();
             let attempts = 0;
-            const MAX_ATTEMPTS = 75; // 75 × 200ms = 15s max wait
+            const MAX_ATTEMPTS = 150; // 150 × 200ms = 30s absolute ceiling (safety net only, not a target duration)
+            // FIX (removed RESUME_MIN_WAIT_MS entirely — no fixed timers):
+            // this is a two-phase, purely event-driven wait. Phase 1 polls
+            // video.buffered until it covers the target position (proves
+            // real audio+video data exists there — MSE's buffered is the
+            // browser's own intersection across all active SourceBuffers).
+            // Once that's true, we actually seek, then move to phase 2:
+            // poll video.readyState until it reaches HAVE_FUTURE_DATA (3) —
+            // the browser's own signal that decoding has caught up enough
+            // at the NEW position to play without stalling. Neither phase
+            // waits a guessed duration; both just watch real browser state
+            // until it says so.
+            let seeked = false;
+            // FIX (subtitle mismatch after resume from history): phase 2
+            // below used to call finishLanded() on the FIRST tick where
+            // readyState >= 3. In this project's multi-SourceBuffer MSE
+            // setup (separate audio-only + video-only renditions) that
+            // first HAVE_FUTURE_DATA reading can arrive while the element
+            // is still settling onto the seek target (currentTime still
+            // moving, or `seeking` still true). onSeekLanded's caller
+            // (PlayerPage.handleReadyToSeek) computes
+            // sessionTimeOffsetRef = absoluteTarget - video.currentTime
+            // the instant this fires, so reading an unsettled
+            // currentTime bakes that residual error into the offset for
+            // the WHOLE session — SubtitleRenderer's clock is
+            // video.currentTime + sessionTimeOffsetRef, so every cue then
+            // shows early or late by exactly that error. Normal play never
+            // hits this (offset is 0, nothing calibrated from a landing).
+            // Require currentTime to hold still (< STABLE_EPS_SEC change)
+            // with readyState >= 3 and no pending seek for
+            // STABLE_TICKS_REQUIRED consecutive polls before landing.
+            // The poll ceiling (MAX_ATTEMPTS) still bounds the wait.
+            const STABLE_EPS_SEC = 0.05;
+            const STABLE_TICKS_REQUIRED = 1;
+            let stableTicks = 0;
+            let lastStableTime = null;
+            console.log("[Resume] Waiting: Video/Audio Buffer");
 
             // FIX (resume shows 0:00 climbing up, not 17:09 — same bug the
             // quality-switch path already had and fixed): this used to only
@@ -75,7 +177,7 @@ export function useProgress({
             // overwriting it (suppressTimeUpdateRef) until the real seek
             // lands, mirrors PlayerPage.jsx's already-proven quality-switch
             // fix exactly.
-            actions?.setCurrentTime?.(targetSec);
+            actions?.setCurrentTime?.(displayTime);
             if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = true;
 
             // Tell hls.js to start buffering from the target position immediately.
@@ -88,30 +190,69 @@ export function useProgress({
                 const video = videoRef.current;
                 if (!video) {
                     clearInterval(seekPollRef.current);
-                    setIsSeekingToResume(false);
-                    if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = false;
-                    onSeekLanded?.();
+                    finishLanded();
+                    return;
+                }
+                // Safety net: re-pause every tick. Covers the case where
+                // something else (native autoplay re-triggering, a stray
+                // play() call elsewhere) resumes playback mid-wait.
+                if (!video.paused) video.pause();
+
+                if (!seeked) {
+                    // ── Phase 1: wait for real buffered data at the target ──
+                    // video.buffered is the real signal: for a multi-
+                    // SourceBuffer MSE setup (separate audio-only +
+                    // video-only HLS renditions, this project's
+                    // architecture), HTMLMediaElement.buffered is the
+                    // browser's own INTERSECTION across all active
+                    // SourceBuffers — genuinely "both audio AND video have
+                    // real data here". Requiring the range to reach
+                    // slightly PAST targetSec also ensures a little real
+                    // lookahead buffer exists, not just the exact instant.
+                    const buffered = video.buffered;
+                    let bufferedOk = false;
+                    for (let i = 0; i < buffered.length; i++) {
+                        if (buffered.start(i) <= targetSec + 0.25 && buffered.end(i) >= targetSec + 1) {
+                            bufferedOk = true;
+                            break;
+                        }
+                    }
+                    if (bufferedOk) {
+                        console.log("[Resume] Video Buffered / Audio Buffered — seeking to", targetSec.toFixed(2));
+                        video.currentTime = targetSec;
+                        seeked = true;
+                        console.log("[Resume] Waiting: Decoder Ready (readyState)");
+                    } else if (attempts >= MAX_ATTEMPTS) {
+                        // Absolute ceiling hit without ever seeing real
+                        // buffered data — give up rather than hang forever,
+                        // but this is a safety net, not the normal path.
+                        console.log("[Resume] Waiting: Video/Audio Buffer — TIMED OUT after", MAX_ATTEMPTS * 200, "ms, playing anyway");
+                        video.currentTime = targetSec;
+                        clearInterval(seekPollRef.current);
+                        finishLanded();
+                    }
                     return;
                 }
 
-                // Check if seekable range includes target position
-                const seekable = video.seekable;
-                let canSeek = false;
-                for (let i = 0; i < seekable.length; i++) {
-                    if (targetSec <= seekable.end(i) + 1) {
-                        canSeek = true;
-                        break;
-                    }
+                // ── Phase 2: wait for the decoder to actually be ready to
+                // play the NEW (post-seek) position without stalling.
+                // readyState >= HAVE_FUTURE_DATA (3) is HTMLMediaElement's
+                // own, genuinely event-driven readiness signal — not
+                // something we invented or timed.
+                const ready = video.readyState >= 3 && !video.seeking;
+                if (ready) {
+                    const t = video.currentTime;
+                    if (lastStableTime != null && Math.abs(t - lastStableTime) < STABLE_EPS_SEC) stableTicks++;
+                    else stableTicks = 0;
+                    lastStableTime = t;
+                } else {
+                    stableTicks = 0;
+                    lastStableTime = null;
                 }
-
-                if (canSeek || attempts >= MAX_ATTEMPTS) {
+                if (stableTicks >= STABLE_TICKS_REQUIRED || attempts >= MAX_ATTEMPTS) {
                     clearInterval(seekPollRef.current);
-                    video.currentTime = targetSec;
-                    setIsSeekingToResume(false);
-                    // Real position has landed — safe to let native
-                    // timeupdate drive state.currentTime again from here.
-                    if (suppressTimeUpdateRef) suppressTimeUpdateRef.current = false;
-                    onSeekLanded?.();
+                    console.log("[Resume] ReadyState =", video.readyState, "currentTime =", video.currentTime.toFixed(3), "stableTicks =", stableTicks, "— Playback Ready");
+                    finishLanded();
                 }
             }, 200);
         },
@@ -127,18 +268,25 @@ export function useProgress({
         const video = videoRef.current;
         if (!video) return;
         const onTimeUpdate = () => {
-            // FIX: same absolute-vs-relative issue as the display fix —
-            // video.currentTime is relative to whichever session is
-            // currently loaded (0 for fresh/resume, session-relative after a
-            // quality-switch restart). Saving the raw relative value here
-            // would silently corrupt this video's saved watch position for
-            // NEXT time, even though the on-screen time looked correct this
-            // session.
-            lastTimeRef.current = video.currentTime + (sessionTimeOffsetRef?.current || 0);
+            // FIX (history corrupted after quality switch): this used to do
+            // video.currentTime + (sessionTimeOffsetRef?.current || 0) —
+            // sessionTimeOffsetRef is a dead ref, declared and reset to 0 but
+            // never actually assigned anywhere once the manual-clock design
+            // (manualClockRef, in PlayerPage.jsx) replaced it. So this
+            // always added 0, silently recording the raw session-relative
+            // video.currentTime into lastTimeRef — correct-looking on-screen
+            // (that's driven by the manual clock separately) but wrong for
+            // anything saved from here (periodic saves, unmount/beacon
+            // saves), which is exactly why history could show one thing and
+            // resuming would land somewhere completely different.
+            // getAbsoluteCurrentTime() (passed down from PlayerPage) is the
+            // same single source of truth already used for the on-screen x.
+            lastTimeRef.current = getAbsoluteCurrentTime ? getAbsoluteCurrentTime() : video.currentTime + (sessionTimeOffsetRef?.current || 0);
         };
         // FIX: save immediately after user seeks to any position
         const onSeeked = () => {
-            saveProgressRef.current?.(video.currentTime + (sessionTimeOffsetRef?.current || 0));
+            const t = getAbsoluteCurrentTime ? getAbsoluteCurrentTime() : video.currentTime + (sessionTimeOffsetRef?.current || 0);
+            saveProgressRef.current?.(t);
         };
         video.addEventListener("timeupdate", onTimeUpdate);
         video.addEventListener("seeked", onSeeked);
@@ -146,7 +294,7 @@ export function useProgress({
             video.removeEventListener("timeupdate", onTimeUpdate);
             video.removeEventListener("seeked", onSeeked);
         };
-    }, [streamUrl, videoRef, sessionTimeOffsetRef]); // streamUrl flip null→url triggers re-run
+    }, [streamUrl, videoRef, sessionTimeOffsetRef, getAbsoluteCurrentTime]); // streamUrl flip null→url triggers re-run
 
     // FIX: stable stream URL — never use ephemeral HLS session URL
     const stableStreamUrl = mediaId ? `${BASE}/stream/video/${encodeURIComponent(mediaId)}` : null;
@@ -354,14 +502,23 @@ export function useProgress({
         [showResumeDialog, resumePoint, deferredSeek],
     );
 
-    // ── Periodic progress save (every 10s) + immediate save on play/pause ─────
+    // ── Periodic progress save (every 4s) + immediate save on play/pause ──────
     useEffect(() => {
+        // FIX (history corrupted after quality switch / wrong resume
+        // position): was reading videoRef.current.currentTime directly —
+        // the raw session-relative element clock. Once ANY quality switch
+        // had happened, this interval kept saving that small, wrong number
+        // every tick, silently overwriting the real position in history
+        // regardless of what the on-screen x showed. getAbsoluteCurrentTime()
+        // is the same manual-clock-aware source already used for display,
+        // so what's saved always matches what's on screen.
+        const readTime = () => (getAbsoluteCurrentTime ? getAbsoluteCurrentTime() : videoRef.current?.currentTime || 0);
         if (playing) {
             // FIX: save immediately when playback starts (don't wait for first interval)
-            if (videoRef.current) saveProgress(videoRef.current.currentTime);
+            if (videoRef.current) saveProgress(readTime());
             intervalRef.current = setInterval(() => {
-                if (videoRef.current) saveProgress(videoRef.current.currentTime);
-            }, 10_000);
+                if (videoRef.current) saveProgress(readTime());
+            }, 4_000); // FIX: was 10_000 — explicit request for 4s history writes
         } else {
             clearInterval(intervalRef.current);
             // FIX: save immediately on pause
@@ -369,7 +526,7 @@ export function useProgress({
             if (time > 0) saveProgressRef.current?.(time);
         }
         return () => clearInterval(intervalRef.current);
-    }, [playing, saveProgress, videoRef]);
+    }, [playing, saveProgress, videoRef, getAbsoluteCurrentTime]);
 
     // ── sendBeacon helper — used by unmount, pagehide, visibilitychange ───────
     // Kept as a ref so page-exit handlers always read the latest mediaId/token/etc.

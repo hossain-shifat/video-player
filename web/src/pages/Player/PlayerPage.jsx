@@ -9,6 +9,7 @@ import PlayerOverlays, { useOverlay } from "./PlayerOverlays";
 import SubtitleRenderer from "./SubtitleRenderer";
 import { useProgress } from "./useProgress";
 import { getMediaById, getSubtitles } from "../../api/media";
+import { getResumePoint } from "../../api/history";
 import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream";
 import { useAuth } from "../../auth/AuthContext";
 import { useIsMobile } from "./useIsMobile";
@@ -42,6 +43,14 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
     const mediaDurationRef = useRef(null);
     // Subtitle default selection: populated after subtitle list loads, consumed after history loads
     const setDefaultSubRef = useRef(null);
+    // RACE FIX: onHistoryLoaded (fired by useProgress's own history fetch)
+    // and getSubtitles(mediaId) (fired in this component's own media-load
+    // effect) are two independent async calls with no ordering guarantee.
+    // If history resolves first, setDefaultSubRef.current is still null,
+    // and the saved subtitlePref was being silently dropped — never
+    // applied, never retried. This ref holds that entry until the
+    // subtitle list actually arrives.
+    const pendingHistorySubRef = useRef(undefined);
     // HLS instance ref — populated by VideoCore via onHlsCreated, used by useProgress deferredSeek
     const hlsRef = useRef(null);
     // Captured playback state during an on-demand quality switch (position/
@@ -71,6 +80,42 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
     // absolute) and "what the video element's own currentTime actually is"
     // (relative to whichever session is currently loaded).
     const sessionTimeOffsetRef = useRef(0);
+    // FIX (embedded subtitle showing early, only on resume — large seeks):
+    // fast `-ss` seeking on the backend can land a bit earlier than the
+    // requested position (nearest keyframe at/before target — see the
+    // "A/V-drift tradeoff" comment on that -ss call in transcoderService.js,
+    // and the earlier comment block right above sessionTimeOffsetRef: this
+    // codebase already gave up once trying to reverse-engineer exactly
+    // where a session's 0 really sits, for the same underlying reason).
+    // The backend now measures the REAL landed position via ffprobe
+    // (transcoderService.js's debugAvOffset, previously logged-only) and
+    // surfaces it through the existing session heartbeat. This ref keeps
+    // the ORIGINAL assumed offset (what the request math predicted) around
+    // for the video's whole lifetime — unlike qualitySwitchStateRef, which
+    // gets consumed/nulled the instant the seek starts — so the heartbeat
+    // effect further down can diff "assumed" against "measured" once the
+    // real number becomes available and apply a one-time correction.
+    const assumedSessionOffsetRef = useRef(null);
+    // true once the backend-measured offset refined the assumed one for this session
+    const offsetRefinedRef = useRef(false);
+    const startTimeOffsetRef = useRef(0);
+
+    // ADD (adaptive subtitle fine-tune): the file's real measured
+    // audio-vs-video start gap, once the session heartbeat reports it (see
+    // below). null until then — SubtitleRenderer falls back to its own
+    // fixed default whenever this hasn't arrived yet. Doesn't feed into
+    // sessionOffset/mediaTime/gating at all — purely a small, independent
+    // nudge at the final cue-lookup step, same as before.
+    const avGapSecRef = useRef(null);
+    // Resolved resume position (seconds), for the WHOLE player session —
+    // seeded from the router-state hint if present, then overwritten with
+    // the true resolved value (history fetch or knownResumePosition,
+    // whichever the init effect below settles on) the moment it's known.
+    // Passed to SubtitleRenderer so its clock can start at the correct
+    // expected position immediately on mount instead of 0 — independent of
+    // how long the underlying video/HLS pipeline takes to actually land
+    // the seek.
+    const resumePositionRef = useRef(typeof knownResumePosition === "number" ? knownResumePosition : null);
 
     const { state, actions } = usePlayerState();
     const { getToken } = useAuth();
@@ -387,18 +432,101 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // SAFETY NET (resume subtitles): logs of a history resume showed
+    // sessionTimeOffsetRef stuck at 0.000 for the whole session while the
+    // element's clock was session-relative (~2.6s for a resume at 79s), so
+    // subtitles were matched ~76s off. If the manual clock is active
+    // (resume/quality-restore) and the offset is still 0 at the first real
+    // 'playing' event, derive it from the intended absolute position vs the
+    // element's real time. One-shot, never overrides an offset already set,
+    // inert for normal play (manual clock inactive). No waiting, no network.
+    useEffect(() => {
+        if (!streamUrl) return undefined;
+        const v = videoRef.current;
+        if (!v) return undefined;
+        const onPlaying = () => {
+            const clock = manualClockRef.current;
+            if (!clock.active || sessionTimeOffsetRef.current !== 0) return;
+            const off = clock.baseX - v.currentTime;
+            if (off > 1) {
+                sessionTimeOffsetRef.current = off;
+                console.log("[RESUME-SYNC] fallback offset applied", { baseX: clock.baseX, videoTime: v.currentTime, offset: off });
+            }
+        };
+        v.addEventListener("playing", onPlaying, { once: true });
+        return () => v.removeEventListener("playing", onPlaying);
+    }, [streamUrl]);
+
     // ── HLS session heartbeat ─────────────────────────────────────────────────
     // FIX (Report-08): was heartbeatSession(sessionId, clientIdRef.current)
     // which passed clientId string as positionSec → parseFloat("web_xyz") = NaN
     // → downloadPositionSec never updated → cleanup couldn't track real position.
     // Correct signature: heartbeatSession(sessionId, positionSec, clientId)
+    //
+    // FIX (reverted — was wrong, same root cause as the sessionOffset revert
+    // above): this used to apply a delayed correction using the backend's
+    // ffprobe-measured raw PTS (measuredStartOffset). That measurement comes
+    // from the video pipeline's -copyts-preserved raw container timestamp,
+    // which is a different domain than the subtitle cues (extracted without
+    // -copyts, normalized to start at 0) are in — applying it shifted
+    // subtitle sync by this file's container start_time instead of fixing
+    // it, just on a ~10s delay instead of immediately. Back to a plain ping.
+    //
+    // ADD (adaptive subtitle fine-tune): now also captures avGapSec — the
+    // real measured audio-vs-video start gap (transcoderService.js's
+    // debugAvOffset) — into avGapSecRef once the backend has it available,
+    // a few seconds after session start. This is a read-only capture into
+    // a ref no other code depends on yet; the ping's own behavior
+    // (updating downloadPositionSec server-side) is unchanged.
     useEffect(() => {
         if (!sessionId) return;
-        const interval = setInterval(() => {
+        let cancelled = false;
+        const doPing = async () => {
             const positionSec = videoRef.current?.currentTime ?? 0;
-            heartbeatSession(sessionId, positionSec, clientIdRef.current);
-        }, 10_000);
-        return () => clearInterval(interval);
+            try {
+                const resp = await heartbeatSession(sessionId, positionSec, clientIdRef.current);
+                if (!cancelled && typeof resp?.avGapSec === "number") avGapSecRef.current = resp.avGapSec;
+            } catch {
+                // Same as before — heartbeat failures are non-fatal.
+            }
+        };
+        // FIX (subtitles showing before audio — only for the first ~10s
+        // after every resume/seek, which is exactly what was reported):
+        // avGapSecRef was only ever populated by THIS SAME 10s interval's
+        // own tick, so for the entire first 10-second window after any
+        // resume it stayed null — SubtitleRenderer's AV_LAG_SEC ramp had
+        // nothing to ramp toward and applied zero audio-delay correction,
+        // during exactly the window where a resume's A/V gap is largest
+        // and most visible. Server-side, debugAvOffset (transcoderService.
+        // js) typically finishes within 1-3s of session start, as soon as
+        // the first video+audio segment lands — the value was ready, nothing
+        // was asking for it yet. A fresh PLAY (segment 0) never showed this
+        // because there's essentially no A/V gap to correct there in the
+        // first place, only a real seek does — matching "only on resume".
+        // One extra early ping, timed just past that ready window, closes
+        // the gap without touching the steady-state 10s cadence (no added
+        // ongoing server load — this fires once per session, not repeatedly).
+        // FIX (little gap, subtitles showing slightly ahead — only right
+        // after a resume): server logs show avGapSec (debugAvOffset) is
+        // typically ready within ~1s of session start — it's fire-and-
+        // forget the instant the first segment lands, well before the
+        // ORIGINAL 3s early-ping delay was asking for it. That gap (server
+        // has the real correction ready, client just hasn't asked yet) is
+        // exactly the "little gap...showing in advance" window: AV_LAG_SEC
+        // stays 0 (no correction applied) until this ping fires. Adding one
+        // more, earlier ping shrinks that uncorrected window without
+        // touching the sessionTimeOffsetRef math at all — the 3s/10s
+        // pings stay as fallbacks for whenever the probe genuinely takes
+        // longer.
+        const veryEarlyTimer = setTimeout(doPing, 1_200);
+        const earlyTimer = setTimeout(doPing, 3_000);
+        const interval = setInterval(doPing, 10_000);
+        return () => {
+            cancelled = true;
+            clearTimeout(veryEarlyTimer);
+            clearTimeout(earlyTimer);
+            clearInterval(interval);
+        };
     }, [sessionId]);
 
     // ── Cleanup on unmount (per-video, fires on every switch AND true exit) ──
@@ -434,8 +562,29 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
         // the Picker lists the NEW video's own tracks, none of which match
         // that stale leftover URL, so nothing showed as checked.
         actions.setActiveSubtitle(null);
+        setDefaultSubRef.current = null;
+        pendingHistorySubRef.current = undefined;
         sessionTimeOffsetRef.current = 0;
+        offsetRefinedRef.current = false;
         manualClockRef.current = { active: false, baseTime: 0, baseX: 0 };
+        // FIX (audio starts several seconds late on some loads; subtitles
+        // permanently never render on others): qualitySwitchStateRef was
+        // never reset here, only ever nulled inside handleReadyToSeek's own
+        // `pending` branch or switchQuality's catch block. A duplicate
+        // ready-signal (handledReadyForUrlRef early-return skips the
+        // pending branch) or a fresh video that never itself writes this
+        // ref left the PREVIOUS video's stale {seekTarget, sessionOffset}
+        // object sitting here. handleReadyToSeek would then wrongly take
+        // the restore branch for a brand-new video using a seek target
+        // that belongs to a different file's timeline — deferredSeek's
+        // poll loop has to spin far longer than a real resume before
+        // landing (that's the audio delay), and SubtitleRenderer's gate
+        // (`!!qualitySwitchStateRef.current`) stays permanently truthy for
+        // the rest of that video's lifetime (that's subtitles never
+        // rendering). Resetting it here, alongside the refs it already
+        // shares a reset point with, closes both at the source.
+        qualitySwitchStateRef.current = null;
+        handledReadyForUrlRef.current = null;
         advancePhase(INIT_PHASE.LOADING_MEDIA);
 
         (async () => {
@@ -461,7 +610,45 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                 setPreparingStream(true);
                 setPrepareLabel("Preparing stream…");
 
-                const playback = await resolvePlayback(mediaId);
+                // FIX (resume lands at the wrong position, e.g. history says
+                // 7:09 but playback actually starts at 2:52): resolvePlayback
+                // used to be called with no seekSec at all for the initial
+                // load, so ffmpeg started encoding from 0:00 every time —
+                // even when a resume position existed. deferredSeek then had
+                // to wait for the buffer to serially catch up to the real
+                // target, which can take far longer than its 15s/75-attempt
+                // ceiling; once that ceiling hit, it force-seeked to
+                // whatever had actually buffered by then (e.g. 2:52),
+                // silently landing short of the real saved position (7:09).
+                // Determining the resume position FIRST and passing it as
+                // seekSec — exactly like the quality-switch path already
+                // does — makes ffmpeg start encoding near the real target
+                // directly, so the buffer is actually there by the time we
+                // seek to it. knownResumePosition (passed via router state
+                // from MediaDetails) avoids an extra round trip when
+                // available; otherwise ask the backend directly.
+                let resumePos = knownResumePosition;
+                let subtitleResumePos = null;
+                if (resumePos == null) {
+                    try {
+                        const hist = await getResumePoint(mediaId);
+                        resumePos = typeof hist?.position === "number" ? hist.position : null;
+                        subtitleResumePos = typeof hist?.subtitlePosition === "number" ? hist.subtitlePosition : null;
+                    } catch {
+                        resumePos = null;
+                    }
+                }
+                if (cancelled) return;
+                const shouldResume = typeof resumePos === "number" && resumePos > 10;
+                // Store this NOW, ahead of the actual video/HLS seek — this
+                // is what SubtitleRenderer seeds its clock from on mount.
+                // Prefers the dedicated subtitlePosition field (new — see
+                // userStore.js) and falls back to the video resume position
+                // itself for older history entries saved before that field
+                // existed (they're numerically the same thing anyway).
+                resumePositionRef.current = shouldResume ? (subtitleResumePos ?? resumePos) : null;
+
+                const playback = await resolvePlayback(mediaId, shouldResume ? { seekSec: resumePos } : undefined);
                 if (cancelled) return;
 
                 clientIdRef.current = playback.clientId;
@@ -469,6 +656,123 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                 // FIX (Report-25): capture real ffprobe duration
                 if (playback.duration && playback.duration > 0) {
                     mediaDurationRef.current = playback.duration;
+                }
+
+                // FIX (resume should auto-trigger, no dialog/button needed;
+                // also fixes x showing 0:00 while resume is still landing):
+                // reuses the exact same restore machinery already proven
+                // correct for quality switching — relative seek-target math
+                // (this session's own timeline is normalized to start at 0
+                // regardless of where seekSec told ffmpeg to actually start
+                // encoding, same reason quality-switch needs this), early
+                // suppression + manual clock engagement so x is right
+                // immediately instead of flashing 0:00 while the seek is
+                // still polling, and a fully silent/automatic restore with
+                // no dialog or user action required. handleReadyToSeek below
+                // checks qualitySwitchStateRef first regardless of which
+                // code path populated it — isInitialResume just tells it to
+                // also drive the INIT_PHASE sequence, which this path would
+                // otherwise skip entirely (that early-return branch normally
+                // assumes the phase machine is already well past this point,
+                // which is only true for an in-session quality switch, not
+                // a fresh load).
+                if (shouldResume && playback.mode === "hls") {
+                    // FIX (reverted — was wrong): earlier attempts here added
+                    // startTimeOffset, then preferred a ffprobe-measured raw
+                    // PTS (measuredStartOffset), both trying to correct for
+                    // this file's container having a non-zero internal
+                    // start_time (confirmed: measured ~10s even at position
+                    // 0). That's real, but it's the WRONG fix for sync — the
+                    // video/audio transcode pipeline uses -copyts (preserves
+                    // that raw baseline), while embedded subtitle extraction
+                    // (streamController.js's streamEmbeddedSubtitle) does
+                    // NOT use -copyts, so ffmpeg's default behavior there
+                    // normalizes subtitle cue times back to 0 regardless.
+                    // Two different ffmpeg invocations, two different
+                    // timestamp conventions, same file. Pulling the raw-PTS
+                    // baseline into sessionOffset realigned the SEEK
+                    // correctly but pushed subtitle-cue lookup into the
+                    // wrong domain by exactly that baseline — a consistent,
+                    // fixed-per-file "showing early" error, not the random
+                    // keyframe-snap variance this was originally chasing.
+                    // Subtitles are already in the "starts at 0" domain, and
+                    // hls.js normalizes video.currentTime the same way for
+                    // any new session — so the two already agree once
+                    // startTimeOffset/measuredStartOffset are left out.
+                    const sessionOffset = (playback.startSegment || 0) * (playback.segmentDuration || 4);
+                    assumedSessionOffsetRef.current = sessionOffset;
+                    // ROOT-CAUSE FIX (resume subtitles ~76s off): the offset used
+                    // to be assigned ONLY inside handleReadyToSeek's pending
+                    // branch. Your resume log shows sessionOffset=0.000 for the
+                    // whole session, i.e. that assignment never took effect, and
+                    // the subtitle clock then compared a session-relative video
+                    // time (2.6s) against absolute cue times. The session's start
+                    // is already known right here (startSegment*segmentDuration),
+                    // so set it immediately — nothing downstream can leave it 0.
+                    sessionTimeOffsetRef.current = sessionOffset;
+                    startTimeOffsetRef.current = playback.startTimeOffset || 0;
+                    {
+                        const sid = playback.sessionId;
+                        const cid = playback.clientId;
+                        pollSessionProbe(sid, cid).then((probe) => {
+                            if (cancelled || sessionIdRef.current !== sid) return;
+                            // Domain-free: the audio rendition starts exactly at the
+                            // requested seek (AV-DEBUG), so video's keyframe snap is
+                            // -gap (gap = audioFirstPTS - videoFirstPTS).
+                            const viaGap = probe.avGap != null ? Math.max(0, sessionOffset - probe.avGap) : null;
+                            const viaRaw = probe.measuredRaw != null ? Math.max(0, probe.measuredRaw - (startTimeOffsetRef.current || 0)) : null;
+                            const cand = viaGap != null ? viaGap : viaRaw;
+                            // Snap in the logs is 0.8-9.6s; farther = bad measurement.
+                            const sane = cand != null && Math.abs(cand - sessionOffset) <= 12;
+                            console.log("[RESUME-SYNC] probe", {
+                                assumed: sessionOffset,
+                                avGap: probe.avGap,
+                                measuredRaw: probe.measuredRaw,
+                                startTimeOffset: startTimeOffsetRef.current,
+                                viaGap,
+                                viaRaw,
+                                applied: sane ? cand : null,
+                            });
+                            if (!sane) return;
+                            offsetRefinedRef.current = true;
+                            sessionTimeOffsetRef.current = cand;
+                            const v = videoRef.current;
+                            if (v && manualClockRef.current.active && !v.paused && v.readyState >= 3) {
+                                manualClockRef.current.baseX = v.currentTime + cand;
+                                manualClockRef.current.baseTime = Date.now();
+                            }
+                        });
+                    }
+                    qualitySwitchStateRef.current = {
+                        time: resumePos,
+                        seekTarget: Math.max(0, resumePos - sessionOffset),
+                        sessionOffset,
+                        playing: true,
+                        playbackRate: 1,
+                        volume: undefined,
+                        muted: undefined,
+                        subtitle: null,
+                        isInitialResume: true,
+                    };
+                    suppressTimeUpdateRef.current = true;
+                    manualClockRef.current = { active: true, baseTime: Date.now(), baseX: resumePos };
+                } else if (shouldResume) {
+                    // Direct-play (non-HLS) resume — no session offset concept
+                    // at all, the file's own real timeline IS the seek target.
+                    assumedSessionOffsetRef.current = null;
+                    qualitySwitchStateRef.current = {
+                        time: resumePos,
+                        seekTarget: resumePos,
+                        sessionOffset: 0,
+                        playing: true,
+                        playbackRate: 1,
+                        volume: undefined,
+                        muted: undefined,
+                        subtitle: null,
+                        isInitialResume: true,
+                    };
+                    suppressTimeUpdateRef.current = true;
+                    manualClockRef.current = { active: true, baseTime: Date.now(), baseX: resumePos };
                 }
 
                 if (playback.mode === "hls") {
@@ -494,6 +798,20 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                             const defaultSub = english || null; // null = off by default if no English
                             // Will be overridden below if history has a saved subtitle pref
                             setDefaultSubRef.current = { subs, defaultSub };
+
+                            // RACE FIX: if onHistoryLoaded already ran while
+                            // this fetch was still in flight, apply its
+                            // saved pref now instead of leaving it dropped.
+                            if (pendingHistorySubRef.current !== undefined) {
+                                const pendingEntry = pendingHistorySubRef.current;
+                                pendingHistorySubRef.current = undefined;
+                                if (!pendingEntry) {
+                                    actions.setActiveSubtitle(defaultSub || null);
+                                } else {
+                                    const match = subs.find((s) => s.url === pendingEntry.url || (s.lang === pendingEntry.lang && s.source === pendingEntry.source));
+                                    actions.setActiveSubtitle(match || null);
+                                }
+                            }
                         }
                     }
                 } catch {
@@ -719,6 +1037,33 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
         return () => clearTimeout(t);
     }, [state.sleepTimerEndsAt, state.sleepTimerPlayToEnd, actions]);
 
+    // FIX (history corrupted after a quality switch — resume starts at
+    // 0:00 instead of the real saved position; different-looking progress
+    // per resolution): video.currentTime is only absolute BEFORE the first
+    // quality switch. After a fallback-path switch, deferredSeek reseeks
+    // the raw <video> element to a SESSION-RELATIVE target
+    // (absoluteTime - sessionOffset), so its own clock restarts counting
+    // from near-0 within that session's timeline. The manual clock
+    // (manualClockRef) is what actually tracks the true absolute position
+    // from then on — this is the single source of truth for "where
+    // playback really is," used both for the on-screen x AND (via the prop
+    // below) for what gets persisted to history. Moved above the
+    // useProgress() call (was declared further down, only for
+    // switchQuality) specifically so useProgress can use it too — that
+    // hook was still computing "absolute" time via
+    // video.currentTime + sessionTimeOffsetRef.current, but
+    // sessionTimeOffsetRef is a dead ref (declared, reset to 0, never
+    // actually assigned anywhere) left over from before the manual-clock
+    // design replaced it — so every history save after a quality switch
+    // was silently persisting the wrong, small, session-relative number.
+    const getAbsoluteCurrentTime = useCallback(() => {
+        const clock = manualClockRef.current;
+        if (clock.active) {
+            return clock.baseX + (Date.now() - clock.baseTime) / 1000;
+        }
+        return videoRef.current?.currentTime || 0;
+    }, []);
+
     // ── Progress tracking ─────────────────────────────────────────────────────
     const progressProps = useProgress({
         mediaId,
@@ -743,16 +1088,29 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
         actions,
         suppressTimeUpdateRef,
         sessionTimeOffsetRef,
+        // FIX (history corrupted after quality switch — see comment above):
+        // single source of truth for "what time is it really", replaces
+        // this hook's old video.currentTime + deadRef math everywhere it
+        // saves or reports progress.
+        getAbsoluteCurrentTime,
         onHistoryLoaded: (entry) => {
             // Restore subtitle preference from history
-            if (!entry?.subtitlePref) {
-                // No saved pref — apply default (English or off)
-                const { subs, defaultSub } = setDefaultSubRef.current || {};
-                if (subs?.length > 0) actions.setActiveSubtitle(defaultSub || null);
+            const { subs, defaultSub } = setDefaultSubRef.current || {};
+            if (!subs?.length) {
+                // RACE FIX: subtitle list hasn't arrived yet — stash
+                // instead of dropping. `undefined` means "not loaded yet"
+                // (the ref's own initial value), so use `null` here to
+                // mean "loaded, no saved pref" and the entry object to
+                // mean "loaded, apply this pref" — both distinct from the
+                // un-set state so the pending-apply check can tell them apart.
+                pendingHistorySubRef.current = entry?.subtitlePref || null;
                 return;
             }
-            const { subs } = setDefaultSubRef.current || {};
-            if (!subs?.length) return;
+            if (!entry?.subtitlePref) {
+                // No saved pref — apply default (English or off)
+                actions.setActiveSubtitle(defaultSub || null);
+                return;
+            }
             // Match saved subtitle by lang + source
             const saved = entry.subtitlePref;
             const match = subs.find((s) => s.url === saved.url || (s.lang === saved.lang && s.source === saved.source));
@@ -831,13 +1189,14 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             // rendition the NEXT fragment loads from, seamlessly, at
             // whatever currentTime playback is already at. No new backend
             // session, no buffer flush, no deferredSeek, no restore race —
+
             // the entire class of "quality switch resets to 0:00" bugs
             // simply doesn't apply to this path because nothing ever tears
             // down or reloads.
             const targetHeight = qualityLabelToHeight(targetQuality);
             const matchingLevel = (state.qualityLevels || []).find((l) => l.height === targetHeight);
             if (matchingLevel && hlsRef.current) {
-                console.log("[QUALITY] Seamless native switch — level", matchingLevel.index, `(${matchingLevel.label})`, "at currentTime", video?.currentTime);
+                console.log("[QUALITY] Seamless native switch — level", matchingLevel.index, `(${matchingLevel.label})`, "at currentTime", getAbsoluteCurrentTime());
                 actions.setActiveQuality(matchingLevel.index);
                 actions.setRequestedQuality(targetQuality);
                 return;
@@ -850,15 +1209,36 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             // media). Only option here is a genuinely new backend session
             // at the requested quality, so fall back to the proven
             // save-position → new-session → deferredSeek-restore flow.
-            console.log("[QUALITY] No matching rendition in current manifest — falling back to session restart. Save Position:", video?.currentTime);
+            const absoluteTime = getAbsoluteCurrentTime();
+            console.log("[QUALITY] No matching rendition in current manifest — falling back to session restart. Save Position:", absoluteTime);
             qualitySwitchStateRef.current = {
-                time: video?.currentTime || 0,
+                time: absoluteTime || 0,
                 playing: !!video && !video.paused,
                 playbackRate: video?.playbackRate || 1,
                 volume: video?.volume,
                 muted: video?.muted,
                 subtitle: state.activeSubtitle,
             };
+            // FIX (x still starts from 0:00 on switch, even after the
+            // deferredSeek opts fix): suppressTimeUpdateRef used to only get
+            // set true inside handleReadyToSeek, which doesn't run until
+            // MANIFEST_PARSED fires on the NEW hls.js instance — a network
+            // round-trip (resolvePlayback) plus manifest fetch/parse later,
+            // often 1-3s+. The <video> element itself is never unmounted
+            // across a quality switch (same DOM node, same onTimeUpdate
+            // listener) — only the hls.js instance attached to it gets
+            // destroyed and rebuilt. That destroy/rebuild churn on the live
+            // element can fire a native timeupdate at currentTime≈0 well
+            // before MANIFEST_PARSED, and until now nothing was suppressing
+            // it yet — so it stomped state.currentTime to 0 during the
+            // entire loading gap, which is exactly the "starts from 0:00"
+            // symptom. Suppressing here, the instant the restart path is
+            // chosen (before any teardown happens), closes that window
+            // completely. Engaging the manual clock here too (instead of
+            // only in handleReadyToSeek) keeps x ticking forward smoothly
+            // through the wait instead of freezing — true YouTube-style feel.
+            suppressTimeUpdateRef.current = true;
+            manualClockRef.current = { active: true, baseTime: Date.now(), baseX: qualitySwitchStateRef.current.time };
             try {
                 console.log("[QUALITY] Creating New Stream");
                 // Pass seekSec so the new session's ffmpeg starts encoding
@@ -889,12 +1269,19 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                     // timeupdate/manual-seek correction elsewhere) and the
                     // actual RELATIVE seek target the video element should
                     // be told to go to.
+                    // FIX (reverted — see the matching comment on the
+                    // initial-resume path above): startTimeOffset/
+                    // measuredStartOffset are in the video pipeline's raw-PTS
+                    // domain (-copyts); subtitle cues aren't. Plain
+                    // content-position offset is what actually matches.
                     const sessionOffset = (playback.startSegment || 0) * (playback.segmentDuration || 4);
+                    assumedSessionOffsetRef.current = sessionOffset;
                     qualitySwitchStateRef.current.sessionOffset = sessionOffset;
                     qualitySwitchStateRef.current.seekTarget = Math.max(0, qualitySwitchStateRef.current.time - sessionOffset);
                 } else {
                     setStreamUrl(playback.streamUrl);
                     qualitySwitchStateRef.current.sessionOffset = 0;
+                    assumedSessionOffsetRef.current = null;
                     qualitySwitchStateRef.current.seekTarget = qualitySwitchStateRef.current.time;
                 }
                 actions.setRequestedQuality(targetQuality);
@@ -906,14 +1293,35 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             } catch (err) {
                 console.error("[PlayerPage] Quality switch failed:", err.message);
                 qualitySwitchStateRef.current = null;
+                // FIX: switch never happened (streamUrl untouched, old
+                // session/video keeps running) — must undo the early
+                // suppression/manual-clock engagement above, or native
+                // timeupdate would stay permanently blocked on a session
+                // that's never going to call handleReadyToSeek to release it.
+                suppressTimeUpdateRef.current = false;
+                manualClockRef.current = { active: false, baseTime: 0, baseX: 0 };
             }
         },
-        [mediaId, state.activeSubtitle, state.qualityLevels, qualityLabelToHeight, actions],
+        [mediaId, state.activeSubtitle, state.qualityLevels, qualityLabelToHeight, actions, getAbsoluteCurrentTime],
     );
 
     const handledReadyForUrlRef = useRef(null);
 
     const handleReadyToSeek = useCallback(() => {
+        // DEBUG: prove this actually fires at all, and with what state,
+        // before touching sync logic any further.
+        console.log(
+            "[Resume-DIAG] handleReadyToSeek CALLED. streamUrl=",
+            streamUrl,
+            "handledReadyForUrlRef=",
+            handledReadyForUrlRef.current,
+            "qualitySwitchStateRef=",
+            qualitySwitchStateRef.current,
+            "showResumeDialog=",
+            progressProps.showResumeDialog,
+            "resumePoint=",
+            progressProps.resumePoint,
+        );
         // Defensive idempotency guard: if this streamUrl already had its
         // ready-to-seek signal handled once, ignore any further fire for the
         // SAME url (e.g. a phantom/internal HLS.js retry re-parsing the
@@ -921,7 +1329,10 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
         // qualitySwitchStateRef already null (consumed by the first, correct
         // fire below) and incorrectly fall through to the fresh-video/resume
         // path, which can reset the just-restored displayed position.
-        if (handledReadyForUrlRef.current === streamUrl) return;
+        if (handledReadyForUrlRef.current === streamUrl) {
+            console.log("[Resume-DIAG] EARLY RETURN — already handled this streamUrl");
+            return;
+        }
         handledReadyForUrlRef.current = streamUrl;
 
         // Quality-switch restore path: if a quality switch is pending, this
@@ -954,11 +1365,47 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             // true for the rest of this session (see below) so native
             // timeupdate never fights with it.
             manualClockRef.current = { active: true, baseTime: Date.now(), baseX: pending.time };
+            // FIX (seek bar buffered/white-line indicator wrong after a
+            // quality switch or resume): video.buffered ranges are reported
+            // in THIS session's own relative timeline — exactly the same
+            // session-relative problem currentTime had, just for the
+            // buffered extent instead of the playhead. sessionTimeOffsetRef
+            // is threaded all the way through to SeekBar (both for
+            // converting buffered ranges to absolute for display, and for
+            // converting an absolute click-target back to relative in
+            // applySeek) but was never actually assigned a value anywhere —
+            // always silently 0, so both of those were quietly broken the
+            // entire time a session offset was nonzero. pending.sessionOffset
+            // is already computed correctly by whichever path populated
+            // this restore (quality switch or initial resume) — this is the
+            // single place both paths funnel through, so setting it here
+            // covers both for the lifetime of the new session.
+            if (!offsetRefinedRef.current) sessionTimeOffsetRef.current = pending.sessionOffset || 0;
+            console.log("[RESUME-DEBUG]", {
+                isInitialResume: pending.isInitialResume,
+                pendingTime: pending.time,
+                sessionOffset: pending.sessionOffset,
+                seekTarget: pending.seekTarget,
+                sessionTimeOffsetRefNow: sessionTimeOffsetRef.current,
+            });
             // Block handleTimeUpdate from ever driving state.currentTime for
             // the rest of this quality-switched session — the manual clock
             // above is now the sole source of truth for x. (handleTimeUpdate
             // still updates state.buffered regardless, unaffected by this.)
             suppressTimeUpdateRef.current = true;
+            // FIX: this branch normally assumes the INIT_PHASE machine is
+            // already well past this point (true for an in-session quality
+            // switch — playback has been running for a while). For an
+            // initial-load resume reusing this same restore path, none of
+            // that has happened yet — without driving it here, initPhase
+            // would get stuck before SEEK_COMPLETE and the player would
+            // never actually reach PLAYING (see the initPhase !==
+            // SEEK_COMPLETE gate further down this file).
+            if (pending.isInitialResume) {
+                advancePhase(INIT_PHASE.METADATA_READY);
+                advancePhase(INIT_PHASE.BUFFERING);
+                advancePhase(INIT_PHASE.SEEKING);
+            }
             // The actual video element still needs a real seek so the
             // CONTENT is correct — pending.seekTarget (computed in
             // switchQuality) is our best estimate of where that is in this
@@ -967,16 +1414,84 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             // affects which frames are actually playing.
             if (video) {
                 console.log(`[QUALITY] Restoring: display=${pending.time} (manual clock engaged, seek target=${pending.seekTarget})`);
-                progressProps.deferredSeek(pending.seekTarget, () => {
-                    video.playbackRate = pending.playbackRate;
-                    if (pending.volume != null) video.volume = pending.volume;
-                    if (pending.muted != null) video.muted = pending.muted;
-                    console.log("[QUALITY] Underlying video seek settled at:", video.currentTime, "— display is independently tracked by the manual clock now.");
-                    if (pending.playing) video.play().catch(() => {});
-                    // NOTE: suppressTimeUpdateRef intentionally stays true —
-                    // it is NOT cleared here anymore. The manual clock is
-                    // the permanent x source for this session.
-                });
+                // FIX (x resets toward 0:00 on quality/resolution switch):
+                // deferredSeek defaults to displaying/optimistically-setting
+                // whatever targetSec it's given — here that's
+                // pending.seekTarget, which is SESSION-RELATIVE (seek target
+                // within the new session's own timeline), not the real
+                // absolute position. Without opts, deferredSeek would
+                // immediately overwrite the correct absolute x (already set
+                // above via actions.setCurrentTime(pending.time)) with that
+                // small relative number, and would also flip
+                // suppressTimeUpdateRef back to false once the seek landed —
+                // killing the manual clock and handing display back to raw
+                // (session-relative) native timeupdate. displayTime keeps
+                // the optimistic UI value correct; keepSuppressed keeps the
+                // manual clock as the permanent x source, matching the
+                // intent already stated in the comment below.
+                progressProps.deferredSeek(
+                    pending.seekTarget,
+                    () => {
+                        video.playbackRate = pending.playbackRate;
+                        if (pending.volume != null) video.volume = pending.volume;
+                        if (pending.muted != null) video.muted = pending.muted;
+                        console.log("[QUALITY] Underlying video seek settled at:", video.currentTime, "— display is independently tracked by the manual clock now.");
+                        if (pending.playing) video.play().catch(() => {});
+                        // FIX (buffered/white-line indicator missing right
+                        // after a resume, works fine on normal play):
+                        // state.buffered only updates from the native
+                        // 'progress' event, which fires on network activity —
+                        // not on seek completion. If this session already had
+                        // enough prefetched by the time the resume seek
+                        // lands, 'progress' might not fire again for a
+                        // while, leaving the buffered bar showing stale
+                        // (pre-restore) or empty data even though
+                        // video.buffered already has real ranges right now.
+                        actions.setBuffered(video.buffered);
+                        // FIX (subtitle shows ahead of audio/video after
+                        // resume): baseX above was set to the ASSUMED
+                        // resumePos before we knew where ffmpeg's fast
+                        // input-seek actually landed. Fast seeking lands on
+                        // the nearest keyframe, which can be slightly
+                        // before/after the exact requested target — everything
+                        // reading the manual clock (x, seek bar, subtitles)
+                        // was staying offset from the REAL audio/video by
+                        // that gap the whole session. Recalibrating to the
+                        // real landed video.currentTime the instant we
+                        // actually know it (right now, seek confirmed landed)
+                        // fixes the drift at its source — no ffmpeg change,
+                        // no risk to the transcode session itself.
+                        if (manualClockRef.current.active) {
+                            manualClockRef.current.baseX = video.currentTime + (sessionTimeOffsetRef.current || 0);
+                            manualClockRef.current.baseTime = Date.now();
+                        }
+                        // ROOT-CAUSE FIX (subtitle ahead/behind dialogue by
+                        // ~keyframe-snap amount, every session): the block
+                        // above only recalibrates manualClockRef, which
+                        // drives the UI seek bar/time text. SubtitleRenderer
+                        // does NOT read manualClockRef — it computes its cue
+                        // lookup clock from video.currentTime +
+                        // sessionTimeOffsetRef.current directly (see its own
+                        // "ONE AUTHORITATIVE SUBTITLE CLOCK" comment). That
+                        // offset was set once, above (pending.sessionOffset =
+                        // PRE-seek estimate: startSegment*segmentDuration),
+                        // and never corrected for the same keyframe-snap
+                        // drift manualClockRef just got fixed for — so
+                        // subtitles kept drifting by that gap even after the
+                        // on-screen clock was already accurate. Recompute it
+                        // here from the two real, now-known quantities: the
+                        // absolute position we intended to land at
+                        // (pending.time) and the actual video.currentTime
+                        // this session landed on. Their difference IS the
+                        // true session offset.
+                        if (!offsetRefinedRef.current) sessionTimeOffsetRef.current = pending.time - video.currentTime;
+                        // NOTE: suppressTimeUpdateRef intentionally stays true —
+                        // it is NOT cleared here anymore. The manual clock is
+                        // the permanent x source for this session.
+                        if (pending.isInitialResume) advancePhase(INIT_PHASE.SEEK_COMPLETE);
+                    },
+                    { displayTime: pending.time, keepSuppressed: true },
+                );
             }
             return;
         }
@@ -989,7 +1504,63 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
             // purely as an optional escape hatch the user can still tap to
             // Start Over instead. The onLanded callback fires once
             // deferredSeek's HLS-readiness poll actually succeeds.
-            progressProps.autoResume?.(() => advancePhase(INIT_PHASE.SEEK_COMPLETE));
+            //
+            // FIX (two real bugs, both "only wired for quality-switch, not
+            // for a plain resume"):
+            //
+            // 1. Autoplay: deferredSeek DELIBERATELY re-pauses the video on
+            // every poll tick while it waits for the resume seek to land
+            // (correct — stops audio leaking out before the seek). This
+            // callback used to only do `advancePhase(...)` — never called
+            // .play(). The separate "autoplay on isReady" effect elsewhere
+            // in this file fires once, early (before this seek has landed),
+            // and loses the race against deferredSeek's repeated pausing —
+            // it's a fire-once guard, so it never gets another chance. The
+            // quality-switch branch above already calls
+            // `video.play()` once ITS seek lands (`if (pending.playing)
+            // video.play()`) — this mirrors that, for the plain-resume case.
+            //
+            // 2. Subtitles showing ahead of dialogue: `sessionTimeOffsetRef`
+            // is what SubtitleRenderer uses to convert video.currentTime
+            // (session-relative, since VideoCore forces `hls.startPosition
+            // = 0` to normalise the timeline) back to the real absolute
+            // position. The quality-switch branch above computes it
+            // (`pending.time - video.currentTime`) the instant its seek
+            // lands; this path never did, so it silently stayed at its
+            // unset default — subtitle cue-matching used the small
+            // session-relative number as if it were already absolute,
+            // showing every cue far too early. Computed here the same way,
+            // from the same two known real quantities (intended resume
+            // position vs. where the seek actually landed).
+            progressProps.autoResume?.((landedTarget) => {
+                advancePhase(INIT_PHASE.SEEK_COMPLETE);
+                const video = videoRef.current;
+                // FIX: landedTarget comes straight from deferredSeek's own
+                // closure (see useProgress.jsx's finishLanded) — the exact
+                // value THIS seek was asked to reach, with no staleness
+                // risk. Previously this re-read progressProps.resumePoint
+                // fresh here, which could already be null/changed by the
+                // time this fires (buffer-poll can take seconds), silently
+                // skipping the sessionTimeOffsetRef assignment below and
+                // leaving it stuck at 0. Fall back to the prop only if for
+                // some reason no target was passed.
+                const resumeTarget = typeof landedTarget === "number" ? landedTarget : progressProps.resumePoint?.position;
+                if (video && typeof resumeTarget === "number") {
+                    sessionTimeOffsetRef.current = resumeTarget - video.currentTime;
+                    console.log(
+                        "[Resume-DIAG] plain-resume landed — sessionTimeOffsetRef set to",
+                        sessionTimeOffsetRef.current,
+                        "video.currentTime=",
+                        video.currentTime,
+                        "resumeTarget=",
+                        resumeTarget,
+                    );
+                }
+                if (video) {
+                    actions.setPlaying(true);
+                    video.play().catch(() => {});
+                }
+            });
         } else {
             // Fresh video — no resume point, nothing to seek. There's
             // still a SEEKING/SEEK_COMPLETE stage per the doc's diagram,
@@ -1111,6 +1682,18 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                     onReadyToSeek={handleReadyToSeek}
                     suppressTimeUpdateRef={suppressTimeUpdateRef}
                     sessionTimeOffsetRef={sessionTimeOffsetRef}
+                    // FIX (the actual reason audio/video still played
+                    // immediately no matter what deferredSeek did): VideoCore
+                    // has its OWN "Sync play/pause" effect that calls
+                    // attemptAutoplay() whenever state.playing is true —
+                    // completely independent of, and unaware of, the resume
+                    // wait happening in useProgress.jsx's deferredSeek. Since
+                    // state.playing defaults true, that effect fires on
+                    // mount and just plays as soon as any data exists,
+                    // racing right past every pause()/readyState check added
+                    // there. Passing this through lets that effect actually
+                    // respect the resume-sync window instead of ignoring it.
+                    isResumeSyncing={progressProps.isSeekingToResume}
                     onHlsCreated={(hls) => {
                         hlsRef.current = hls;
                     }}
@@ -1129,13 +1712,40 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                 showControls={showControls}
                 onTap={toggleControls}
                 onZoomChange={handleZoomChange}
+                manualClockRef={manualClockRef}
+                sessionTimeOffsetRef={sessionTimeOffsetRef}
             />
 
             {/* Visual overlays */}
             <PlayerOverlays overlayState={overlayState} overlayVis={overlayVis} />
 
             {/* Subtitles */}
-            <SubtitleRenderer videoRef={videoRef} />
+            <SubtitleRenderer
+                videoRef={videoRef}
+                isResumeSyncing={progressProps.isSeekingToResume}
+                manualClockRef={manualClockRef}
+                sessionTimeOffsetRef={sessionTimeOffsetRef}
+                resumePositionRef={resumePositionRef}
+                avGapSecRef={avGapSecRef}
+                // RACE FIX: qualitySwitchStateRef.current is set (truthy)
+                // the INSTANT a session restart is initiated — either the
+                // quality-switch fallback path or the initial-resume path —
+                // well before progressProps.isSeekingToResume becomes true
+                // (that only flips inside deferredSeek, called later once
+                // handleReadyToSeek's `pending` branch runs, itself gated
+                // behind a network round-trip + HLS manifest parse). In
+                // that gap the <video> element's underlying session can
+                // already be torn down/reattached (video.currentTime resets
+                // toward 0) while sessionTimeOffsetRef.current is still the
+                // OLD session's stale value and v.seeking can read false —
+                // nothing was gating subtitles during that exact window,
+                // so whichever native event happened to land in it decided
+                // whether the bug showed up. Passing this ref lets
+                // SubtitleRenderer treat "a restart is pending" as gated
+                // too, closing the window completely with a value that
+                // already exists — no new ref, no timer.
+                qualitySwitchStateRef={qualitySwitchStateRef}
+            />
 
             {/* Screen lock */}
             <PlayerLock />
@@ -1163,16 +1773,29 @@ function PlayerInner({ mediaId, knownResumePosition, containerRef }) {
                 sessionTimeOffsetRef={sessionTimeOffsetRef}
             />
 
-            {/* Waiting for stream to reach resume point — distinct from the
-                generic buffering spinner below so the user understands why
-                playback hasn't started yet (transcoding hasn't reached their
-                saved position). Auto-clears + autoplay fires via the
-                onLanded callback once deferredSeek's poll succeeds. */}
-            {progressProps.isSeekingToResume && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
-                    <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-2xl bg-black/70 backdrop-blur-md border border-white/10">
-                        <div className="w-10 h-10 border-3 border-white/20 border-t-white/90 rounded-full animate-spin" />
-                        <p className="text-white/80 text-sm font-medium">Preparing your stream…</p>
+            {/* Waiting for stream to reach resume point AND for audio/video/
+                subtitle to actually settle (see useProgress.jsx deferredSeek —
+                real video.buffered + video.readyState checks, no fixed
+                timer) — distinct from the generic buffering spinner below so
+                the user understands why playback hasn't started yet. Auto-
+                clears + autoplay fires via the onLanded callback once
+                deferredSeek's poll succeeds AND the minimum wait elapses.
+                FIX: was z-20 with a small floating pill — PlayerControls'
+                own wrapper is z-30 (its top bar z-60), so this sat BEHIND
+                it and was invisible the whole time. Now a real full-cover
+                loading screen at z-65 (above everything except the
+                always-on-top speed slider), so no stale frame/controls can
+                peek through during the sync wait. Gated on
+                !showResumeDialog so it never covers/fights the interactive
+                resume-choice dialog (still needs to stay visible/clickable
+                per its own separate flow) — it only takes over once that's
+                resolved (or was skipped entirely on the fast known-resume
+                path). */}
+            {progressProps.isSeekingToResume && !progressProps.showResumeDialog && (
+                <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black">
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="w-12 h-12 border-4 border-white/20 border-t-white/90 rounded-full animate-spin" />
+                        <p className="text-white/85 text-base font-medium">Preparing your stream…</p>
                     </div>
                 </div>
             )}
@@ -1280,6 +1903,30 @@ function PlayerShell({ mediaId, knownResumePosition }) {
 }
 
 // ─── Page export ──────────────────────────────────────────────────────────────
+
+// Background probe of the backend's measured start for an HLS session. Uses
+// the existing ping endpoint with positionSec=0 (ignored server-side, so it
+// cannot disturb segment cleanup). Never blocks playback; resolves with
+// whatever it has after timeoutMs.
+async function pollSessionProbe(sessionId, clientId, timeoutMs = 6000) {
+    const out = { measuredRaw: null, avGap: null };
+    if (!sessionId) return out;
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+        try {
+            const r = await heartbeatSession(sessionId, 0, clientId);
+            if (typeof r?.measuredStartOffset === "number" && Number.isFinite(r.measuredStartOffset)) out.measuredRaw = r.measuredStartOffset;
+            if (typeof r?.avGapSec === "number" && Number.isFinite(r.avGapSec)) {
+                out.avGap = r.avGapSec;
+                return out;
+            }
+        } catch {
+            // non-fatal, retry
+        }
+        await new Promise((res) => setTimeout(res, 300));
+    }
+    return out;
+}
 
 export default function PlayerPage() {
     const { id } = useParams();

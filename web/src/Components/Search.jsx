@@ -61,11 +61,81 @@ function scoreTitle(text, query) {
     return 0;
 }
 
-// Score an item against query — takes best of TMDB title + raw filename
+// ─── Search-upgrade: metadata-aware scoring ───────────────────────────────────
+// Centralized normalization — replaces scattered .toLowerCase().trim() calls.
+function normalize(str) {
+    return (str || "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+// Ranking order (per search audit): title tiers (scoreTitle, above) always
+// win first. Below that: collection/people/company/network/genre/keyword.
+// Below THAT: overview/language/country/certification. External IDs are a
+// precise lookup, not fuzzy text, so they get their own near-top tier and
+// skip the "reason" caption (an ID match is self-explanatory).
+const SECONDARY_CAP = 45;
+const TERTIARY_CAP = 22;
+const EXTERNAL_ID_SCORE = 92;
+
+function matchExternalId(metadata, qn) {
+    if (!metadata || !qn) return null;
+    const ext = metadata.externalIds;
+    const candidates = [ext?.imdb, ext?.tmdb, ext?.wikidata, metadata.imdbId].filter(Boolean).map((v) => normalize(String(v)));
+    return candidates.includes(qn) ? { score: EXTERNAL_ID_SCORE, reason: null } : null;
+}
+
+// Returns the first matching field as { score, reason } for the "Matched: X"
+// caption, or null. Keywords are handled defensively (object OR bare string)
+// per the audit — never assume the shape. originCountries/certifications use
+// exact match (short codes like "US"/"PG-13" — .includes() would false-hit
+// on single letters).
+function matchSecondaryFields(metadata, qn) {
+    if (!metadata || !qn) return null;
+
+    const people = [...(metadata.cast || []).flatMap((c) => [c?.name, c?.character]), ...(metadata.crew || []).map((c) => c?.name)].filter(Boolean);
+    for (const v of people) if (normalize(v).includes(qn)) return { score: SECONDARY_CAP, reason: v };
+
+    if (metadata.collection?.name && normalize(metadata.collection.name).includes(qn)) {
+        return { score: SECONDARY_CAP, reason: metadata.collection.name };
+    }
+    for (const p of metadata.production_companies || []) if (p?.name && normalize(p.name).includes(qn)) return { score: SECONDARY_CAP, reason: p.name };
+    for (const n of metadata.networks || []) if (n?.name && normalize(n.name).includes(qn)) return { score: SECONDARY_CAP, reason: n.name };
+    for (const g of metadata.genres || []) if (normalize(g).includes(qn)) return { score: SECONDARY_CAP, reason: g };
+    for (const k of metadata.keywords || []) {
+        const name = typeof k === "string" ? k : k?.name;
+        if (name && normalize(name).includes(qn)) return { score: SECONDARY_CAP, reason: name };
+    }
+
+    if (qn.length >= 3 && normalize(metadata.overview).includes(qn)) return { score: TERTIARY_CAP, reason: null };
+    for (const l of metadata.spokenLanguages || []) {
+        for (const v of [l?.name, l?.englishName, l?.code]) if (v && normalize(v).includes(qn)) return { score: TERTIARY_CAP, reason: v };
+    }
+    for (const cc of metadata.originCountries || []) if (normalize(cc) === qn) return { score: TERTIARY_CAP, reason: cc };
+    for (const certs of Object.values(metadata.certifications || {})) {
+        for (const c of certs || []) if (c?.certification && normalize(c.certification) === qn) return { score: TERTIARY_CAP, reason: c.certification };
+    }
+
+    return null;
+}
+
+// Score an item against query — title/filename first (always wins if decent,
+// per ranking order), only falls through to secondary/tertiary metadata scan
+// when title itself doesn't already score well. This is also the perf guard:
+// a clean title hit skips scanning cast/crew/keywords entirely.
 function scoreItem(item, query) {
+    const qn = normalize(query);
     const tmdbTitle = item.metadata?.title || "";
     const rawName = item.name || item.title || item.parsed?.title || "";
-    return Math.max(scoreTitle(tmdbTitle, query), scoreTitle(rawName, query));
+    const titleScore = Math.max(scoreTitle(tmdbTitle, query), scoreTitle(rawName, query));
+
+    if (titleScore >= 65) return { score: titleScore, reason: null };
+
+    const idHit = matchExternalId(item.metadata, qn);
+    if (idHit && idHit.score > titleScore) return idHit;
+
+    const secondaryHit = matchSecondaryFields(item.metadata, qn);
+    if (secondaryHit && secondaryHit.score > titleScore) return secondaryHit;
+
+    return { score: titleScore, reason: null };
 }
 
 // ─── Rank + dedupe results from context state ─────────────────────────────────
@@ -84,30 +154,32 @@ function rankResults(movies, series, anime, query) {
         // If server grouped it as movie but parsed says series/anime — skip,
         // it will appear in the correct bucket
         if (type !== "movie") continue;
-        const sc = scoreItem(m, q);
+        const { score: sc, reason } = scoreItem(m, q);
         if (sc > 0) {
             const title = m.metadata?.title || m.parsed?.title || m.name || "";
-            candidates.push({ ...m, _type: "movie", _displayTitle: title, _score: sc });
+            candidates.push({ ...m, _type: "movie", _displayTitle: title, _score: sc, _matchReason: reason });
         }
     }
 
-    // Series bucket — grouped objects, one card per show (not per episode)
+    // Series bucket — grouped objects, one card per show (not per episode).
+    // Uses the SAME scoreItem() as movies now — was previously a separate
+    // title-only path that never saw cast/crew/keywords/etc.
     for (const s of series) {
         const type = resolveType(s, "series");
         const title = s.metadata?.title || s.title || "";
-        const sc = Math.max(scoreTitle(title, q), scoreTitle(s.title || "", q));
+        const { score: sc, reason } = scoreItem(s, q);
         if (sc > 0) {
-            candidates.push({ ...s, _type: type, _displayTitle: title, _score: sc });
+            candidates.push({ ...s, _type: type, _displayTitle: title, _score: sc, _matchReason: reason });
         }
     }
 
-    // Anime bucket — same grouped shape as series
+    // Anime bucket — same grouped shape as series, same unified scoring.
     for (const a of anime) {
         const type = resolveType(a, "anime");
         const title = a.metadata?.title || a.title || "";
-        const sc = Math.max(scoreTitle(title, q), scoreTitle(a.title || "", q));
+        const { score: sc, reason } = scoreItem(a, q);
         if (sc > 0) {
-            candidates.push({ ...a, _type: type, _displayTitle: title, _score: sc });
+            candidates.push({ ...a, _type: type, _displayTitle: title, _score: sc, _matchReason: reason });
         }
     }
 
@@ -145,14 +217,14 @@ function mergeApiResults(existing, rawApiResults, query) {
             r.name?.replace(/\.[^.]+$/, "") || // strip extension if present
             "";
 
-        const sc = scoreItem(r, query);
+        const { score: sc, reason } = scoreItem(r, query);
         if (sc === 0 || !title) continue;
 
         const key = `${type}::${title.toLowerCase().trim()}`;
         if (existingKeys.has(key)) continue;
 
         existingKeys.add(key);
-        toAdd.push({ ...r, _type: type, _displayTitle: title, _score: sc });
+        toAdd.push({ ...r, _type: type, _displayTitle: title, _score: sc, _matchReason: reason });
     }
 
     const merged = [...existing, ...toAdd];
@@ -229,6 +301,11 @@ function ResultRow({ item, query, onClick }) {
                         </span>
                     )}
                 </div>
+                {/* Search-upgrade: only shown when the hit came from a secondary
+                    field (cast/collection/company/network/genre/keyword/language/
+                    country/certification) rather than the title itself — tells
+                    the user WHY an otherwise-unrelated-looking title matched. */}
+                {item._matchReason && <p className="text-[10px] text-primary/65 mt-1 truncate">Matched: {highlight(item._matchReason)}</p>}
             </div>
         </button>
     );

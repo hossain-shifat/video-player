@@ -23,10 +23,13 @@ const metadataRouter = require("./routes/metadata");
 const historyRouter = require("./routes/history");
 const userRouter = require("./routes/user");
 const categoriesRouter = require("./routes/categories");
+const recommendationsRouter = require("./routes/recommendations");
 const adminDashboardRouter = require("./routes/adminDashboard");
 const liveRouter = require("./routes/live");
 const mediaInfoRouter = require("./routes/mediainfo");
 const permissionsRouter = require("./routes/permissions");
+const trailersRouter = require("./routes/trailers");
+const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailerScheduler");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
 const authRouter = require("./auth/routes/authRoutes");
@@ -95,9 +98,11 @@ app.use("/api/mediainfo", mediaInfoRouter);
 app.use("/api/permissions", permissionsRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/user", userRouter);
+app.use("/api/recommendations", recommendationsRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/live", liveRouter);
+app.use("/api/trailers", trailersRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -158,6 +163,7 @@ app.use((err, req, res, next) => {
 async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
+    stopTrailerScheduler();
     subtitleWorker.stop();
     await transcoderService.killAllSessions();
     console.log("[Server] All transcoding sessions terminated. Bye.");
@@ -192,10 +198,14 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    Live TV: /api/live/channels`);
     console.log(`    MediaInfo: /api/mediainfo`);
     console.log(`    Permissions: /api/permissions`);
+    console.log(`    Trailers: /api/trailers`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
     startDaemon();
+
+    // Keeps data/trailers.json fresh daily without any frontend request
+    startTrailerScheduler();
 
     // Pre-warm hardware detection + FFmpeg path resolution at startup.
     // Without this, the first transcode session would block for 3-36s while

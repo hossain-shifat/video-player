@@ -107,7 +107,7 @@ const Navbar = () => {
                 <div className="flex items-center gap-1 ml-auto">
                     {/* My Media / Favourites — xl+ desktop */}
                     <NavLink
-                        to={isAdmin ? "/my-media" : "/favourites"}
+                        to={isAdmin ? "/my-media" : "/watchlist"}
                         className={({ isActive }) =>
                             [
                                 "hidden xl:flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md transition-colors duration-200",

@@ -75,24 +75,75 @@ export async function resolvePlayback(mediaId, opts = {}) {
         sessionId: data.sessionId,
         startSegment: data.startSegment || 0,
         segmentDuration: data.segmentDuration || 4,
+        // FIX: ffmpeg's actual -ss seek target is
+        // sourceStartOffset + startSegment*segmentDuration
+        // (transcoderService.js), not just startSegment*segmentDuration.
+        // The backend now reports sourceStartOffset as startTimeOffset —
+        // without passing it through here, PlayerPage.jsx's own
+        // sessionOffset math (subtitle clock, resume position, seek bar)
+        // was silently wrong by that amount for any file with a non-zero
+        // container start_time (documented MKV-remux case in
+        // streamingEngine.js's extractMediaInfo).
+        startTimeOffset: data.startTimeOffset || 0,
+        // NEW — this is the actual fix for "resume plays from the wrong
+        // spot" / audio-video mismatch specifically ON RESUME. The server
+        // has been computing this the whole time (transcoderService.js's
+        // measureRealStartOffset, session.measuredStartOffset) and
+        // returning it right here in this same response — this function
+        // just never read it. `-c:v copy` can't seek to an arbitrary
+        // frame, only to the nearest keyframe at/after the requested
+        // point (0.8s–9.6s past target, confirmed in production logs) —
+        // that's unavoidable without re-encoding video. The fix isn't to
+        // eliminate that snap, it's to tell the PLAYER where video
+        // actually landed, so the seek bar / subtitle clock / resume
+        // position all agree with reality instead of the original request.
+        // Usually null on this FIRST response (the probe that measures it
+        // runs async, doesn't block this reply — see streamController.js's
+        // own "reverted: was blocking here" comment), so PlayerPage should
+        // treat this as "if present, use it," and get the real value a few
+        // seconds later from heartbeatSession's response instead (now
+        // wired below — this was being silently discarded before).
+        measuredStartOffset: data.measuredStartOffset ?? null,
         duration: data.duration || null,
         clientId,
     };
 }
 
 // ─── Session heartbeat ────────────────────────────────────────────────────────
-
-export function heartbeatSession(sessionId, positionSec = 0, clientId) {
-    if (!sessionId) return Promise.resolve();
+//
+// FIX (the actual resume/lip-sync-on-resume bug): this used to fire the
+// ping and throw away the response entirely (`.catch(() => {})`, no
+// `.then()`). The server's ping endpoint (streamController.js) has always
+// returned `measuredStartOffset` and `avGapSec` in that response — real,
+// per-session-measured values telling the client exactly where video
+// actually landed after a resume seek and how far audio currently trails
+// it. Discarding the response meant that data reached the browser and was
+// then thrown away every single ping, forever — nothing downstream could
+// ever correct for the keyframe-snap drift AUDIO_TRANSCODE resumes always
+// have. Now returns the parsed body so a caller (PlayerPage's ping
+// interval) can actually apply the correction once it arrives.
+export async function heartbeatSession(sessionId, positionSec = 0, clientId) {
+    if (!sessionId) return null;
     const cid = clientId || getOrCreateClientId();
-    return fetch(`${BASE}/stream/sessions/${sessionId}/ping`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Flux-Client": cid,
-        },
-        body: JSON.stringify({ positionSec }),
-    }).catch(() => {});
+    try {
+        const res = await fetch(`${BASE}/stream/sessions/${sessionId}/ping`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Flux-Client": cid,
+            },
+            body: JSON.stringify({ positionSec }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return {
+            downloadPositionSec: data.downloadPositionSec ?? null,
+            measuredStartOffset: data.measuredStartOffset ?? null,
+            avGapSec: data.avGapSec ?? null,
+        };
+    } catch {
+        return null;
+    }
 }
 
 // ─── Stop session ─────────────────────────────────────────────────────────────

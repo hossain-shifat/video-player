@@ -7,7 +7,7 @@ const multer = require("multer");
 const { readFolders } = require("./libraryController");
 const { getAllCached, findById, getGroupedCached } = require("../utils/mediaCache");
 const { SUBTITLE_EXTENSIONS, decodeFileId, parseSubtitleFilename, isSubtitleFile } = require("../utils/fileHelpers");
-const { getMetadata } = require("../utils/metadataStore");
+const { getMetadata, getCached } = require("../utils/metadataStore");
 const { groupMedia } = require("../utils/grouper");
 const { getPermission } = require("../utils/permissionsStore");
 const { probe } = require("../utils/ffprobe");
@@ -195,6 +195,45 @@ async function getMediaById(req, res) {
     }
 }
 
+// ─── Search-upgrade: metadata-aware file matching ──────────────────────────
+// getCached() is a pure in-memory Map read (metadataStore.js) — it NEVER
+// triggers a TMDB fetch, so calling it for every file here costs nothing
+// beyond what's already sitting in metadata.json. This is what lets the
+// flat-file fallback search (below) see cast/crew/collection/keywords/etc
+// instead of only the raw filename, without a single extra network call.
+function fileMatchesQuery(fileName, cached, q) {
+    if (fileName.toLowerCase().includes(q)) return true;
+    if (!cached || cached._notFound) return false;
+
+    const hay = [];
+    if (cached.title) hay.push(cached.title);
+    if (cached.originalTitle) hay.push(cached.originalTitle);
+    if (cached.collection?.name) hay.push(cached.collection.name);
+    for (const c of cached.cast || []) {
+        if (c?.name) hay.push(c.name);
+        if (c?.character) hay.push(c.character);
+    }
+    for (const c of cached.crew || []) {
+        if (c?.name) hay.push(c.name);
+        if (c?.job) hay.push(c.job);
+    }
+    for (const p of cached.production_companies || []) if (p?.name) hay.push(p.name);
+    for (const n of cached.networks || []) if (n?.name) hay.push(n.name);
+    for (const g of cached.genres || []) hay.push(g);
+    for (const k of cached.keywords || []) hay.push(typeof k === "string" ? k : k?.name);
+    for (const l of cached.spokenLanguages || []) {
+        if (l?.name) hay.push(l.name);
+        if (l?.englishName) hay.push(l.englishName);
+    }
+    for (const cc of cached.originCountries || []) hay.push(cc);
+    for (const certs of Object.values(cached.certifications || {})) for (const c of certs || []) if (c?.certification) hay.push(c.certification);
+    if (cached.externalIds?.imdb) hay.push(cached.externalIds.imdb);
+    if (cached.externalIds?.tmdb) hay.push(cached.externalIds.tmdb);
+    if (cached.imdbId) hay.push(cached.imdbId);
+
+    return hay.some((v) => v && String(v).toLowerCase().includes(q));
+}
+
 // GET /api/media/search?q=&type=
 async function searchMedia(req, res) {
     try {
@@ -208,7 +247,10 @@ async function searchMedia(req, res) {
         let results = allMedia;
 
         if (q) {
-            results = results.filter((f) => f.name.toLowerCase().includes(q));
+            // Cache-only lookups (no TMDB calls) run in parallel, then filter —
+            // was previously filename-only (f.name.toLowerCase().includes(q)).
+            const withCache = await Promise.all(results.map(async (f) => ({ file: f, cached: await getCached(f.id) })));
+            results = withCache.filter(({ file, cached }) => fileMatchesQuery(file.name, cached, q)).map(({ file }) => file);
         }
         if (folderId) {
             results = results.filter((f) => f.folderId === folderId);

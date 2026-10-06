@@ -29,3 +29,13 @@ export function refreshAllMetadata() {
 export function parseFilename(filename) {
     return api.get(`/api/metadata/parse?filename=${encodeURIComponent(filename)}`);
 }
+
+/**
+ * GET /api/metadata/tv/:tmdbId/season/:seasonNumber
+ * Lazy season-detail load (metadata upgrade plan, feature 10) — use this to
+ * (re)fetch one season on demand, separate from the seasons grouper.js
+ * already attaches eagerly at scan time. Same 7-day server-side cache.
+ */
+export function getSeasonDetail(tmdbId, seasonNumber) {
+    return api.get(`/api/metadata/tv/${tmdbId}/season/${seasonNumber}`);
+}

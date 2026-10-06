@@ -1,30 +1,56 @@
 # ==========================================
-# FLUX MEDIA SERVER: CONSOLIDATED .GITIGNORE
+# FLUX MEDIA SERVER - ROOT .GITIGNORE
 # ==========================================
 
+
 # ==========================================
-# DEPENDENCIES & CACHES
+# DEPENDENCIES
 # ==========================================
+
 node_modules/
+**/node_modules/
+
 .pnp
 .pnp.js
-.cache/
-.vite/
-.turbo/
+
+.npm/
+.yarn/
+.pnpm-store/
 
 # ==========================================
 # BUILD OUTPUTS
 # ==========================================
+
 dist/
 dist-ssr/
 build/
 out/
+
+**/dist/
+**/dist-ssr/
+**/build/
+**/out/
+
+.vite/
+**/.vite/
+
+.cache/
+**/.cache/
+
+.turbo/
+**/.turbo/
+
 coverage/
+**/coverage/
+
 
 # ==========================================
 # LOGS & DEBUGGING
 # ==========================================
+
 logs/
+**/logs/
+
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -32,93 +58,377 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+debug.log
+error.log
+
+
+# ==========================================
+# ENVIRONMENT VARIABLES & SECRETS
+# ==========================================
+
+.env
+.env.*
+*.env
+*.local
+
+# Allow safe example environment files
+!.env.example
+!.env.sample
+!.env.template
+
+
 # ==========================================
 # TEMPORARY FILES & BACKUPS
 # ==========================================
+
 *.tmp
 *.temp
 *.bak
 *.old
+*.backup
 *.swp
 *.swo
+*.swn
+*.orig
+*.rej
 *~
+
 temp/
 tmp/
+**/temp/
+**/tmp/
+
+.local/
+**/.local/
+
 
 # ==========================================
-# OS, IDE & EDITOR FILES
+# OPERATING SYSTEM FILES
 # ==========================================
+
 .DS_Store
+**/.DS_Store
+
 Thumbs.db
+**/Thumbs.db
+
 Thumbs.db:encryptable
+Desktop.ini
+
+ehthumbs.db
+Icon?
+
+
+# ==========================================
+# IDE / EDITOR FILES
+# ==========================================
+
 .idea/
+**/.idea/
+
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 
-# ==========================================
-# ENVIRONMENT VARIABLES
-# ==========================================
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-*.local
-*.env
+.history/
+**/.history/
+
 
 # ==========================================
-# FLUX MEDIA SERVER RUNTIME DATA
+# FLUX SERVER - RUNTIME DATA
 # ==========================================
-# The entire server/data directory is ignored to prevent any runtime leaks
+
+# Entire runtime data directory
 /server/data/
 
-# Explicit tracking blocks for individual DBs (redundant but defensive)
+# Runtime databases
+server/data/*.db
+server/data/*.sqlite
+server/data/*.sqlite3
+
+# Runtime JSON stores
 server/data/history.json
 server/data/userdata.json
 server/data/folders.json
 server/data/metadata.json
-server/data/*.db
-server/data/*.sqlite
+server/data/permissions.json
+server/data/media.json
 
-# Caches & generated media
+# Runtime metadata/cache
 server/data/metadata/
+server/data/cache/
 server/data/posters/
 server/data/thumbnails/
-server/data/subtitles/
 server/data/previews/
 
-# Transcoding & Streaming Temp Files
-server/data/transcode/
-server/data/hls/
-server/data/stream/
-*.m3u8
-*.ts
-*.vtt
+# Runtime subtitle data
+server/data/subtitles/
 
-# Uploads & General Temp
+
+# ==========================================
+# FLUX SERVER - STREAMING DATA
+# ==========================================
+
+# Transcoding output
+server/data/transcode/
+server/data/transcodes/
+
+# HLS output
+server/data/hls/
+
+# Streaming temporary files
+server/data/stream/
+server/data/streams/
+
+# Generated HLS playlists
+*.m3u8
+
+# NOTE:
+# Do NOT globally ignore *.ts.
+# Do NOT globally ignore *.vtt.
+#
+# *.ts may be source code.
+# *.vtt may be legitimate subtitle/test files.
+#
+# Runtime HLS/subtitle directories above are ignored instead.
+
+
+# ==========================================
+# FLUX SERVER - UPLOADS
+# ==========================================
+
 server/data/uploads/
 
+uploads/
+**/uploads/
+
+upload-temp/
+**/upload-temp/
+
+
 # ==========================================
-# MISCELLANEOUS & RUNTIME
+# GENERATED MEDIA / CACHE FILES
 # ==========================================
-# Test artifacts, screenshots, benchmarks
+
+*.part
+*.partial
+
+*.thumb
+*.thumbnail
+
+previews/
+**/previews/
+
+thumbnails/
+**/thumbnails/
+
+
+# ==========================================
+# PLAYWRIGHT
+# ==========================================
+
+# Playwright HTML reports
+**/playwright-report/
+**/blob-report/
+
+# Playwright test results
+**/test-results/
+
+# Playwright cache
+**/playwright/.cache/
+
+# Playwright authentication/session state
+**/playwright/.auth/
+
+# Playwright screenshots
+**/playwright/screenshots/
+
+# Playwright recorded videos
+**/playwright/videos/
+
+# Playwright traces
+**/playwright/traces/
+
+# Playwright browser binaries
+**/ms-playwright/
+
+# Playwright generated trace archives
+**/*.trace.zip
+
+# Playwright generated recordings
+**/*.webm
+
+
+# ==========================================
+# TEST ARTIFACTS
+# ==========================================
+
 __snapshots__/
-test-results/
+**/__snapshots__/
+
 screenshots/
+**/screenshots/
+
 benchmarks/
+**/benchmarks/
+
 test-artifacts/
+**/test-artifacts/
 
-# Docker / CasaOS / Deployment Volumes
+test-output/
+**/test-output/
+
+reports/
+**/reports/
+
+.nyc_output/
+**/.nyc_output/
+
+
+# ==========================================
+# PRISMA
+# ==========================================
+
+# Prisma generated client/runtime artifacts
+.prisma/
+**/.prisma/
+
+server/.prisma/
+
+# IMPORTANT:
+# Do NOT ignore:
+# server/prisma/schema.prisma
+# server/prisma/migrations/
+#
+# These should be committed to Git.
+
+
+# ==========================================
+# DOCKER / CASAOS / DEPLOYMENT RUNTIME
+# ==========================================
+
 docker-volumes/
-casaos-data/
-data/
+**/docker-volumes/
 
-# Existing explicit ignores
+casaos-data/
+**/casaos-data/
+
+# Runtime deployment data
+/data/
+**/data/
+
+
+# ==========================================
+# LOCAL DEVELOPMENT DATA
+# ==========================================
+
+runtime/
+runtime-data/
+
+**/runtime/
+**/runtime-data/
+
+server/runtime/
+server/runtime-data/
+
+
+# ==========================================
+# LOCAL DATABASE / DEVELOPMENT DATABASES
+# ==========================================
+
+*.db
+*.sqlite
+*.sqlite3
+
+# Keep Prisma migrations/schema trackable because
+# they live under server/prisma/.
+
+
+# ==========================================
+# LARGE ARCHIVES / LOCAL BACKUPS
+# ==========================================
+
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+
+# ==========================================
+# DOCUMENTATION GENERATED LOCALLY
+# ==========================================
+
 docs/
+
+
+# ==========================================
+# MISCELLANEOUS GENERATED FILES
+# ==========================================
+
+*.cache
+*.pid
+*.seed
+*.lock.tmp
+
+
+# ==========================================
+# LOCAL CERTIFICATES / KEYS
+# ==========================================
+
+*.pem
+*.key
+*.crt
+*.cer
+
+# Allow explicitly committed example certificates
+!*.example.pem
+!*.example.key
+!*.example.crt
+
+
+# ==========================================
+# LOCAL AUTH / SESSION FILES
+# ==========================================
+
+.auth/
+**/.auth/
+
+sessions/
+**/sessions/
+
+cookies/
+**/cookies/
+
+
+# ==========================================
+# LOCAL MACHINE / DEVELOPMENT CONFIG
+# ==========================================
+
+*.local.json
+*.local.yaml
+*.local.yml
+
+
+# ==========================================
+# OPTIONAL: GENERATED SERVER REPORTS
+# ==========================================
+
+server/reports/
+server/debug/
+server/generated/
+server/generated-data/
+
+.github
+playwright-report
+playwright.config.ts
+*.env
+tests

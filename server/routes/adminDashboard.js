@@ -11,6 +11,7 @@ const router = express.Router();
 const os = require("os");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
 
 const prisma = require("../auth/prismaClient");
 const { authenticateJWT } = require("../auth/middleware/authenticateJWT");
@@ -18,8 +19,9 @@ const { requireApprovedUser } = require("../auth/middleware/requireApprovedUser"
 const { requireRole } = require("../auth/middleware/requireRole");
 const { getSessionStats } = require("../utils/transcoderService");
 const { setPermission } = require("../utils/permissionsStore");
-const { invalidateAll } = require("../utils/mediaCache");
+const { invalidateAll, invalidateFolder } = require("../utils/mediaCache");
 const { getSysInfoRoute, getLiveMetrics } = require("../utils/hwAccel");
+const { readFolders } = require("../controllers/libraryController");
 
 // All dashboard routes require: authenticated + approved + admin
 router.use(authenticateJWT, requireApprovedUser, requireRole("admin"));
@@ -420,6 +422,78 @@ router.get("/libraries", (req, res) => {
         res.json({ libraries: result, total: result.length });
     } catch (err) {
         res.status(500).json({ error: "Failed to list libraries" });
+    }
+});
+
+// ─── POST /api/admin-dashboard/upload ─────────────────────────────────────────
+// This route did not exist before — DashUploads.jsx's local-upload path was
+// calling it, but nothing here ever handled it, hence the 404. Added fresh,
+// nothing else in this file touched.
+//
+// Streams to a temp file first (multer diskStorage, never buffers the whole
+// file in memory — same pattern as the cloud Storage Provider System), then
+// moves it into the real library folder once multer has finished and
+// req.body.folderId is available. folderId is resolved against folders.json
+// via the existing readFolders() — the client's folderPath field is NOT
+// trusted for the actual write destination (that would allow writing
+// anywhere on disk); it's only ever used as a display/logging hint.
+const uploadTemp = multer({
+    storage: multer.diskStorage({
+        destination: os.tmpdir(),
+        filename: (req, file, cb) => cb(null, `flux-local-upload-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`),
+    }),
+    limits: { fileSize: 100 * 1024 * 1024 * 1024 }, // disk-backed, not memory-backed — this is just a sanity ceiling
+});
+
+router.post("/upload", uploadTemp.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "file is required" });
+
+    // DEBUG — check this against the client-side log in DashUploads.jsx's
+    // addFiles(). If originalname ALREADY looks like a random number here,
+    // the mobile browser sent it that way in the multipart request — nothing
+    // server-side to fix. If it looks correct here, the bug (if any) is in
+    // the destPath/rename logic below, not in what was received.
+    console.log(`[AdminDash] upload received: originalname="${req.file.originalname}" mimetype="${req.file.mimetype}" size=${req.file.size}`);
+
+    try {
+        const { folderId } = req.body;
+        if (!folderId) {
+            fs.unlink(req.file.path, () => {});
+            return res.status(400).json({ error: "folderId is required" });
+        }
+
+        const folders = await readFolders();
+        const folder = folders.find((f) => f.id === folderId);
+        if (!folder) {
+            fs.unlink(req.file.path, () => {});
+            return res.status(404).json({ error: "Library folder not found" });
+        }
+
+        const destPath = path.join(folder.path, req.file.originalname);
+        console.log(`[AdminDash] moving to destPath="${destPath}"`); // DEBUG — same purpose as the log above
+
+        try {
+            await fs.promises.rename(req.file.path, destPath);
+        } catch (err) {
+            // EXDEV = temp dir and library folder are on different drives/filesystems —
+            // rename can't cross that, fall back to copy + delete.
+            if (err.code === "EXDEV") {
+                await fs.promises.copyFile(req.file.path, destPath);
+                await fs.promises.unlink(req.file.path);
+            } else {
+                throw err;
+            }
+        }
+
+        if (invalidateFolder) invalidateFolder(folder.id); // so the library reflects the new file without a manual rescan
+
+        pushLog("info", "upload", `Uploaded "${req.file.originalname}" to library "${folder.label}"`);
+
+        return res.status(201).json({ uploaded: { path: destPath, size: req.file.size, name: req.file.originalname, folderId: folder.id } });
+    } catch (err) {
+        console.error("[AdminDash] upload error:", err);
+        fs.unlink(req.file.path, () => {});
+        return res.status(500).json({ error: err.message || "Upload failed" });
     }
 });
 

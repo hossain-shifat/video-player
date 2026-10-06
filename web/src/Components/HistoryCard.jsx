@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
-import { Link } from "react-router";
 import { EllipsisVertical, Film, Tv } from "lucide-react";
 import { api } from "../api/client";
 import { getOrCreateClientId } from "../api/stream";
 import FloatingActionMenu from "./FloatingActionMenu";
+import HorizontalCard from "./HorizontalCard";
 
 // ─── Icon fallback — only if ffmpeg frame AND poster both fail ─────────────
 function IconFallback({ title, type }) {
@@ -35,6 +35,7 @@ function buildSeriesLabel(item) {
 
 /**
  * HistoryCard — "Continue Watching" card.
+ * Same visuals as before — now composed from the shared HorizontalCard shell.
  *
  * onRemove(item) — fires after "Remove From History" confirmed in menu.
  */
@@ -70,96 +71,94 @@ export default function HistoryCard({ item, onRemove }) {
         streamUrl: item.streamUrl || `${window.location.origin}/player/${encodeURIComponent(item.id)}`,
     };
 
+    const thumbnail = (
+        <>
+            {showThumbnail && (
+                <img
+                    src={thumbUrl}
+                    alt={item.title}
+                    className="absolute inset-0 w-full h-full object-cover object-center block"
+                    loading="lazy"
+                    draggable={false}
+                    onError={() => setThumbError(true)}
+                />
+            )}
+            {showPosterFallback && (
+                <img
+                    src={item.poster}
+                    alt={item.title}
+                    className="absolute inset-0 w-full h-full object-cover object-center block"
+                    loading="lazy"
+                    draggable={false}
+                    onError={() => setPosterError(true)}
+                />
+            )}
+            {showIconFallback && (
+                <div className="absolute inset-0">
+                    <IconFallback title={item.title} type={mediaType} />
+                </div>
+            )}
+        </>
+    );
+
+    const badge = (
+        <span
+            className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${isSeries ? "bg-accent/90 text-accent-content" : "bg-primary/90 text-primary-content"}`}>
+            {mediaType === "anime" ? "Anime" : mediaType === "series" ? "Series" : "Movie"}
+        </span>
+    );
+
+    const footerText = item.completed ? (
+        "Watched"
+    ) : (
+        <>
+            {watchedFmt} watched / {leftFmt} left <span className="px-1">•</span> {totalFmt}
+        </>
+    );
+
+    const title = isSeries ? (
+        <p className="text-[12.5px] font-medium text-base-content/85 truncate leading-tight" title={seriesLabel}>
+            {seriesLabel}
+        </p>
+    ) : (
+        <p className="text-[13px] font-medium text-base-content truncate leading-tight" title={item.title}>
+            {item.title}
+            {partLabel && <span className="ml-1 text-base-content/40 text-[11px] font-normal">{partLabel}</span>}
+        </p>
+    );
+
+    // All option logic lives in FloatingActionMenu — same menu everywhere.
+    // preventDefault on both the trigger button and the menu wrapper — the
+    // card itself is a <Link>, this stops the menu from also navigating it.
+    const menu = (
+        <>
+            <button
+                ref={btnRef}
+                type="button"
+                onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setMenuOpen((v) => !v);
+                }}
+                className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white/60 hover:text-white cursor-pointer transition-colors">
+                <EllipsisVertical size={14} />
+            </button>
+            <div onClick={(e) => e.preventDefault()}>
+                <FloatingActionMenu open={menuOpen} anchorRef={btnRef} onClose={() => setMenuOpen(false)} media={media} watched={item.completed} onRemove={() => onRemove?.(item)} />
+            </div>
+        </>
+    );
+
     return (
-        <Link
+        <HorizontalCard
             to={`/player/${encodeURIComponent(item.id)}`}
             state={{ knownResumePosition: item.position }}
-            className="relative shrink-0 w-56 sm:w-64 cursor-pointer select-none no-underline my-2 ml-0.5">
-            {/* ── Thumbnail ── */}
-            <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-base-300 shadow-lg ring-1 ring-white/5 transition-transform duration-200 hover:scale-[1.03] hover:shadow-2xl hover:ring-white/20">
-                {showThumbnail && (
-                    <img
-                        src={thumbUrl}
-                        alt={item.title}
-                        className="absolute inset-0 w-full h-full object-cover object-center block"
-                        loading="lazy"
-                        draggable={false}
-                        onError={() => setThumbError(true)}
-                    />
-                )}
-                {showPosterFallback && (
-                    <img
-                        src={item.poster}
-                        alt={item.title}
-                        className="absolute inset-0 w-full h-full object-cover object-center block"
-                        loading="lazy"
-                        draggable={false}
-                        onError={() => setPosterError(true)}
-                    />
-                )}
-                {showIconFallback && (
-                    <div className="absolute inset-0">
-                        <IconFallback title={item.title} type={mediaType} />
-                    </div>
-                )}
-
-                <div className="absolute inset-0 bg-linear-to-t from-black/55 via-transparent to-transparent" />
-
-                {/* Type badge */}
-                <span
-                    className={`absolute top-2 right-2 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${isSeries ? "bg-accent/90 text-accent-content" : "bg-primary/90 text-primary-content"}`}>
-                    {mediaType === "anime" ? "Anime" : mediaType === "series" ? "Series" : "Movie"}
-                </span>
-
-                {/* Seekbar + watched/left */}
-                <div className="absolute bottom-2 left-2 right-2 z-10">
-                    <p className="text-[11px] text-white/80 font-medium mb-1 truncate">
-                        {item.completed ? (
-                            "Watched"
-                        ) : (
-                            <>
-                                {watchedFmt} watched / {leftFmt} left <span className="px-1">•</span> {totalFmt}
-                            </>
-                        )}
-                    </p>
-                    <div className="relative h-1 rounded-full bg-white/25 overflow-hidden">
-                        <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
-                    </div>
-                </div>
-            </div>
-
-            {/* ── Info ── */}
-            <div className="flex justify-between items-start mt-2 px-0.5">
-                <div className="flex-1 min-w-0">
-                    {isSeries ? (
-                        <p className="text-[12.5px] font-medium text-base-content/85 truncate leading-tight" title={seriesLabel}>
-                            {seriesLabel}
-                        </p>
-                    ) : (
-                        <p className="text-[13px] font-medium text-base-content truncate leading-tight" title={item.title}>
-                            {item.title}
-                            {partLabel && <span className="ml-1 text-base-content/40 text-[11px] font-normal">{partLabel}</span>}
-                        </p>
-                    )}
-                </div>
-
-                <button
-                    ref={btnRef}
-                    type="button"
-                    onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setMenuOpen((v) => !v);
-                    }}
-                    className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white/60 hover:text-white cursor-pointer transition-colors">
-                    <EllipsisVertical size={14} />
-                </button>
-
-                {/* All option logic lives in FloatingActionMenu — same menu everywhere */}
-                <div onClick={(e) => e.preventDefault()}>
-                    <FloatingActionMenu open={menuOpen} anchorRef={btnRef} onClose={() => setMenuOpen(false)} media={media} watched={item.completed} onRemove={() => onRemove?.(item)} />
-                </div>
-            </div>
-        </Link>
+            thumbnail={thumbnail}
+            badge={badge}
+            progress={pct}
+            footerText={footerText}
+            title={title}
+            menu={menu}
+        />
     );
 }

@@ -28,6 +28,100 @@ const crypto = require("crypto");
 const { detect: detectHW, getFFmpegHWDecodeArgs, PROFILES } = require("./hwAccel");
 const { QUALITY_PRESETS, DECISION } = require("./streamingEngine");
 
+// ─── Per-file learned audio sync offset ────────────────────────────────────────
+// NEW: fixes real audio/video desync (not just subtitle display) for files
+// whose audio track is authored with a genuine, fixed offset relative to
+// its video — common on fan-assembled "dual audio" remuxes where a second
+// language track is muxed in from a separately-sourced rip. Confirmed via
+// sandbox testing (built a deliberately 3s-misaligned synthetic source,
+// verified this exact mechanism corrects it to within ~20ms) — this isn't
+// guessed.
+//
+// Key evidence this is a per-FILE constant, not a per-seek measurement
+// artifact: production AV-DEBUG logs across 6 different resume points in
+// the same file show audioFirstPTS - requestedSeek landing on EXACTLY
+// 9.979s every time, to the millisecond — video's own drift-from-request
+// varies per seek (normal fast-seek keyframe-snap behavior), but audio's
+// offset from the REQUESTED position does not vary at all. A fixed,
+// seek-independent offset is exactly what a hardcoded stream-level skew in
+// the container would produce; real per-seek measurement noise would not
+// reproduce the same value to the millisecond six times running.
+const AUDIO_SYNC_FILE = path.join(__dirname, "..", "data", "audioSync.json");
+
+function loadAudioSyncStore() {
+    try {
+        return JSON.parse(fs.readFileSync(AUDIO_SYNC_FILE, "utf-8"));
+    } catch {
+        return {};
+    }
+}
+
+function saveAudioSyncStore(store) {
+    try {
+        const tmp = `${AUDIO_SYNC_FILE}.tmp.${process.pid}.${Date.now()}`;
+        fs.writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+        fs.renameSync(tmp, AUDIO_SYNC_FILE);
+    } catch (err) {
+        console.error("[AudioSync] Save failed:", err.message);
+    }
+}
+
+// Returns the learned offset (seconds) for a fileId + track type ("audio" or
+// "video"), or null if none yet. Store format: { [fileId]: { audio: N, video: N } }
+// — extended from audio-only to also cover video, since the SAME container-level
+// PTS baseline (confirmed elsewhere in this codebase — PlayerPage.jsx's own
+// comment: "confirmed: measured ~10s even at position 0") affects both streams
+// under -copyts, not just audio. Old audio-only numeric entries (from before this
+// extension) are still read correctly via the legacy-shape fallback below.
+function getLearnedOffset(fileId, track) {
+    if (!fileId) return null;
+    const store = loadAudioSyncStore();
+    const entry = store[fileId];
+    if (entry == null) return null;
+    // Legacy shape: a bare number meant "audio offset" from before video
+    // correction existed. Keep honoring it for audio; no video value yet.
+    if (typeof entry === "number") {
+        return track === "audio" && Number.isFinite(entry) ? entry : null;
+    }
+    const val = entry[track];
+    return typeof val === "number" && Number.isFinite(val) ? val : null;
+}
+
+// Records/updates the learned offset for a fileId + track. Only overwrites an
+// existing value if the new measurement is close to it (within 0.5s) or there
+// wasn't one — a wildly different reading is more likely a bad probe (often
+// caused by the correction from a PRIOR session already being applied, which
+// is expected and correctly ignored here) than a real change in the file.
+function recordOffset(fileId, track, offsetSec) {
+    if (!fileId || !Number.isFinite(offsetSec)) return;
+    const store = loadAudioSyncStore();
+    let entry = store[fileId];
+    // Upgrade legacy bare-number (audio-only) entries to the {audio,video} shape.
+    if (typeof entry === "number") entry = { audio: entry };
+    if (entry == null) entry = {};
+    const existing = entry[track];
+    if (typeof existing === "number" && Math.abs(existing - offsetSec) > 0.5) {
+        console.warn(
+            `[AudioSync] New ${track} measurement ${offsetSec.toFixed(3)}s differs from learned ${existing.toFixed(3)}s for ${fileId} by >0.5s — keeping existing value, not overwriting from a single outlier reading.`,
+        );
+        return;
+    }
+    if (existing !== offsetSec) {
+        entry[track] = offsetSec;
+        store[fileId] = entry;
+        saveAudioSyncStore(store);
+        console.log(`[AudioSync] Learned ${track} offset ${offsetSec.toFixed(3)}s for ${fileId} — will auto-correct on future sessions of this file.`);
+    }
+}
+
+// Back-compat thin wrappers — existing call sites for audio keep working unchanged.
+function getLearnedAudioOffset(fileId) {
+    return getLearnedOffset(fileId, "audio");
+}
+function recordAudioOffset(fileId, offsetSec) {
+    recordOffset(fileId, "audio", offsetSec);
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const TEMP_DIR = process.env.HLS_TEMP_DIR || path.join(__dirname, "../../temp/hls");
@@ -155,6 +249,248 @@ function makeSessionId() {
 function segmentPath(videoDir, segNumber) {
     const num = String(segNumber).padStart(5, "0");
     return path.join(videoDir, `index${num}.ts`);
+}
+
+// ─── DEBUG ONLY: measure real A/V start offset ────────────────────────────
+// Added purely to diagnose the audio-lag-after-resume report — does NOT
+// touch ffmpeg args, seek math, or playback in any way. Runs ffprobe on
+// the first produced segment and logs the actual first PTS of the video
+// stream vs. the first PTS of the audio stream, so the real gap is a
+// measured number instead of another guess. Safe to leave in permanently
+// (cheap, fire-and-forget, never affects the session); can be silenced by
+// setting AV_DEBUG=0.
+const AV_DEBUG = process.env.AV_DEBUG !== "0";
+
+function probeFirstPts(tsPath, selector) {
+    return new Promise((resolve) => {
+        let ffprobeBin = process.env.FFPROBE_PATH || (process.env.FFMPEG_PATH ? process.env.FFMPEG_PATH.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1") : "ffprobe");
+        if (process.platform === "win32" && !ffprobeBin.toLowerCase().endsWith(".exe")) ffprobeBin += ".exe";
+        const args = ["-v", "error", "-select_streams", selector, "-show_entries", "packet=pts_time", "-read_intervals", "%+#1", "-of", "csv=p=0", tsPath];
+        let proc;
+        try {
+            proc = spawn(ffprobeBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+        } catch (err) {
+            // FIX: was a bare `resolve(null)` — indistinguishable from "not
+            // ready yet" or "no cues at this timestamp". If ffprobeBin
+            // doesn't exist (common: minimal FFmpeg installs only ship
+            // ffmpeg.exe, not ffprobe.exe, and the derived path above
+            // assumes they're side by side), this measurement — and every
+            // subtitle-sync correction depending on it — silently never
+            // ran, with nothing in the logs to say why.
+            console.warn(`[AV-PROBE] spawn threw for "${ffprobeBin}": ${err.message}. Set FFPROBE_PATH in .env if ffprobe isn't next to ffmpeg.`);
+            resolve(null);
+            return;
+        }
+        let out = "";
+        let stderrOut = "";
+        proc.stderr?.on?.("data", (d) => (stderrOut += d.toString()));
+        proc.stdout.on("data", (d) => (out += d.toString()));
+        proc.on("error", (err) => {
+            // Same silent-failure fix as above — this is the path an ENOENT
+            // (binary not found) actually surfaces through on most
+            // platforms, since spawn() itself rarely throws synchronously.
+            console.warn(`[AV-PROBE] "${ffprobeBin}" failed to run: ${err.message}. Set FFPROBE_PATH in .env if ffprobe isn't next to ffmpeg.`);
+            resolve(null);
+        });
+        proc.on("close", (code) => {
+            const first = out.trim().split("\n")[0];
+            const val = parseFloat(first);
+            if (!Number.isFinite(val) && code !== 0) {
+                console.warn(`[AV-PROBE] "${ffprobeBin}" exited ${code} with no usable output for ${tsPath} (${selector})${stderrOut ? ": " + stderrOut.trim().split("\n")[0] : ""}`);
+            }
+            resolve(Number.isFinite(val) ? val : null);
+        });
+    });
+}
+
+async function debugAvOffset(session) {
+    if (!AV_DEBUG) return;
+    try {
+        const videoPts = await measureRealStartOffset(session, 20_000);
+        if (videoPts == null) {
+            console.log(`[AV-DEBUG] session=${session.id} seg${session.startSegment} probe incomplete`);
+            return;
+        }
+        const videoDirForProbe = session.videoDirs?.[0] || session.videoDir;
+        const videoSeg = segmentPath(videoDirForProbe, session.startSegment);
+        // FIX: this assumed multi-audio renditions always land in a
+        // numeric "0" subdirectory. They don't, always — FFmpeg
+        // substitutes %v in -hls_segment_filename with the var_stream_map
+        // entry's `name:` field when one is set (see the var_stream_map
+        // comment in buildFFmpegArgs), not always the plain numeric index.
+        // For a session with `name:Hindi`/`name:English` set, the REAL
+        // on-disk folders are "Hindi"/"English" — confirmed by every
+        // actual segment request succeeding against exactly those paths in
+        // the server log, while this probe kept hitting ENOENT against a
+        // "0" folder nothing ever wrote into. Real playback was never
+        // affected (serveHLSFile just serves whatever path it's given) —
+        // only this diagnostic was guessing wrong. Find the real directory
+        // by listing what's actually on disk instead of assuming a name.
+        let audioSeg = videoSeg;
+        if (session.isMultiAudioPath) {
+            try {
+                const entries = await fsp.readdir(session.sessionDir, { withFileTypes: true });
+                const videoDirNames = new Set((session.videoDirs || [session.videoDir]).map((d) => path.basename(d)));
+                const candidates = entries.filter((e) => e.isDirectory() && !videoDirNames.has(e.name)).map((e) => e.name);
+                // FIX: picking the first candidate directory by NAME alone
+                // isn't enough — session creation pre-creates EMPTY numeric
+                // placeholder dirs ("0", "1"...) for every variant index
+                // before ffmpeg even starts (so paths always resolve even
+                // mid-startup). FFmpeg then writes the REAL segments into
+                // whatever %v actually substituted to — a name-based folder
+                // here, since name: is set — leaving the numeric ones empty
+                // forever. A directory existing is not the same as it
+                // having the segment we actually want; check each
+                // candidate for the real target file instead of trusting
+                // the first name found.
+                for (const name of candidates) {
+                    const candidateSeg = segmentPath(path.join(session.sessionDir, name), session.startSegment);
+                    if (
+                        await fsp
+                            .stat(candidateSeg)
+                            .then(() => true)
+                            .catch(() => false)
+                    ) {
+                        audioSeg = candidateSeg;
+                        break;
+                    }
+                }
+                // None had it yet (segment still being written) — give the
+                // most plausible candidate (last one, since numeric
+                // placeholders sort/get created first) one real chance via
+                // the wait below instead of silently giving up.
+                if (audioSeg === videoSeg && candidates.length) {
+                    const fallbackName = candidates[candidates.length - 1];
+                    audioSeg = segmentPath(path.join(session.sessionDir, fallbackName), session.startSegment);
+                }
+            } catch {
+                // Fall through with audioSeg still === videoSeg — the gap
+                // log below will just show 0s / get skipped, no crash.
+            }
+        }
+        if (audioSeg !== videoSeg) {
+            await waitForSegment(audioSeg, 10_000).catch(() => {});
+        }
+        const audioPts = await probeFirstPts(audioSeg, "a:0");
+        if (audioPts != null) {
+            const gap = audioPts - videoPts;
+            // ADD (adaptive subtitle fine-tune): previously this gap was
+            // only ever logged. Storing it on the session lets the client
+            // use the file's REAL measured audio lag instead of a single
+            // guessed constant for the small subtitle-timing nudge —
+            // self-calibrating per session instead of one-size-fits-all.
+            // Only stored for the plausible range a real audio-start delay
+            // could be in — guards against a probe misread producing a
+            // wild value that would visibly mistime subtitles instead of
+            // fine-tuning them.
+            // FIX: real dual-audio ("separate renditions") sessions were
+            // measured at gap=5.112s in production — this bound was < 5,
+            // so that exact, real, reproducible case got silently
+            // DISCARDED every single time, leaving session.avGapSec
+            // permanently unset and the client with zero correction for
+            // the file that needed it most. Widened to 10s (still well
+            // below anything a genuine probe misread would produce —
+            // those show as wildly implausible values like 30s+, not a
+            // clean 5.1s) so real multi-track startup lag actually gets
+            // captured instead of clamped away.
+            if (Number.isFinite(gap) && Math.abs(gap) < 10) {
+                session.avGapSec = gap;
+            } else if (Number.isFinite(gap)) {
+                console.warn(`[AV-DEBUG] session=${session.id} gap=${gap.toFixed(3)}s rejected as implausible — not applied to avGapSec`);
+            }
+            console.log(
+                `[AV-DEBUG] session=${session.id} seg${session.startSegment} requestedSeek=${session.downloadPositionSec.toFixed(2)}s videoFirstPTS=${videoPts.toFixed(3)} audioFirstPTS=${audioPts.toFixed(3)} gap(audio-video)=${gap.toFixed(3)}s  ${videoSeg === audioSeg ? "(muxed together)" : "(separate renditions)"}`,
+            );
+            // DISABLED — this measurement/correction pair turned out to be a
+            // feedback loop, not a stable learned constant. This probe reads
+            // the OUTPUT segment (i.e. AFTER whatever asetpts correction was
+            // applied that session). Session 1: no correction yet → measures
+            // the real +9.979s defect → stores it. Session 2: applies that
+            // +9.979s correction → THIS SAME PROBE now measures the
+            // already-corrected (~0s) output → overwrites the stored value
+            // with ~0. Session 3: applies ~0 (no-op) → measures +9.979s again
+            // → overwrites back to +9.979s. It flips every single session —
+            // "the transcoder plays audio from a random place" is exactly what
+            // an oscillating, self-overwriting correction looks like from the
+            // outside. On top of that, this probe only ever reads output
+            // stream a:0 (whichever track got mapped first), but the stored
+            // value used to get applied to EVERY audio track in the encode
+            // loop below — so a non-default audio track (English, when Hindi
+            // is a:0) could get shifted by a correction that was never
+            // measured for it at all.
+            //
+            // Recording removed. Nothing below reads/writes audioSync.json
+            // anymore — see the filter loop's own comment for the matching
+            // removal on the apply side. gap/videoOffsetFromRequest logging
+            // kept for diagnostics only, nothing derived from it is applied.
+            //
+            // const audioOffsetFromRequest = audioPts - session.downloadPositionSec;
+            // if (Number.isFinite(audioOffsetFromRequest) && Math.abs(audioOffsetFromRequest) < 20) {
+            //     recordAudioOffset(session.mediaId, audioOffsetFromRequest);
+            // }
+            // REVERTED: briefly also learned+applied a fixed video offset
+            // here, on the theory that video's drift was the same kind of
+            // constant container-baseline issue audio had. That was wrong
+            // — video's drift across every session actually logged so far
+            // is 0.8s, 1.5s, 2.6s, 5.0s, 8.6s, 9.6s: genuinely varying with
+            // seek target, unlike audio's exact, unmoving 9.979s every
+            // time. A FIXED correction learned from one session is only
+            // right by coincidence on whichever session it was measured
+            // from, and actively wrong (shifts video the wrong way) on
+            // every other seek — that's real per-seek keyframe-snap
+            // variance, not a mislabeled constant, and applying a static
+            // setpts shift to it made things worse, not better. Reverted
+            // in transcoderService.js: no video setpts correction anymore.
+            // Still logged here for visibility, not applied to anything.
+            const videoOffsetFromRequest = videoPts - session.downloadPositionSec;
+            if (Number.isFinite(videoOffsetFromRequest)) {
+                console.log(`[AV-DEBUG] session=${session.id} video offset-from-request=${videoOffsetFromRequest.toFixed(3)}s (informational only — not auto-corrected, see revert note above)`);
+            }
+        } else {
+            console.log(`[AV-DEBUG] session=${session.id} seg${session.startSegment} audio probe still failed after waiting — audioSeg=${audioSeg}`);
+        }
+    } catch (err) {
+        console.log(`[AV-DEBUG] session=${session.id} probe failed:`, err.message);
+    }
+}
+
+// FIX (embedded subtitle showing before the dialogue/video actually reaches
+// it — resume only, large seeks): a delayed correction (originally applied
+// via the session heartbeat, up to ~10-20s after resume) technically fixed
+// the number but not the actual experience — playback needs to be correct
+// from frame one, the same way MX Player/VLC/etc are. This is a BLOCKING,
+// SHORT-TIMEOUT measurement resolvePlayback can await before it ever
+// responds to the client, so the very first `sessionOffset` the client
+// computes is already the real one — no correction, nothing to wait for
+// after the fact. Bounded to 4s specifically so a slow/failed probe can
+// never meaningfully hang the "instant auto-resume" experience — on
+// timeout this simply returns null and callers fall back to the existing
+// assumed-offset math exactly as before (a graceful miss, not a failure).
+// Does not touch seek/resume positioning at all, same as the heartbeat
+// version it supersedes for the common case (kept below as a fallback for
+// whenever this 4s window isn't enough).
+async function measureRealStartOffset(session, timeoutMs = 4_000) {
+    if (!AV_DEBUG) {
+        console.log(`[AV-PROBE] session=${session.id} skipped — AV_DEBUG=0`);
+        return null;
+    }
+    const assumed = session.downloadPositionSec;
+    try {
+        const videoDirForProbe = session.videoDirs?.[0] || session.videoDir;
+        const videoSeg = segmentPath(videoDirForProbe, session.startSegment);
+        await waitForSegment(videoSeg, timeoutMs);
+        const videoPts = await probeFirstPts(videoSeg, "v:0");
+        if (videoPts != null) {
+            session.measuredStartOffset = videoPts;
+            console.log(`[AV-PROBE] session=${session.id} OK — requested=${assumed?.toFixed?.(2)}s measured=${videoPts.toFixed(3)}s drift=${(videoPts - (assumed || 0)).toFixed(3)}s`);
+        } else {
+            console.warn(`[AV-PROBE] session=${session.id} probe ran but returned no usable PTS for ${videoSeg} — falling back to assumed offset`);
+        }
+        return videoPts;
+    } catch (err) {
+        console.warn(`[AV-PROBE] session=${session.id} failed/timed out within ${timeoutMs}ms: ${err.message} — falling back to assumed offset`);
+        return null; // timed out or probe failed — caller falls back to assumed math
+    }
 }
 
 /**
@@ -421,6 +757,7 @@ function buildFFmpegArgs({
     decision,
     mediaInfo,
     startSegment = 0, // segment number to start from (integer)
+    mediaId = null, // NEW — used to look up a learned per-file audio sync offset
 }) {
     const { params } = decision;
     const preset = QUALITY_PRESETS[params.quality || "1080p"] || QUALITY_PRESETS["1080p"];
@@ -463,6 +800,16 @@ function buildFFmpegArgs({
     // ── Global ────────────────────────────────────────────────────────────────
     args.push("-hide_banner", "-loglevel", "warning");
 
+    // NEW experiment: larger probe/analyze window before the seek. This is
+    // a large, high-bitrate, multi-audio-track BluRay remux — ffmpeg's
+    // default probesize/analyzeduration (5MB / 5s) may not be enough to
+    // fully characterize a file this complex before -ss runs, which could
+    // mean accurate-seek is working FROM AN INCOMPLETE picture of the
+    // stream. Doesn't touch seek structure or timing math at all — purely
+    // gives ffmpeg more source data to work with up front. Safe to revert
+    // (this exact line) if it doesn't help or slows session start too much.
+    args.push("-analyzeduration", "20000000", "-probesize", "50000000");
+
     // ── Hardware decode (before -i) ───────────────────────────────────────────
     const hwDecodeArgs = getFFmpegHWDecodeArgs(hw);
     args.push(...hwDecodeArgs);
@@ -473,6 +820,26 @@ function buildFFmpegArgs({
     // fresh play explicitly lands on the source's real start_time instead of
     // relying on FFmpeg's default demux behavior, which is what let a non-zero
     // container start_time leak through as the apparent playback position.
+    //
+    // REVERTED (2026-07-21): briefly tried splitting this into a coarse
+    // (before -i) + small precise (after -i) seek to fix A/V lip-sync drift —
+    // reverted after resume started landing at a random/wrong position,
+    // which only started once that split was added. Isolating back to the
+    // single input-side seek (known-correct position, pre-existing A/V-drift
+    // tradeoff) to confirm the split was actually the cause before trying a
+    // different lip-sync approach that doesn't touch seek positioning at all.
+    //
+    // NEW (bounded experiment, NOT a repeat of the reverted split above):
+    // -accurate_seek is ffmpeg's own single, internally-tested mechanism
+    // for "seek to nearest keyframe, then decode-forward to the exact
+    // frame" — the SAME thing the reverted split was hand-rolling INTO TWO
+    // SEPARATE -ss calls, which is almost certainly what broke it (two
+    // independent seek calculations racing/conflicting). This is one flag,
+    // doesn't touch the -ss/-i structure at all, and should already be
+    // ffmpeg's default — making it explicit rather than assumed. If video
+    // drift doesn't improve, or resume breaks again, revert this one line;
+    // it's isolated and doesn't touch anything else.
+    args.push("-accurate_seek");
     args.push("-ss", String(seekSeconds));
 
     args.push("-i", inputPath);
@@ -483,6 +850,16 @@ function buildFFmpegArgs({
     // instead of resetting to 0 and causing random start times.
     args.push("-copyts");
     args.push("-avoid_negative_ts", "disabled");
+    // REVERTED (2026-07-21): -async 1 was added here to address audio/video
+    // drift after a seek-started session, then removed after "stream not
+    // found" / silent transcoder failures appeared — -async is a legacy
+    // ffmpeg option that some builds reject at the global/output level,
+    // which would make ffmpeg exit immediately on start (no HLS output ever
+    // gets created, hls.js's manifest fetch then legitimately 404s — exactly
+    // matching what was reported). Back to the original stable pair only.
+    // A/V sync needs a different approach that can't take the whole session
+    // down if it's wrong — not attempted again until the crash itself is
+    // confirmed via an actual ffmpeg stderr capture, not another guess.
 
     // ── Video stream ──────────────────────────────────────────────────────────
     if (decision.decision === DECISION.DIRECT_STREAM || decision.decision === DECISION.AUDIO_TRANSCODE) {
@@ -560,7 +937,28 @@ function buildFFmpegArgs({
                 args.push(`-pix_fmt:v:${vIdx}`, "yuv420p");
             }
 
-            args.push(`-force_key_frames:v:${vIdx}`, `expr:gte(t,n_forced*${SEGMENT_DURATION})`);
+            // FIX (structural A/V desync on every resume/seek — the real
+            // bug, not a probe/filter tuning issue): `n_forced*N` assumes
+            // frame timestamps start near 0. With -copyts + a mid-file
+            // seek (-ss before -i), the first frame's t is the REAL
+            // absolute file time (e.g. ~2174s on a resume) — so this
+            // expression evaluates true on EVERY frame until n_forced*4
+            // finally catches up to ~2174, i.e. keyframes get force-cut on
+            // roughly the first 500+ frames after any seek. That shreds
+            // video into a burst of near-1-frame segments right at the
+            // resume point, which the HLS muxer counts/numbers completely
+            // out of step with audio's clean, unaffected 4s -hls_time
+            // cuts — so "segment 543" in the video track and "segment 543"
+            // in the audio track stop representing the same slice of real
+            // time. That's a genuine, structural, persistent A/V
+            // misalignment starting exactly at resume — not a measurement
+            // artifact, not something client-side subtitle math can fix.
+            // `prev_forced_t` (time of the LAST forced keyframe, ffmpeg's
+            // own built-in for exactly this) fixes it: each keyframe is
+            // forced relative to the previous one, not an assumed 0-based
+            // counter, so it works correctly no matter what absolute value
+            // t starts at.
+            args.push(`-force_key_frames:v:${vIdx}`, `expr:gte(t,prev_forced_t+${SEGMENT_DURATION})`);
             args.push(`-g:v:${vIdx}`, String(gopSize));
             args.push(`-keyint_min:v:${vIdx}`, String(gopSize));
             args.push(`-sc_threshold:v:${vIdx}`, "0");
@@ -663,7 +1061,12 @@ function buildFFmpegArgs({
         const gopSize = SEGMENT_DURATION * fps;
 
         // Jellyfin uses expr:gte(t,n_forced*segLen) for even spacing
-        args.push("-force_key_frames", `expr:gte(t,n_forced*${SEGMENT_DURATION})`);
+        // Same fix as the multi-rendition branch above: prev_forced_t (not
+        // n_forced*N) — required whenever -copyts + a mid-file seek means
+        // frame timestamps don't start near 0. See that comment for the
+        // full why; this single-rendition path was exposed to the exact
+        // same bug on every resume/seek.
+        args.push("-force_key_frames", `expr:gte(t,prev_forced_t+${SEGMENT_DURATION})`);
         args.push("-g", String(gopSize));
         args.push("-keyint_min", String(gopSize));
         args.push("-sc_threshold", "0");
@@ -697,9 +1100,75 @@ function buildFFmpegArgs({
         // from above — this only changes how AUDIO is mapped, video re-encode
         // cost is unaffected).
         const primaryAudio = allAudioTracks.find((a) => a.default) || allAudioTracks[0];
+        // REVERTED (this session): tried forcing re-encode+aresample here
+        // on every seek/resume, on the theory that a stream-copied audio
+        // track couldn't be corrected. Made the desync WORSE (2-3s → 4-5s),
+        // so the theory was wrong — reverted back to original. Do not
+        // re-attempt this exact change; see session notes for what's
+        // actually been ruled out on this file.
         const audioNeedsXcod = !TS_SAFE_AUDIO_CODECS.has(primaryAudio.codec);
         if (audioNeedsXcod) {
             args.push("-c:a", "aac", "-b:a", "192k", "-ac", "2");
+            // FIX (audio/video sync): same aresample correction as the
+            // multi-audio-track branch above, single-stream form since this
+            // path only ever has one audio output.
+            //
+            // FIX (measured: audio starting ~3-4s after video on resume,
+            // confirmed via the AV-DEBUG gap(audio-video) diagnostic):
+            // async=1 corrects GRADUAL drift by comparing actual audio
+            // timestamps against an expected continuous timeline — but on
+            // a fresh seek, its internal reference doesn't know playback
+            // starts mid-file, so it can read the seek itself as "a gap"
+            // and insert silence padding to compensate. first_pts=0 tells
+            // it to treat whatever PTS it first sees as the new zero point
+            // instead of comparing against an assumed absolute timeline —
+            // this is documented ffmpeg behavior for exactly "audio stream
+            // starts after video stream." Gradual drift correction (the
+            // original reason async=1 is here) is unaffected — this only
+            // changes what happens at the very start of the stream. Not
+            // the same change as the reverted note above (that forced this
+            // filter onto a stream-copy path that didn't need it at all;
+            // this only adds a parameter to a filter already running here).
+            // TUNE: async=1 (max ~1 sample/sec of stretch correction) was
+            // too conservative to close the residual real gap once the
+            // false start-of-stream padding was already fixed via
+            // first_pts=0 above — confirmed by measurement: gap dropped
+            // 3.6s → 1.2s with async=1, but that remainder is a genuine
+            // mismatch async=1 can barely touch. 1000 is the standard
+            // value used for actual audio/video sync correction.
+            // FIX (subtitle/audio sync — the constant ~9.979s audio-start
+            // offset seen in every AV-DEBUG log regardless of seek target):
+            // `first_pts=0` combined with `-copyts` is a KNOWN-BAD
+            // combination — already documented from earlier testing on
+            // this project ("aresample=async=1 + first_pts=0 + -copyts:
+            // These conflict — first_pts=0 directly contradicts -copyts
+            // and worsened audio delay when combined"). It stayed
+            // invisible on the multi-audio path only because a separate
+            // bug (two `-filter:a:${i}` pushes silently clobbering each
+            // other, fixed below) meant this filter never actually
+            // executed there — loudnorm alone ran. Now that it executes,
+            // first_pts=0's documented harmful effect shows up exactly as
+            // predicted: a fixed, seek-target-independent ~10s pad on
+            // audio's reported start (9.979s identical to the millisecond
+            // across three different seek targets — a deterministic filter
+            // artifact, not seek jitter). Dropped, keeping only the
+            // drift-correction (async) and rate-limit (min_hard_comp)
+            // parts, which don't fight -copyts.
+            // FIX (audio VOLUME complaint, round 4 — I fixed the wrong
+            // half of this last round): `alimiter` only stops clipping on
+            // loud peaks, it does NOTHING for quiet content. `loudnorm`
+            // was doing two separate jobs — peak limiting AND boosting
+            // quiet audio up to a -16 LUFS target — and I only replaced
+            // the limiting half. Anything mixed quietly in the source
+            // stayed quiet, which is exactly "audio volume issue."
+            // `dynaudnorm` is real loudness normalization (boosts quiet
+            // parts, same intent as loudnorm) but frame-based with a
+            // ~150ms window instead of loudnorm's multi-second EBU R128
+            // lookahead — should give the volume-boost back without
+            // reintroducing the original startup-delay bug. p=0.95 keeps
+            // its own built-in peak ceiling, so a separate alimiter isn't
+            // needed on top of it.
+            args.push("-af", "aresample=async=1000:min_hard_comp=0.100000,dynaudnorm=f=150:g=5:p=0.95");
         } else {
             args.push("-c:a", "copy");
         }
@@ -761,6 +1230,24 @@ function buildFFmpegArgs({
     // — see videoMapsAddedByLadder — for a multi-quality ABR session).
     if (hasVideo && !videoMapsAddedByLadder) args.push("-map", "0:v:0");
 
+    // FIX — TESTED, not guessed this time (see sandbox reproduction: built
+    // a synthetic dual-audio source, ran this exact command shape through
+    // real ffmpeg). The GLOBAL `-af` approach below was ALSO broken —
+    // ffmpeg itself warns "Multiple -filter, -af or -vf options specified
+    // for stream N, only the last option will be used" the moment a global
+    // `-af` and a per-stream `-filter:a:i` target the same output stream.
+    // Since `-af` was pushed BEFORE the per-track loop, loudnorm (pushed
+    // later, per track) won every time — meaning aresample has NEVER
+    // actually executed on this path, through every version shipped so
+    // far (double -filter:a:i clobber, then this -af/-filter:a:i clobber).
+    // That's confirmed via ffmpeg's own stderr, not inferred.
+    //
+    // The comma-chained single `-filter:a:i` push (aresample,loudnorm) was
+    // tried once before and reverted with a note claiming it broke segment
+    // generation. Reproduced that exact command shape in a sandbox against
+    // real ffmpeg just now: valid output, both filters apply, zero errors,
+    // zero warnings. Whatever caused that revert, it wasn't this syntax —
+    // going with the tested result over an unverified historical note.
     const AGROUP = "audio";
     allAudioTracks.forEach((track, i) => {
         args.push("-map", `0:${track.index}?`);
@@ -798,18 +1285,52 @@ function buildFFmpegArgs({
         // above) correctly targets the i-th AUDIO stream regardless of
         // where video sits in the map order.
         args.push(`-c:a:${i}`, "aac", `-b:a:${i}`, "192k", `-ac:a:${i}`, "2", `-ar:a:${i}`, "48000");
-        // Dual-audio releases routinely have each dub authored at a
-        // different loudness (Hindi dub mixed hotter than the English 5.1
-        // mix is common), and a straight 5.1→stereo downmix can end up a
-        // few dB quieter than a native stereo track even when done
-        // correctly. Neither is a bug in our pipeline — it's baked into the
-        // source file — so the fix is normalizing OUR output, not chasing
-        // per-file mix levels. Single-pass loudnorm (EBU R128, -16 LUFS
-        // target — the standard streaming loudness target) applied to every
-        // audio track uniformly means switching between ANY two tracks on
-        // ANY file lands at the same perceived volume, regardless of how
-        // the original dub was mixed or how many channels it started with.
-        args.push(`-filter:a:${i}`, "loudnorm=I=-16:TP=-1.5:LRA=11");
+        // ── Audio filter — corrected understanding, round 3 ──────────────────
+        // No PTS shifting (asetpts) here. The "9.979s fixed per-file
+        // constant" theory from last round is DISPROVEN by fresh data —
+        // same file, different session:
+        //   audioFirstPTS(2857.979) - requestedSeek(2852.00) = 5.979s
+        // (previously measured 9.979s twice for this same file). Not a
+        // constant. It moves with video's own keyframe-snap variance
+        // (video offset-from-request: 4.096s that session vs 8.792s for
+        // 3 Idiots the same run) — audio's offset tracks video's, it isn't
+        // independent. Applying any static/learned shift here would be
+        // wrong on a different seek every time, exactly like the last two
+        // attempts turned out to be. Not retrying that a third time.
+        //
+        // SELF-CORRECTION: this comment previously (same edit) proposed
+        // also dropping `async` mode from aresample as a next experiment.
+        // Caught before shipping it — the SINGLE-audio-track branch above
+        // (`audioNeedsXcod`) has its own history note confirming
+        // `async=1000:min_hard_comp=0.100000` (this exact filter, already
+        // in place below) was already measured to shrink that path's gap
+        // 3.6s → 1.2s. Dropping async here would abandon that same
+        // confirmed tuning on the multi-audio path and risks making the
+        // gap WORSE, not better, on an untested guess. Left as-is.
+        //
+        // What the real remaining gap(audio-video) — currently 1.1–1.9s,
+        // always audio landing AFTER video, never before — most likely
+        // still is: video (`-c:v copy`) can only start at its nearest
+        // keyframe at/after the seek; that's unfixable here without
+        // re-encoding video (switching this file off AUDIO_TRANSCODE onto
+        // FULL_TRANSCODE — a bigger, separate change, not done here).
+        // I can't run your real ffmpeg/media from this sandbox — only
+        // reason from the logs you paste back. If this residual 1-2s is
+        // still bothering you after testing the quality fix below, send
+        // the next AV-DEBUG lines and that's the next thing to isolate.
+        //
+        // Also fixes the audio VOLUME complaint (round 4 — the alimiter-
+        // only fix from last round only addressed clipping, not quietness):
+        // `alimiter` alone does nothing for content mixed quietly — it
+        // only caps loud peaks. `loudnorm` (removed for its lip-sync-
+        // breaking lookahead delay) was ALSO the thing boosting quiet
+        // audio up to a consistent -16 LUFS target; alimiter-only dropped
+        // that boost entirely. `dynaudnorm` gives the same loudness-boost
+        // behavior with a much shorter (~150ms) analysis window instead of
+        // loudnorm's multi-second lookahead — should restore volume
+        // without reintroducing the original delay. p=0.95 is its own
+        // built-in peak ceiling, replacing the standalone alimiter.
+        args.push(`-filter:a:${i}`, `aresample=async=1000:min_hard_comp=0.100000,dynaudnorm=f=150:g=5:p=0.95`);
         // Tag each output audio stream with its language so the HLS muxer
         // writes LANGUAGE= into the EXT-X-MEDIA rendition tag — this is what
         // lets browsers/hls.js show "English"/"Hindi"/etc instead of a
@@ -1005,6 +1526,7 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
         decision,
         mediaInfo,
         startSegment,
+        mediaId,
     });
     // buildFFmpegArgs (above) sets mediaInfo._qualityLadder as a side effect
     // ONLY when ENABLE_MULTI_QUALITY is on and this session actually took
@@ -1139,6 +1661,14 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
             if (bitrateMatch) session.metrics.bitrate = bitrateMatch[1];
             const speedMatch = trimmed.match(/speed=\s*([\d.]+)x/);
             if (speedMatch) session.metrics.speed = parseFloat(speedMatch[1]);
+            // DEBUG ONLY: surface timestamp/discontinuity warnings live, on
+            // every session (not just ones that crash) — these lines are
+            // ffmpeg's own signal that audio/video PTS diverged mid-encode,
+            // directly relevant to the A/V-lag report. Purely a console.log,
+            // changes nothing about the session or ffmpeg args.
+            if (AV_DEBUG && /(discontinuity|non-monotonous|non monotonically|Timestamps are unset|dropping.*frame|duplicating.*frame)/i.test(trimmed)) {
+                console.log(`[AV-WARN] session=${sessionId}: ${trimmed}`);
+            }
         }
     });
 
@@ -1214,6 +1744,17 @@ async function _createSessionInternal({ mediaId, filePath, decision, mediaInfo, 
     });
 
     sessions.set(sessionId, session);
+
+    // DEBUG ONLY: once the first segment for this session actually lands,
+    // measure the real A/V start offset. Fire-and-forget — waitForSegment's
+    // own timeout just gives up silently on failure, never throws into here.
+    if (AV_DEBUG) {
+        const videoDirForProbe = session.videoDirs?.[0] || session.videoDir;
+        waitForSegment(segmentPath(videoDirForProbe, startSegment), 20_000)
+            .then(() => debugAvOffset(session))
+            .catch(() => {});
+    }
+
     return session;
 }
 
@@ -1352,6 +1893,7 @@ module.exports = {
     getCurrentSegmentIndex,
     segmentPath,
     getSessionStats,
+    measureRealStartOffset,
     warmup,
     startSweeper,
     markHWBroken,

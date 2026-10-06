@@ -55,6 +55,7 @@ const {
     waitForSegment,
     getCurrentSegmentIndex,
     segmentPath: makeSegPath,
+    measureRealStartOffset,
     TEMP_DIR,
     SEGMENT_DURATION,
     SEGMENT_GAP_RESTART,
@@ -343,13 +344,58 @@ async function startHLSSession(req, res, fileObj, decision, mediaInfo) {
     const hlsUrl = `/stream/hls/${session.id}/${session.isMultiAudioPath ? "master.m3u8" : "index.m3u8"}`;
     res.setHeader("X-Stream-Decision", decision.decision);
     res.setHeader("X-Session-Id", session.id);
+
+    // FIX (reverted): was blocking here on measureRealStartOffset() to hand
+    // the client a ffprobe-measured raw seek position. Turned out to be the
+    // wrong fix (see PlayerPage.jsx's sessionOffset revert — that raw PTS
+    // is in the video pipeline's -copyts domain, not the subtitle domain),
+    // so blocking the response on it was pure added latency for nothing.
+    // debugAvOffset (fire-and-forget, called separately at session
+    // creation) still records the measurement for diagnostics/AV-PROBE
+    // logging without costing resume speed.
+
+    // FIX (subtitle timing wrong/missing on resume, only since seekSec-based
+    // auto-resume shipped): `startSeg` above is computed from THIS request's
+    // seekSec — but createSession() can return an EXISTING, REUSED session
+    // instead of a fresh one whenever the gap between the requested segment
+    // and the session's current playback position is small (see
+    // transcoderService.js's _createSessionInternal reuse logic — it
+    // `return`s the existing session object completely unchanged). That
+    // reused session's manifest/segment-0 still starts at whatever segment
+    // it was ORIGINALLY created with, which can be entirely different from
+    // `startSeg` (e.g. a session originally started at segment 0 covering
+    // the whole file gets reused for a later resume at segment 42 — the
+    // manifest's segment 0 is still file-time 0, not file-time 420s).
+    // Reporting the locally-computed `startSeg` here regardless told the
+    // client the manifest starts somewhere it doesn't, silently corrupting
+    // every downstream absolute-time computation (resume seek target,
+    // subtitle clock offset, seek bar) by exactly that gap for the entire
+    // session — this never mattered before seekSec-based resume existed
+    // because every request effectively asked for segment 0 anyway.
+    // `session.startSegment` is the session's own real, true origin
+    // regardless of whether it was just created or reused.
     return res.json({
         mode: "hls",
         sessionId: session.id,
         hlsUrl,
         decision: decision.decision,
-        startSegment: startSeg,
+        startSegment: session.startSegment,
         segmentDuration: SEGMENT_DURATION,
+        // The REAL measured landing position, when the blocking probe above
+        // succeeded in time — the client prefers this over startSegment*
+        // segmentDuration+startTimeOffset the instant it's present, so
+        // subtitle/seek-bar sync is correct from the very first frame
+        // instead of needing a later correction.
+        measuredStartOffset: session.measuredStartOffset ?? null,
+        // FIX: ffmpeg's real seek target is sourceStartOffset +
+        // startSegment*SEGMENT_DURATION (see transcoderService.js's
+        // buildFFmpegArgs), but this response never told the frontend
+        // about sourceStartOffset — only startSegment/segmentDuration.
+        // For any file with a non-zero container start_time (documented
+        // there as a real MKV-remux case), the frontend's own position
+        // math (subtitle clock offset, resume position, seek bar) was
+        // silently off by exactly that offset for the entire session.
+        startTimeOffset: mediaInfo?.startTimeOffset || 0,
         duration: mediaInfo?.duration || null,
         // Added: player top-bar title + correct history key
         title: fileObj.name || null,
@@ -745,12 +791,17 @@ async function startTranscode(req, res) {
             startSegment: startSeg,
         });
 
+        // FIX: same session-reuse mismatch as startHLSSession above —
+        // `session.startSegment` is the session's real origin, which can
+        // differ from `startSeg` (this request's own seekSec) whenever an
+        // existing session got reused instead of a fresh one being made.
         return res.json({
             sessionId: session.id,
             decision: session.decision,
             hlsUrl: `/stream/hls/${session.id}/${session.isMultiAudioPath ? "master.m3u8" : "index.m3u8"}`,
-            startSegment: startSeg,
+            startSegment: session.startSegment,
             segmentDuration: SEGMENT_DURATION,
+            startTimeOffset: mediaInfo?.startTimeOffset || 0,
             audioTracks: session.isMultiAudioPath ? buildAudioTrackList(mediaInfo) : [],
             qualities: session.isMultiQualityPath ? session.qualityLadder : [],
         });
@@ -783,7 +834,15 @@ function pingSessionHandler(req, res) {
         s.downloadPositionSec = Math.max(s.downloadPositionSec || 0, posSec);
     }
     s.touch();
-    return res.json({ ok: true, downloadPositionSec: s.downloadPositionSec });
+    // ADD (adaptive subtitle fine-tune): avGapSec is the REAL measured
+    // audio-vs-video start gap for this session (see transcoderService.js's
+    // debugAvOffset), once available a few seconds after session start.
+    // Riding the existing ping means no new endpoint/plumbing is needed —
+    // SubtitleRenderer can use the file's actual measured lag instead of a
+    // fixed guessed constant once this shows up. measuredStartOffset is no
+    // longer consumed by the client (see PlayerPage.jsx's sessionOffset
+    // revert) but is left here for diagnostics.
+    return res.json({ ok: true, downloadPositionSec: s.downloadPositionSec, measuredStartOffset: s.measuredStartOffset ?? null, avGapSec: s.avGapSec ?? null });
 }
 
 // ─── Stop session ─────────────────────────────────────────────────────────────

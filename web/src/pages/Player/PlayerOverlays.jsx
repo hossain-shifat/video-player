@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Sun, Volume2, VolumeX, Volume1, Zap, Lock, Headphones, Moon, Wifi, WifiOff, RotateCcw, Minus, Plus, Pencil, SquarePen } from "lucide-react";
 import { MdFastForward as FastForward, MdFastRewind as Rewind } from "react-icons/md";
 import { usePlayerState } from "./UsePlayerState";
+import { formatTime } from "./PlayerConstants";
 
 // ─── Hook: useOverlay ────────────────────────────────────────────────────────
 
@@ -94,6 +95,60 @@ function SeekZone({ visible, direction, seconds }) {
         </div>
     );
 }
+
+// mm:ss with BOTH parts always zero-padded to 2 digits (e.g. "00:06", "22:54")
+// — deliberately separate from playerConstants.js's formatTime(), which
+// doesn't zero-pad minutes (returns "5:06" not "05:06") and is used
+// elsewhere for the visible time labels; this matches the reference design
+// for THIS overlay specifically.
+function fmtMMSS(totalSeconds) {
+    const s = Math.max(0, Math.round(totalSeconds || 0));
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+// ─── Seek time overlay (drag/swipe-to-seek only) ─────────────────────────────
+// Big absolute target time + a signed delta underneath in brackets, matching
+// the reference design. Double-tap ±10s seeking keeps using SeekZone above,
+// unchanged — this is ONLY for the horizontal-drag seek gesture in
+// PlayerGestures.jsx (the one that sets seekTarget).
+function SeekTimeOverlay({ visible, targetSeconds, deltaSeconds }) {
+    const sign = deltaSeconds >= 0 ? "+" : "-";
+    return (
+        <div
+            style={{
+                position: "absolute",
+                top: "38%",
+                left: "50%",
+                zIndex: 40,
+                pointerEvents: "none",
+                textAlign: "center",
+                transform: `translate(-50%, -50%) scale(${visible ? 1 : 0.92})`,
+                opacity: visible ? 1 : 0,
+                transition: "opacity 0.15s ease, transform 0.15s ease",
+            }}>
+            {/* FIX: was fmtMMSS(targetSeconds), which never calculates hours
+                — for anything past 99:59 it just kept counting raw minutes
+                (e.g. "110:00" for 1:50:00). formatTime already correctly
+                does h:mm:ss (or m:ss under an hour) and is the same
+                formatter used everywhere else in the player (SeekBar,
+                controls) — same format, single source of truth. */}
+            <div style={{ color: "#fff", fontSize: 56, fontWeight: 800, lineHeight: 1, textShadow: "0 2px 10px rgba(0,0,0,0.75)" }}>{formatTime(targetSeconds)}</div>
+            <div style={{ color: "#fff", fontSize: 26, fontWeight: 700, marginTop: 8, textShadow: "0 2px 8px rgba(0,0,0,0.75)" }}>
+                [{sign}
+                {fmtMMSS(Math.abs(deltaSeconds))}]
+            </div>
+        </div>
+    );
+}
+
+// SlideSeekTrack removed — was a second, separate mini-scrubber shown only
+// during drag-seek, duplicating the always-visible default SeekBar. The
+// default SeekBar already updates live during drag-seek (it reads
+// state.currentTime, which PlayerGestures.jsx already updates every frame),
+// so this extra overlay track was redundant. Removed per request; the big
+// time+delta readout above (SeekTimeOverlay) is the only seek overlay now.
 
 // ─── Speed boost badge ────────────────────────────────────────────────────────
 
@@ -387,7 +442,8 @@ export function ErrorOverlay({ error, onRetry }) {
 // ─── Main PlayerOverlays ──────────────────────────────────────────────────────
 
 export default function PlayerOverlays({ overlayState, overlayVis }) {
-    const { brightness = 1, volume = 1, muted = false, seekDir = "forward", seekSec = 10, audioTrack = "", speed = 2 } = overlayState || {};
+    const { state } = usePlayerState();
+    const { brightness = 1, volume = 1, muted = false, seekDir = "forward", seekSec = 10, seekTarget, audioTrack = "", speed = 2 } = overlayState || {};
 
     const { showBrightness, showVolume, showSeek, showSpeedBoost, showLock, showAudioTrack } = overlayVis || {};
 
@@ -395,6 +451,11 @@ export default function PlayerOverlays({ overlayState, overlayVis }) {
     const brightnessPercent = Math.round(brightnessNorm * 100);
     const volumePct = muted ? 0 : volume;
     const volumePercent = muted ? 0 : Math.round(volume * 100);
+
+    // Drag/swipe-to-seek sets seekTarget (the absolute destination time);
+    // double-tap ±10s and keyboard arrow seeking never do — that's the
+    // existing, already-correct discriminator between the two gestures.
+    const isDragSeek = seekTarget !== undefined && seekDir !== "cancel";
 
     return (
         <>
@@ -406,9 +467,17 @@ export default function PlayerOverlays({ overlayState, overlayVis }) {
                 LEFT (opposite side from the swipe zone, per spec). */}
             <BarPill visible={showVolume} side="left" iconNode={<VolumeIcon volume={volume} muted={muted} />} pct={volumePct} label={`${volumePercent}%`} />
 
-            {/* Seek zones */}
-            <SeekZone visible={showSeek && seekDir === "backward"} direction="backward" seconds={seekSec} />
-            <SeekZone visible={showSeek && seekDir === "forward"} direction="forward" seconds={seekSec} />
+            {/* Seek — drag/swipe gets the big time+delta readout (per the
+                reference design); double-tap ±10s keeps its own icon zones,
+                completely unchanged. */}
+            {isDragSeek ? (
+                <SeekTimeOverlay visible={showSeek} targetSeconds={seekTarget} deltaSeconds={seekDir === "forward" ? seekSec : -seekSec} />
+            ) : (
+                <>
+                    <SeekZone visible={showSeek && seekDir === "backward"} direction="backward" seconds={seekSec} />
+                    <SeekZone visible={showSeek && seekDir === "forward"} direction="forward" seconds={seekSec} />
+                </>
+            )}
 
             {/* Speed boost */}
             <SpeedBoostSlider visible={showSpeedBoost} speed={speed} />

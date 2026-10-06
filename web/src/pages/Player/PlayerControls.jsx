@@ -75,6 +75,7 @@ import VideoSidebar, {
     AudioFxPanel,
     SleepTimerPanel,
     CustomiseItemsPanel,
+    MoreOptionsPanel,
 } from "./VideoSidebar";
 // FIX: these are plain consts/a function, not components — importing them
 // from VideoSidebar.jsx (alongside its component exports) was what broke
@@ -695,7 +696,8 @@ function QuickIconRow({ videoRef, containerRef, openMenu, toggleMenu, controlsPh
         },
     };
     const order = state.quickIconOrder;
-    const visibleKeys = expanded ? Object.keys(ALL_QUICK_ITEMS) : order.slice(0, 5);
+    const hidden = state.hiddenQuickKeys || [];
+    const visibleKeys = (expanded ? Object.keys(ALL_QUICK_ITEMS) : order.slice(0, 5)).filter((k) => !hidden.includes(k));
     return (
         <div
             ref={scrollRef}
@@ -1189,18 +1191,25 @@ export default function PlayerControls({
                             </div>
 
                             {/* ── 5. OVERFLOW (3-dot) menu ──────────────────────────────────
-                            Opens a small <MenuShell> with placeholder rows (Cast/
-                            Share/Details). Add real rows here as features land —
-                            just add more <DisabledRow>/<MenuItem> children below. */}
+                            Opens <MoreOptionsPanel> (VideoSidebar.jsx) — the
+                            MX-Player-style action grid + Video Display/Shortcuts
+                            toggles + shortcuts checklist. Only "Playing Queue"
+                            and "Aspect Ratio" wire to real existing features
+                            (playlist panel / aspect ring); see the panel's own
+                            comment in VideoSidebar.jsx for full scope notes. */}
                             <div style={{ position: "relative" }}>
                                 <button onClick={() => toggleMenu("overflow")} className="flux-icon-btn p-2" aria-label="More options">
                                     <MoreVertical size={20} strokeWidth={2} /> {/* iconTiny */}
                                 </button>
-                                <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={openMenu === "overflow"} onClose={closeMenu} title="More" align="left">
-                                    <DisabledRow label="Cast" />
-                                    <DisabledRow label="Share" />
-                                    <DisabledRow label="Details" />
-                                </MenuShell>
+                                <MoreOptionsPanel
+                                    open={openMenu === "overflow"}
+                                    onClose={closeMenu}
+                                    isMobile={isMobile}
+                                    controlsPhase={controlsPhase}
+                                    mediaId={mediaId}
+                                    mediaInfo={mediaInfo}
+                                    onOpenPlaylist={() => toggleMenu("playlist")}
+                                />
                             </div>
                         </div>
                     </div>
@@ -1210,7 +1219,7 @@ export default function PlayerControls({
                     same fade-out lifecycle) instead of as a separate sibling.
                     Gap to the header row above is the gap-3 (12px) on the
                     parent flex-col — adjust that single class to retune. */}
-                    {isMobile && (
+                    {isMobile && state.shortcutsEnabled && (
                         <QuickIconRow
                             videoRef={videoRef}
                             containerRef={containerRef}
@@ -1254,7 +1263,7 @@ export default function PlayerControls({
                         <SeekBar videoRef={videoRef} sessionTimeOffsetRef={sessionTimeOffsetRef} />
                     </div>
 
-                    <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`} style={{ position: isMobile ? "relative" : "static" }}>
+                    <div className={`flex items-center mt-1 ${isMobile ? "justify-between" : "gap-1"}`} style={{ position: "relative" }}>
                         {/* ── LOCK button (mobile, far-left) ──────────────────────────── */}
                         {isMobile && (
                             <button
@@ -1275,44 +1284,41 @@ export default function PlayerControls({
                         (movie parts → next movie; episode → next episode →
                         next season → next series; previous = last watched
                         from history). Disabled (dimmed) when there's nothing
-                        to jump to. Mobile-only — desktop has no equivalent
-                        cluster under the seek bar anymore (removed per
-                        request, along with the old big center-of-video
-                        cluster above). Stays pinned to the exact horizontal
-                        center of the screen (position:absolute +
-                        translateX(-50%)) so it stays centered regardless of
-                        how wide the lock button or the right-side icon
-                        cluster happen to be. */}
-                        {isMobile && (
-                            <div className="flex items-center gap-0.5" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
-                                <button
-                                    type="button"
-                                    onClick={() => goToMedia(nav.prevMediaId)}
-                                    disabled={!nav.prevMediaId}
-                                    className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
-                                    style={{ opacity: nav.prevMediaId ? 1 : 0.35 }}
-                                    aria-label="Play previous">
-                                    <SkipBack size={iconSub} strokeWidth={1.8} />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => actions.setPlaying(!state.playing)}
-                                    className="flux-icon-btn p-3"
-                                    style={{ color: "#fff" }}
-                                    aria-label={state.playing ? "Pause" : "Play"}>
-                                    {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => goToMedia(nav.nextMediaId)}
-                                    disabled={!nav.nextMediaId}
-                                    className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
-                                    style={{ opacity: nav.nextMediaId ? 1 : 0.35 }}
-                                    aria-label="Play next">
-                                    <SkipForward size={iconSub} strokeWidth={1.8} />
-                                </button>
-                            </div>
-                        )}
+                        to jump to.
+                        FIX: was mobile-only (`{isMobile && (...)}`) — desktop
+                        showed no play/pause/skip controls at all. Now renders
+                        on both; parent row's position:relative (set
+                        unconditionally above) keeps this absolutely-centered
+                        cluster correctly centered inside the bottom bar on
+                        desktop too, not just mobile. */}
+                        <div className="flex items-center gap-0.5" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}>
+                            <button
+                                type="button"
+                                onClick={() => goToMedia(nav.prevMediaId)}
+                                disabled={!nav.prevMediaId}
+                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                style={{ opacity: nav.prevMediaId ? 1 : 0.35 }}
+                                aria-label="Play previous">
+                                <SkipBack size={iconSub} strokeWidth={1.8} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => actions.setPlaying(!state.playing)}
+                                className="flux-icon-btn p-3"
+                                style={{ color: "#fff" }}
+                                aria-label={state.playing ? "Pause" : "Play"}>
+                                {state.playing ? <Pause size={iconMain} strokeWidth={2} fill="currentColor" /> : <Play size={iconMain} strokeWidth={2} fill="currentColor" />}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => goToMedia(nav.nextMediaId)}
+                                disabled={!nav.nextMediaId}
+                                className="flex flex-col items-center gap-0.5 flux-icon-btn p-3"
+                                style={{ opacity: nav.nextMediaId ? 1 : 0.35 }}
+                                aria-label="Play next">
+                                <SkipForward size={iconSub} strokeWidth={1.8} />
+                            </button>
+                        </div>
 
                         {/* ── Desktop-only volume, sits where the playback cluster
                         used to live before the mobile centering change above.

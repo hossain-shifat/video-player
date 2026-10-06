@@ -45,7 +45,7 @@ function MenuItem({ icon: Icon, label, onClick, active, danger }) {
                 size={14}
                 strokeWidth={1.8}
                 className={`shrink-0 ${danger ? "text-error/70" : active ? "text-primary" : "text-white/76"}`}
-                fill={active && Icon.name === "Heart" ? "currentColor" : "none"}
+                fill={active && Icon === Heart ? "currentColor" : "none"}
             />
             {label}
         </button>

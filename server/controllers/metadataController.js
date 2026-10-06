@@ -2,8 +2,9 @@
 
 const { readFolders } = require("./libraryController");
 const { getAllCached, findById } = require("../utils/mediaCache");
-const { getMetadata, getCached, invalidate, invalidateAll } = require("../utils/metadataStore");
+const { getMetadata, invalidate, invalidateAll, getCachedSeason, setCachedSeason } = require("../utils/metadataStore");
 const { parseFilename } = require("../utils/nameParser");
+const { getSeasonDetails } = require("../utils/tmdb");
 const { getMediaInfo: _getMediaInfoRaw, invalidate: invalidateMediaInfo } = require("../utils/mediaInfoStore");
 
 // ── NEW: mediaInfo (ffprobe) failure must never take down metadata ─────────
@@ -100,4 +101,42 @@ async function getAllEnriched(req, res) {
     }
 }
 
-module.exports = { getOne, refreshOne, refreshAll, parseDebug, getAllEnriched };
+// ── NEW (metadata upgrade plan, feature 10 — lazy season details) ──────────
+// GET /api/metadata/tv/:tmdbId/season/:seasonNumber
+//
+// grouper.js already eagerly fetches + persistently caches EVERY season for
+// every series/anime group at scan time (getCachedSeason/setCachedSeason) —
+// that is a standing constraint (grouper.js is never modified) and is left
+// exactly as-is. This endpoint exists ALONGSIDE that, for the frontend to
+// explicitly (re)request one season's detail on demand — e.g. a season TMDB
+// didn't have data for yet, or to refresh a single season without a full
+// library refresh-all. It reuses the exact same 7-day persistent season
+// cache grouper.js already writes to, so the two never fight or duplicate
+// TMDB calls for the same tmdbId+season.
+async function getSeasonLazy(req, res) {
+    try {
+        const tmdbId = parseInt(req.params.tmdbId, 10);
+        const seasonNumber = parseInt(req.params.seasonNumber, 10);
+
+        if (!Number.isInteger(tmdbId) || tmdbId <= 0) {
+            return res.status(400).json({ error: "Invalid tmdbId" });
+        }
+        if (!Number.isInteger(seasonNumber) || seasonNumber < 0) {
+            return res.status(400).json({ error: "Invalid season number" });
+        }
+
+        let season = await getCachedSeason(tmdbId, seasonNumber);
+        if (!season) {
+            season = await getSeasonDetails(tmdbId, seasonNumber);
+            if (season) await setCachedSeason(tmdbId, seasonNumber, season);
+        }
+
+        if (!season) return res.status(404).json({ error: "Season not found" });
+        return res.json({ season });
+    } catch (err) {
+        console.error("[Metadata] getSeasonLazy error:", err);
+        return res.status(500).json({ error: "Failed to get season details" });
+    }
+}
+
+module.exports = { getOne, refreshOne, refreshAll, parseDebug, getAllEnriched, getSeasonLazy };

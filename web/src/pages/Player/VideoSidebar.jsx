@@ -56,6 +56,29 @@ import {
     Tv,
     Square,
     FolderOpen,
+    ListVideo,
+    Bookmark,
+    Scissors,
+    Heart,
+    ListPlus,
+    Info,
+    Share2,
+    Globe,
+    Lightbulb,
+    MoreHorizontal,
+    FlipHorizontal,
+    FlipVertical,
+    Sun,
+    Volume2,
+    Rewind,
+    FastForward,
+    Pause,
+    ZoomIn,
+    ArrowUpDown,
+    Clock,
+    HardDrive,
+    Link2,
+    RotateCcw,
 } from "lucide-react";
 import { usePlayerState } from "./UsePlayerState";
 import { formatTime, DECODER_LABELS, ALL_QUICK_ITEMS, QUICK_KEYS_WITH_SIDEBAR } from "./playerConstants";
@@ -63,6 +86,7 @@ import { api } from "../../api/client";
 import { getOrCreateClientId } from "../../api/stream";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { getLiveChannels } from "../../api/live";
+import { shareMedia, shareStream, getStreamUrl, copyToClipboard } from "../../utils/shareMedia";
 
 // Backend base URL — used by the mediainfo.json fallback fetch (see
 // SubtitlePicker) when a live track's language name is missing.
@@ -290,7 +314,7 @@ function langAbbr(name) {
 }
 
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "right", side, title: menuTitle }) {
+const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "right", side, title: menuTitle, width }) {
     const ref = useRef(null);
     useEffect(() => {
         if (!open) return;
@@ -313,7 +337,7 @@ const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "ri
     // existing default (no `side` passed = no change at all).
     const sideStyle = side === "bottom" ? { top: "100%", bottom: "auto", marginTop: 8 } : side === "top" ? { bottom: "100%", top: "auto", marginBottom: 8 } : {};
     return (
-        <div ref={ref} className={`flux-popup ${align === "left" ? "align-left" : ""}`} style={{ zIndex: 60, ...sideStyle }}>
+        <div ref={ref} className={`flux-popup ${align === "left" ? "align-left" : ""}`} style={{ zIndex: 60, ...(width ? { width, maxWidth: "min(92vw, " + width + "px)" } : {}), ...sideStyle }}>
             {menuTitle && <div className="flux-popup-header">{menuTitle}</div>}
             {children}
         </div>
@@ -334,7 +358,7 @@ function PopupItem({ active, onClick, children, icon: Icon }) {
 // Mobile: VideoSidebar (right in landscape / bottom in portrait, 45% size).
 // Desktop: old floating PopupMenu. One call site per picker, body unchanged.
 
-export function MenuShell({ isMobile, open, onClose, title, children, align, side }) {
+export function MenuShell({ isMobile, open, onClose, title, children, align, side, width }) {
     if (isMobile) {
         return (
             <VideoSidebar open={open} onClose={onClose} title={title}>
@@ -343,7 +367,7 @@ export function MenuShell({ isMobile, open, onClose, title, children, align, sid
         );
     }
     return (
-        <PopupMenu open={open} onClose={onClose} title={title} align={align} side={side}>
+        <PopupMenu open={open} onClose={onClose} title={title} align={align} side={side} width={width}>
             {children}
         </PopupMenu>
     );
@@ -1447,14 +1471,37 @@ const SLIDER_CSS = `
 
 // Custom slider — real filled-track + styled thumb, instead of a bare
 // unstyled <input type="range">.
-function ProSlider({ label, value, min, max, step, onChange, format, disabled }) {
+function ProSlider({ label, value, min, max, step, onChange, format, disabled, onReset }) {
     const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
     return (
         <div style={{ opacity: disabled ? 0.45 : 1 }}>
             {label && (
-                <label style={fieldLabelStyle}>
-                    {label} — {format ? format(value) : value}
-                </label>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <label style={{ ...fieldLabelStyle, marginBottom: 0 }}>
+                        {label} — {format ? format(value) : value}
+                    </label>
+                    {onReset && (
+                        <button
+                            type="button"
+                            onClick={onReset}
+                            aria-label={`Reset ${label} to default`}
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 3,
+                                padding: "2px 7px",
+                                borderRadius: 6,
+                                border: "none",
+                                background: "rgba(255,255,255,0.08)",
+                                color: "rgba(255,255,255,0.6)",
+                                fontSize: 10.5,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                            }}>
+                            <RotateCcw size={10} /> Reset
+                        </button>
+                    )}
+                </div>
             )}
             <input
                 type="range"
@@ -1551,9 +1598,38 @@ function Dropdown({ label, value, options, onChange }) {
 // Self-contained — renders its OWN back-arrow header instead of touching
 // MenuShell/VideoSidebar's shared header, so this doesn't couple onto (or
 // risk breaking) every other picker that uses the same shell.
+// Matches UsePlayerState.jsx's initialState defaults exactly — used by each
+// field's own per-row onReset (bottom Reset-to-Defaults button removed).
+const SUBTITLE_STYLE_DEFAULTS = {
+    subtitleDelay: 0,
+    subtitleFontSize: 20,
+    subtitleColor: "#ffffff",
+    subtitleBgOpacity: 0.72,
+    subtitleSpeed: 100,
+    subtitleAlignment: "center",
+    subtitleBottomMargin: 40, // recalibrated: 0 = bottom edge, default resting position is 40px up from it
+    subtitleBackgroundEnabled: false,
+    subtitleBackgroundColor: "#000000",
+    subtitleFitToVideo: false,
+    subtitleFont: "default",
+    subtitleScale: 100,
+    subtitleBold: true,
+    subtitleBorderEnabled: false,
+    subtitleBorderColor: "#000000",
+    subtitleBorderWidth: 50,
+    subtitleImproveStroke: true,
+    subtitleShadow: true,
+    subtitleFadeOut: true,
+    subtitleImproveSSA: false,
+    subtitleImproveComplexScripts: true,
+    subtitleIgnoreSSAFont: false,
+    subtitleIgnoreBrokenSSAFont: false,
+    subtitlePanelMode: false,
+};
+
 function SubtitleCustomizationBody() {
     const { state, actions } = usePlayerState();
-    const [openSection, setOpenSection] = useState({ layout: true, text: true, advanced: true });
+    const [openSection, setOpenSection] = useState({ layout: true, text: true, advanced: false });
     const toggleSection = (key) => setOpenSection((s) => ({ ...s, [key]: !s[key] }));
     const setField = (patch) => actions.setSubtitleCustom(patch);
 
@@ -1577,7 +1653,16 @@ function SubtitleCustomizationBody() {
                             { value: "right", label: "Right" },
                         ]}
                     />
-                    <ProSlider label="Bottom margins" value={state.subtitleBottomMargin} min={0} max={150} step={2} format={(v) => `${v}px`} onChange={(v) => setField({ subtitleBottomMargin: v })} />
+                    <ProSlider
+                        label="Bottom margins"
+                        value={state.subtitleBottomMargin}
+                        min={0}
+                        max={200}
+                        step={2}
+                        format={(v) => `${v}px`}
+                        onChange={(v) => setField({ subtitleBottomMargin: v })}
+                        onReset={() => setField({ subtitleBottomMargin: SUBTITLE_STYLE_DEFAULTS.subtitleBottomMargin })}
+                    />
                     {/* Reuses the same background fields as Text's "Background Color" —
                         one background target, exposed in both places to match the
                         reference layout. */}
@@ -1707,7 +1792,11 @@ export function SubtitlePicker({ open, onClose, subtitles, isMobile, controlsPha
     // nothing durable to restore for that case. This only restores the
     // last BACKEND-provided track (embedded/external/downloaded), which do
     // have stable URLs.
-    const subsKey = subtitles.map((s) => s.url).join("|");
+    const subsKey = subtitles
+        .map((s) => s.url)
+        .slice()
+        .sort()
+        .join("|");
     const autoSelectedRef = useRef(false);
     useEffect(() => {
         autoSelectedRef.current = false;
@@ -2645,5 +2734,954 @@ export function CustomiseItemsPanel({ open, onClose, isMobile, controlsPhase }) 
                 })}
             </div>
         </MenuShell>
+    );
+}
+
+// ─── More Options panel (3-dot overflow icon) ────────────────────────────────
+// Matches the MX-Player reference screenshots: a 4-col action grid up top,
+// then two on/off rows ("Video Display" / "Shortcuts"), where "Shortcuts"
+// expands into a 2-col checklist of quick-item toggles.
+//
+// REAL, working wiring:
+//  - Playing Queue    → opens the existing PlaylistPanel (via onOpenPlaylist,
+//                        since the nav/goToMedia logic it needs lives in
+//                        PlayerControls.jsx, not here).
+//  - Aspect Ratio      → actions.cycleAspectRatio() (same reducer action the
+//                        dedicated aspect button uses).
+//  - Display Settings  → opens the existing DecoderModePanel (own local
+//                        instance, defined earlier in this file).
+//  - Bookmark          → persists per-media bookmark flag to localStorage.
+//  - Favourite         → persists per-media favourite flag to localStorage.
+//  - Information       → fetches GET /api/mediainfo (mediaInfoController.js
+//                        / mediaInfoStore.js) and shows this file's real
+//                        ffprobe-derived info (duration/size/video/audio/
+//                        subtitle tracks) plus season/episode from mediaInfo.
+//  - Share             → shareMedia() from shareMedia.js — shares the
+//                        current page URL (native share sheet, else
+//                        clipboard copy on non-secure http:// LAN origins).
+//  - Network Stream    → shareStream() from shareMedia.js — resolves and
+//                        shares the actual playable .m3u8/stream link.
+//  - Tutorial          → fullscreen gesture-tutorial overlay (matches the
+//                        reference screenshots exactly) — pauses playback
+//                        on open, closes this panel, and auto-resumes
+//                        playback when the overlay is closed OR completed.
+//  - More              → opens the existing CustomiseItemsPanel (own local
+//                        instance) to reorder quick-row icons.
+//  - Shortcuts toggle   → REAL: state.shortcutsEnabled — off hides the
+//                        entire quick icon row (QuickIconRow in
+//                        PlayerControls.jsx), default ON.
+//  - Shortcuts checklist → REAL: toggles state.hiddenQuickKeys, which
+//                        QuickIconRow (PlayerControls.jsx) filters out of
+//                        the quick icon row individually (only relevant
+//                        while the Shortcuts toggle above is on).
+//
+// Honestly-labeled placeholders (show a "Coming soon" toast instead of
+// silently doing nothing — no backend feature exists yet for these):
+// Cut, Add To Playlist.
+const MORE_GRID_ITEMS = [
+    { key: "queue", label: "Playing Queue", icon: ListVideo },
+    { key: "aspect", label: "Aspect Ratio", icon: Maximize2 },
+    { key: "display", label: "Display Settings", icon: Settings },
+    { key: "bookmark", label: "Bookmark", icon: Bookmark },
+    { key: "cut", label: "Cut", icon: Scissors },
+    { key: "favourite", label: "Favourite", icon: Heart },
+    { key: "addPlaylist", label: "Add To Playlist", icon: ListPlus },
+    { key: "info", label: "Information", icon: Info },
+    { key: "share", label: "Share", icon: Share2 },
+    { key: "network", label: "Network Stream", icon: Globe },
+    { key: "tutorial", label: "Tutorial", icon: Lightbulb },
+    { key: "more", label: "More", icon: MoreHorizontal },
+];
+
+// Extra checklist-only entries the reference shows that don't exist as real
+// ALL_QUICK_ITEMS keys yet (mirror/vertical-flip aren't implemented video
+// transforms anywhere in this app) — kept local to this panel, not merged
+// into playerConstants.js, so nothing outside this file depends on them.
+const EXTRA_SHORTCUT_ITEMS = {
+    mirror: { label: "Mirror Mode", icon: FlipHorizontal },
+    verticalFlip: { label: "Vertical Flip", icon: FlipVertical },
+};
+const SHORTCUT_ITEM_MAP = { ...ALL_QUICK_ITEMS, ...EXTRA_SHORTCUT_ITEMS };
+
+// Two-column row order, matching the reference screenshots exactly
+// (labels come straight from ALL_QUICK_ITEMS in playerConstants.js, so
+// wording stays in sync with the actual quick-icon row automatically).
+const SHORTCUT_ROWS = [
+    ["rotation", "speed"],
+    ["bgPlay", "loop"],
+    ["mute", "shuffle"],
+    ["eq", "audioFx"],
+    ["sleepTimer", "abRepeat"],
+    ["nightMode", "customise"],
+    ["screenshot", "mirror"],
+    ["verticalFlip", null],
+];
+
+// localStorage-backed bookmark/favourite sets — self-contained, no backend
+// route needed, survives reloads. Guarded with try/catch since some
+// browsers/privacy modes can throw on localStorage access.
+const BOOKMARK_KEY = "flux_bookmarks";
+const FAVOURITE_KEY = "flux_favourites";
+function readIdSet(key) {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+        return new Set();
+    }
+}
+function writeIdSet(key, set) {
+    try {
+        localStorage.setItem(key, JSON.stringify([...set]));
+    } catch {
+        /* ignore — non-fatal, just won't persist this session */
+    }
+}
+
+// Same round pill + sliding-knob toggle used elsewhere in this file (e.g.
+// the "Show active only" row in LiveChannelsPanel above) — kept as its own
+// small local component here rather than reaching across files for it.
+function ToggleRow({ label, checked, onClick }) {
+    return (
+        <div className="flex items-center justify-between" style={{ padding: "12px 16px" }}>
+            <span style={{ color: "#fff", fontSize: 14.5 }}>{label}</span>
+            <button
+                onClick={onClick}
+                role="switch"
+                aria-checked={checked}
+                style={{
+                    width: 44,
+                    height: 26,
+                    borderRadius: 999,
+                    border: "none",
+                    position: "relative",
+                    background: checked ? "var(--color-primary)" : "rgba(255,255,255,0.2)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    transition: "background 0.15s",
+                }}>
+                <span
+                    style={{
+                        position: "absolute",
+                        top: 3,
+                        left: checked ? 21 : 3,
+                        width: 20,
+                        height: 20,
+                        borderRadius: "50%",
+                        background: "#fff",
+                        transition: "left 0.15s",
+                    }}
+                />
+            </button>
+        </div>
+    );
+}
+
+// Checkbox + icon + label row for the Shortcuts checklist grid cells.
+function ShortcutCheckItem({ item, checked, onClick }) {
+    if (!item) return <div />;
+    const Icon = item.icon;
+    return (
+        <button
+            onClick={onClick}
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "9px 8px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                WebkitTapHighlightColor: "transparent",
+            }}>
+            <span
+                style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 4,
+                    border: `2px solid ${checked ? "var(--color-primary)" : "rgba(255,255,255,0.5)"}`,
+                    background: checked ? "var(--color-primary)" : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                }}>
+                {checked && <Check size={12} color="#fff" strokeWidth={3} />}
+            </span>
+            <Icon size={15} style={{ opacity: 0.75, flexShrink: 0 }} color="#fff" />
+            <span style={{ color: "#fff", fontSize: 13.5, lineHeight: 1.25 }}>{item.label}</span>
+        </button>
+    );
+}
+
+// Built-in gesture cheat sheet for the "Tutorial" grid button — static
+// content, no backend needed.
+// Small gesture-tile used across the tutorial slides — icon in a circle +
+// bold gesture name + blue action label, matching the reference screenshots.
+function GestureTile({ icon: Icon, gesture, action }) {
+    return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+            <span
+                style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: "50%",
+                    background: "rgba(0,0,0,0.42)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                }}>
+                <Icon size={24} color="#fff" strokeWidth={1.8} />
+            </span>
+            <span style={{ color: "#fff", fontSize: 13, fontWeight: 600, textAlign: "center", lineHeight: 1.25 }}>{gesture}</span>
+            <span style={{ color: "var(--color-primary)", fontSize: 12.5, textAlign: "center", lineHeight: 1.25 }}>{action}</span>
+        </div>
+    );
+}
+
+// 4-slide gesture cheat sheet for the "Tutorial" grid button — content and
+// slide order match the reference screenshots exactly:
+//  1. Double-tap zones (rewind / play-pause / fast-forward)
+//  2. Vertical swipe zones (brightness / speed / volume)
+//  3. Pinch-zoom + long-press speed slider
+//  4. Subtitle controls (move / swipe / text size)
+const TUTORIAL_SLIDES = [
+    {
+        tiles: [
+            { icon: Rewind, gesture: "Double tap the left", action: "Rewind 10s" },
+            { icon: Pause, gesture: "Double tap the middle", action: "Play/Pause" },
+            { icon: FastForward, gesture: "Double tap the right", action: "Fast forward 10s" },
+        ],
+    },
+    {
+        tiles: [
+            { icon: Sun, gesture: "Slide up/down the Left Half", action: "Brightness" },
+            { icon: Gauge, gesture: "Slide up/down with 2 Fingers", action: "Playback Speed" },
+            { icon: Volume2, gesture: "Slide up/down the Right Half", action: "Volume" },
+        ],
+    },
+    {
+        tiles: [
+            { icon: ZoomIn, gesture: "Pinch & Drag with 2 Fingers", action: "Zoom in/out" },
+            { icon: Gauge, gesture: "Long press and slide to adjust speed", action: "Speed control" },
+        ],
+    },
+    {
+        tiles: [
+            { icon: ArrowUpDown, gesture: "Move up/down", action: "Reposition subtitle" },
+            { icon: Subtitles, gesture: "Swipe Subtitle", action: "Adjust delay" },
+            { icon: Maximize2, gesture: "Increase Text Size", action: "Pinch on subtitle" },
+        ],
+    },
+];
+
+// Fullscreen gesture tutorial — matches the reference screenshots: dimmed
+// video background, 2-3 gesture tiles per slide, dot pagination, a small
+// outlined "Close" button top-right on every slide except the last, where
+// it's replaced by a full-width "Got it" button instead.
+//
+// Portaled to document.fullscreenElement || document.body for the same
+// reason VideoSidebar's own drawer is (see that component's comment) —
+// position:fixed gets trapped inside whatever subtree is the actual
+// Fullscreen API element, so a portal straight to document.body can render
+// invisibly behind the real fullscreen video on mobile.
+//
+// onClose is called both by the "Close" button and by completing the last
+// slide's "Got it" — the caller (MoreOptionsPanel) resumes playback either
+// way, since "closing OR completing" should auto-play per spec.
+function TutorialOverlay({ onClose }) {
+    const [step, setStep] = useState(0);
+    const [direction, setDirection] = useState(1); // 1 = advancing (slide in from right), -1 = going back (from left)
+    const isLast = step === TUTORIAL_SLIDES.length - 1;
+    const isFirst = step === 0;
+    const slide = TUTORIAL_SLIDES[step];
+    const touchStartX = useRef(null);
+    const swiped = useRef(false);
+
+    const goTo = (next) => {
+        setDirection(next > step ? 1 : -1);
+        setStep(next);
+    };
+
+    const advance = () => {
+        if (isLast) onClose();
+        else goTo(step + 1);
+    };
+
+    // FIX: swipe left/right wasn't working on phone — this only had onClick
+    // (tap-to-advance), which relies on the browser's synthesized click
+    // event after touchend, and a real drag/swipe gesture commonly
+    // suppresses that synthesized click entirely (it's only fired for a
+    // near-stationary tap). Real touchstart/touchend tracking below reads
+    // the actual finger movement instead of hoping a click falls out of it.
+    const SWIPE_THRESHOLD = 40; // px
+    const onTouchStart = (e) => {
+        touchStartX.current = e.touches[0].clientX;
+        swiped.current = false;
+    };
+    const onTouchEnd = (e) => {
+        if (touchStartX.current == null) return;
+        const dx = e.changedTouches[0].clientX - touchStartX.current;
+        touchStartX.current = null;
+        if (Math.abs(dx) < SWIPE_THRESHOLD) return; // small movement — let the tap-to-advance click handle it
+        swiped.current = true;
+        if (dx < 0) {
+            // swipe left → next slide (or finish, same as tap-to-advance)
+            advance();
+        } else if (!isFirst) {
+            // swipe right → previous slide
+            goTo(step - 1);
+        }
+    };
+
+    return createPortal(
+        <div
+            data-gesture-exclude="true"
+            onClick={(e) => {
+                // A real swipe already advanced/went back above — the browser's
+                // synthesized click after that drag shouldn't ALSO fire tap-to-advance.
+                if (swiped.current) {
+                    swiped.current = false;
+                    return;
+                }
+                advance();
+            }}
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
+            style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 100000,
+                // Solid, clean dark background per feedback — was letting the
+                // paused video show through too much (rgba(0,0,0,0.6)).
+                background: "rgba(6,6,8,0.94)",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                cursor: "pointer",
+                touchAction: "pan-y",
+                overflow: "hidden",
+            }}>
+            <style>{`
+                @keyframes fluxTutorialInRight { from { transform: translateX(28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+                @keyframes fluxTutorialInLeft  { from { transform: translateX(-28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+            `}</style>
+
+            {!isLast && (
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onClose();
+                    }}
+                    style={{
+                        position: "absolute",
+                        top: 24,
+                        right: 24,
+                        padding: "9px 20px",
+                        borderRadius: 8,
+                        border: "1.5px solid rgba(255,255,255,0.6)",
+                        background: "transparent",
+                        color: "#fff",
+                        fontWeight: 700,
+                        fontSize: 14,
+                        cursor: "pointer",
+                    }}>
+                    Close
+                </button>
+            )}
+
+            <div
+                key={step}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    display: "flex",
+                    gap: 24,
+                    justifyContent: "space-around",
+                    padding: "0 40px",
+                    cursor: "default",
+                    animation: `${direction === 1 ? "fluxTutorialInRight" : "fluxTutorialInLeft"} 260ms ease-out`,
+                }}>
+                {slide.tiles.map((tile) => (
+                    <GestureTile key={tile.gesture} {...tile} />
+                ))}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 36 }}>
+                {TUTORIAL_SLIDES.map((_, i) => (
+                    <button
+                        key={i}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            goTo(i);
+                        }}
+                        aria-label={`Slide ${i + 1}`}
+                        style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            border: "none",
+                            padding: 0,
+                            cursor: "pointer",
+                            background: i === step ? "#fff" : "rgba(255,255,255,0.35)",
+                            transition: "background 200ms ease",
+                        }}
+                    />
+                ))}
+            </div>
+
+            {isLast && (
+                <div style={{ padding: "32px 40px 0", maxWidth: 480, margin: "0 auto", width: "100%" }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                        onClick={onClose}
+                        style={{
+                            width: "100%",
+                            padding: "14px 0",
+                            borderRadius: 10,
+                            border: "none",
+                            background: "var(--color-primary)",
+                            color: "#fff",
+                            fontSize: 16,
+                            fontWeight: 700,
+                            cursor: "pointer",
+                        }}>
+                        Got it
+                    </button>
+                </div>
+            )}
+        </div>,
+        document.fullscreenElement || document.body,
+    );
+}
+
+// Technical media-info panel for the "Information" grid button — this is
+// NOT the TMDB details page (that's MediaDetails.jsx). This shows the
+// actual per-file playback/technical info: video codec, resolution, frame
+// rate, audio track codec/language/channels, subtitle tracks, container/
+// duration/size/bitrate, the resolved stream URL, and the current decoder
+// mode. Two independent sources:
+//   1. GET /api/mediainfo (mediaInfoController.js / mediaInfoStore.js) —
+//      bulk map of every file's ffprobe result, keyed by id (no per-id
+//      route exists, so this fetches the whole map and picks this file's
+//      entry — same as DashMedia does on the dashboard side).
+//   2. getStreamUrl() from shareMedia.js — the exact same call Share/
+//      Network Stream use, so "Stream URL" here is always the real,
+//      currently-playable link (direct file URL or the session's .m3u8).
+// Decoder mode (hw/hw+/sw) comes straight from player state — no fetch
+// needed, it's already known locally.
+function InfoBody({ mediaId, mediaInfo }) {
+    const { state } = usePlayerState();
+    const [entry, setEntry] = useState(null);
+    const [streamUrl, setStreamUrl] = useState(null);
+    const [streamUrlLoading, setStreamUrlLoading] = useState(false);
+    const [streamUrlFailed, setStreamUrlFailed] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        if (!mediaId) return;
+        let cancelled = false;
+        setLoading(true);
+        setFailed(false);
+        setEntry(null);
+        // Reset the manually-fetched stream link too when switching files,
+        // so a stale link from a previous file can't be shown/copied.
+        setStreamUrl(null);
+        setStreamUrlFailed(false);
+
+        // FIX: this is now the EXACT call FloatingActionMenu.jsx's own
+        // InfoModal uses (confirmed working elsewhere in the app) —
+        // api.get() resolves straight to the parsed body (not a `.data`
+        // wrapper), and the path needs the full "/api/mediainfo", not
+        // "/mediainfo". Both were wrong in the previous attempts.
+        api.get("/api/mediainfo")
+            .then((res) => {
+                if (!cancelled) setEntry(res?.mediaInfo?.[mediaId] ?? null);
+            })
+            .catch((err) => {
+                console.error("[MoreOptionsPanel] Info panel: failed to load mediainfo:", err);
+                if (!cancelled) setFailed(true);
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [mediaId]);
+
+    if (!mediaId) return <DisabledRow label="Nothing playing" />;
+
+    const c = entry?.container;
+    const v = entry?.video;
+    const audioTracks = entry?.audioTracks || [];
+    const subtitleTracks = entry?.subtitleTracks || [];
+    const title = mediaInfo?.title || entry?.name;
+
+    const videoStats = [
+        ["Resolution", v?.resolution],
+        ["Video codec", v?.profile ? `${v.codec} (${v.profile})` : v?.codec],
+        ["Frame rate", v?.frameRate],
+        ["Bit depth", v?.bitDepth ? `${v.bitDepth}-bit` : null],
+        ["Video bitrate", v?.bitrate],
+        ["Aspect ratio", v?.aspectRatio],
+    ].filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== "");
+
+    const fileStats = [
+        ["Container", c?.format],
+        ["Duration", c?.duration],
+        ["Size", c?.size],
+        ["Overall bitrate", c?.bitrate],
+        ["Decoder", DECODER_LABELS[state.decoderMode] || state.decoderMode],
+    ].filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== "");
+
+    // On-demand only — NOT called automatically. getStreamUrl() calls
+    // resolvePlayback(), the same call the player itself makes to START a
+    // transcode session; firing it as a side effect of just opening this
+    // panel (while the file is already playing) was what broke the active
+    // stream. Same trigger model as the existing Share/Network Stream
+    // buttons: only runs when the user explicitly asks for it.
+    const fetchStreamUrl = async () => {
+        setStreamUrlLoading(true);
+        setStreamUrlFailed(false);
+        try {
+            const url = await getStreamUrl(mediaId);
+            setStreamUrl(url);
+        } catch (err) {
+            console.error("[MoreOptionsPanel] Info panel: failed to resolve stream url:", err);
+            setStreamUrlFailed(true);
+        } finally {
+            setStreamUrlLoading(false);
+        }
+    };
+
+    const copyStreamUrl = async () => {
+        if (!streamUrl) return;
+        try {
+            await copyToClipboard(streamUrl);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch {
+            /* ignore — non-fatal, user can still see/select the URL manually */
+        }
+    };
+
+    return (
+        <div style={{ padding: "0 0 0" }}>
+            {loading && !entry && <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, padding: "20px 16px" }}>Loading…</div>}
+            {failed && !entry && <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, padding: "20px 16px" }}>Couldn't load media info.</div>}
+
+            <div style={{ padding: "6px 16px 14px" }}>
+                {title && (
+                    <div style={{ color: "#fff", fontSize: 16, fontWeight: 700, lineHeight: 1.3 }}>
+                        {title}
+                        {mediaInfo?.episodeTitle && <span style={{ color: "rgba(255,255,255,0.55)", fontWeight: 500 }}> — {mediaInfo.episodeTitle}</span>}
+                    </div>
+                )}
+
+                {/* ── Quick-glance summary strip ── */}
+                {entry && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 14px", marginTop: 10, fontSize: 11.5, color: "rgba(255,255,255,0.65)" }}>
+                        {v?.resolution && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <Film size={12} style={{ color: "var(--color-primary)" }} /> {v.codec} · {v.resolution}
+                            </span>
+                        )}
+                        {c?.duration && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <Clock size={12} style={{ color: "#fb923c" }} /> {c.duration}
+                            </span>
+                        )}
+                        {c?.size && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <HardDrive size={12} style={{ color: "#a78bfa" }} /> {c.size}
+                            </span>
+                        )}
+                        {audioTracks.length > 0 && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <AudioLines size={12} style={{ color: "#34d399" }} /> {audioTracks.length} audio
+                            </span>
+                        )}
+                        {subtitleTracks.length > 0 && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <Subtitles size={12} style={{ color: "var(--color-secondary, #a855f7)" }} /> {subtitleTracks.length} subtitle
+                            </span>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 18 }}>
+                {/* ── Video ── */}
+                {videoStats.length > 0 && (
+                    <section>
+                        <SectionLabel icon={Film} iconColor="var(--color-primary)" label="Video" />
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            {videoStats.map(([label, value]) => (
+                                <InfoStatCard key={label} label={label} value={value} />
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {/* ── File ── */}
+                {fileStats.length > 0 && (
+                    <section>
+                        <SectionLabel icon={HardDrive} iconColor="#a78bfa" label="File" />
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            {fileStats.map(([label, value]) => (
+                                <InfoStatCard key={label} label={label} value={value} />
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {/* ── Audio tracks ── */}
+                {audioTracks.length > 0 && (
+                    <section>
+                        <SectionLabel icon={AudioLines} iconColor="#34d399" label={`Audio${audioTracks.length > 1 ? ` (${audioTracks.length})` : ""}`} />
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {audioTracks.map((a, i) => (
+                                <div key={i} style={{ background: "rgba(255,255,255,0.05)", borderRadius: 10, padding: "9px 12px" }}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                                        <span style={{ color: "#fff", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                                            {a.languageName || a.language || `Track ${i + 1}`}
+                                            {a.default && (
+                                                <span
+                                                    style={{
+                                                        fontSize: 9,
+                                                        fontWeight: 700,
+                                                        textTransform: "uppercase",
+                                                        padding: "1px 6px",
+                                                        borderRadius: 4,
+                                                        background: "color-mix(in oklch, var(--color-primary) 25%, transparent)",
+                                                        color: "var(--color-primary)",
+                                                    }}>
+                                                    Default
+                                                </span>
+                                            )}
+                                        </span>
+                                        <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, textAlign: "right" }}>
+                                            {[a.codec, a.channelLayout || (a.channels ? `${a.channels}ch` : null)].filter(Boolean).join(" • ")}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {/* ── Subtitle tracks ── */}
+                {subtitleTracks.length > 0 && (
+                    <section>
+                        <SectionLabel icon={Subtitles} iconColor="var(--color-secondary, #a855f7)" label={`Subtitles${subtitleTracks.length > 1 ? ` (${subtitleTracks.length})` : ""}`} />
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {subtitleTracks.map((s, i) => (
+                                <span
+                                    key={i}
+                                    style={{
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        padding: "5px 12px",
+                                        borderRadius: 999,
+                                        background: "rgba(255,255,255,0.05)",
+                                        color: "rgba(255,255,255,0.85)",
+                                    }}>
+                                    {s.languageName || s.language || `Track ${i + 1}`}
+                                    {s.codec && <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 500 }}> · {s.codec}</span>}
+                                </span>
+                            ))}
+                        </div>
+                    </section>
+                )}
+            </div>
+
+            {/* ── Stream URL footer — manual "Get link" only, see fetchStreamUrl comment above ── */}
+            <div style={{ marginTop: 18, padding: "14px 16px", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.15)" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        color: "rgba(255,255,255,0.45)",
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.4,
+                        marginBottom: 8,
+                    }}>
+                    <Link2 size={12} /> Stream URL
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.05)", borderRadius: 10, padding: "9px 10px" }}>
+                    <span
+                        style={{
+                            color: streamUrl ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.4)",
+                            fontSize: 11.5,
+                            fontFamily: streamUrl ? "monospace" : "inherit",
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}>
+                        {streamUrl || (streamUrlFailed ? "Couldn't resolve link" : "Not fetched — tap Get link")}
+                    </span>
+                    <button
+                        onClick={streamUrl ? copyStreamUrl : fetchStreamUrl}
+                        disabled={streamUrlLoading}
+                        style={{
+                            flexShrink: 0,
+                            padding: "5px 12px",
+                            borderRadius: 6,
+                            border: "none",
+                            background: copied ? "var(--color-primary)" : "rgba(255,255,255,0.12)",
+                            color: "#fff",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: streamUrlLoading ? "default" : "pointer",
+                            opacity: streamUrlLoading ? 0.6 : 1,
+                        }}>
+                        {streamUrlLoading ? "…" : copied ? "Copied" : streamUrl ? "Copy" : "Get link"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Small section header used throughout InfoBody: icon + uppercase label.
+function SectionLabel({ icon: Icon, iconColor, label }) {
+    return (
+        <div
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                color: "rgba(255,255,255,0.75)",
+                fontSize: 11.5,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+                marginBottom: 8,
+            }}>
+            <Icon size={12} style={{ color: iconColor }} /> {label}
+        </div>
+    );
+}
+
+// Stat card used in the Video/File grids.
+function InfoStatCard({ label, value }) {
+    return (
+        <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
+            <div style={{ color: "#fff", fontSize: 13.5, fontWeight: 600, marginTop: 3 }}>{String(value)}</div>
+        </div>
+    );
+}
+
+export function MoreOptionsPanel({ open, onClose, isMobile, controlsPhase, mediaId, mediaInfo, onOpenPlaylist }) {
+    const { state, actions } = usePlayerState();
+    const [videoDisplayOn, setVideoDisplayOn] = useState(true);
+    // "decoder" | "info" | "tutorial" | "customise" | null — which
+    // secondary panel is currently open on top of this one.
+    const [subPanel, setSubPanel] = useState(null);
+    const [toast, setToast] = useState(null);
+    const toastTimer = useRef(null);
+    const [bookmarked, setBookmarked] = useState(() => (mediaId ? readIdSet(BOOKMARK_KEY).has(mediaId) : false));
+    const [favourited, setFavourited] = useState(() => (mediaId ? readIdSet(FAVOURITE_KEY).has(mediaId) : false));
+
+    useEffect(() => {
+        if (!mediaId) return;
+        setBookmarked(readIdSet(BOOKMARK_KEY).has(mediaId));
+        setFavourited(readIdSet(FAVOURITE_KEY).has(mediaId));
+    }, [mediaId]);
+
+    useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+    const showToast = (msg) => {
+        setToast(msg);
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 1800);
+    };
+
+    const hiddenKeys = state.hiddenQuickKeys || [];
+    const toggleShortcutKey = (key) => actions.toggleQuickItemHidden(key);
+
+    const toggleBookmark = () => {
+        if (!mediaId) return showToast("Nothing playing to bookmark");
+        const set = readIdSet(BOOKMARK_KEY);
+        const next = !bookmarked;
+        if (next) set.add(mediaId);
+        else set.delete(mediaId);
+        writeIdSet(BOOKMARK_KEY, set);
+        setBookmarked(next);
+        showToast(next ? "Bookmarked" : "Bookmark removed");
+    };
+
+    const toggleFavourite = () => {
+        if (!mediaId) return showToast("Nothing playing to favourite");
+        const set = readIdSet(FAVOURITE_KEY);
+        const next = !favourited;
+        if (next) set.add(mediaId);
+        else set.delete(mediaId);
+        writeIdSet(FAVOURITE_KEY, set);
+        setFavourited(next);
+        showToast(next ? "Added to Favourites" : "Removed from Favourites");
+    };
+
+    const shareCurrent = async () => {
+        try {
+            const result = await shareMedia({ url: window.location.href, poster: mediaInfo?.poster });
+            if (result === "copied") showToast("Link copied");
+        } catch {
+            showToast("Couldn't share");
+        }
+    };
+
+    const shareNetworkStream = async () => {
+        if (!mediaId) return showToast("Nothing playing to share");
+        try {
+            const result = await shareStream({ id: mediaId, poster: mediaInfo?.poster });
+            showToast(result === "copied" ? "Stream link copied" : "Stream shared");
+        } catch {
+            showToast("Couldn't get stream link");
+        }
+    };
+
+    const handleGridClick = (key) => {
+        switch (key) {
+            case "queue":
+                onClose();
+                onOpenPlaylist?.();
+                break;
+            case "aspect":
+                actions.cycleAspectRatio();
+                break;
+            case "display":
+                setSubPanel("decoder");
+                break;
+            case "bookmark":
+                toggleBookmark();
+                break;
+            case "favourite":
+                toggleFavourite();
+                break;
+            case "info":
+                setSubPanel("info");
+                break;
+            case "share":
+                shareCurrent();
+                break;
+            case "network":
+                shareNetworkStream();
+                break;
+            case "tutorial":
+                onClose();
+                actions.setPlaying(false);
+                setSubPanel("tutorial");
+                break;
+            case "more":
+                setSubPanel("customise");
+                break;
+            case "cut":
+            case "addPlaylist":
+                showToast("Coming soon");
+                break;
+            default:
+                break;
+        }
+    };
+
+    return (
+        <>
+            <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={open} onClose={onClose} title="More" side="bottom" width={340}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "18px 4px", padding: "8px 10px 16px" }}>
+                    {MORE_GRID_ITEMS.map((item) => {
+                        const Icon = item.icon;
+                        const active = (item.key === "bookmark" && bookmarked) || (item.key === "favourite" && favourited);
+                        return (
+                            <button
+                                key={item.key}
+                                onClick={() => handleGridClick(item.key)}
+                                style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    background: "transparent",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    padding: 4,
+                                    WebkitTapHighlightColor: "transparent",
+                                }}>
+                                <span
+                                    style={{
+                                        width: 44,
+                                        height: 44,
+                                        borderRadius: "50%",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        background: active ? "color-mix(in oklch, var(--color-primary) 30%, transparent)" : "rgba(0,0,0,0.35)",
+                                        flexShrink: 0,
+                                    }}>
+                                    <Icon size={20} color={active ? "var(--color-primary)" : "#fff"} strokeWidth={1.8} fill={active ? "var(--color-primary)" : "none"} />
+                                </span>
+                                <span style={{ fontSize: 11.5, color: "rgba(255,255,255,0.85)", textAlign: "center", lineHeight: 1.2 }}>{item.label}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {toast && (
+                    <div style={{ margin: "0 12px 8px", padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 8, color: "#fff", fontSize: 12.5, textAlign: "center" }}>{toast}</div>
+                )}
+
+                <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "0 0 4px" }} />
+
+                <ToggleRow label="Video Display" checked={videoDisplayOn} onClick={() => setVideoDisplayOn((v) => !v)} />
+                <ToggleRow label="Shortcuts" checked={state.shortcutsEnabled} onClick={() => actions.setShortcutsEnabled(!state.shortcutsEnabled)} />
+
+                {state.shortcutsEnabled && (
+                    <div style={{ padding: "4px 8px 12px" }}>
+                        {SHORTCUT_ROWS.map((row, i) => (
+                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+                                {row.map((key, j) =>
+                                    key ? (
+                                        <ShortcutCheckItem key={key} item={SHORTCUT_ITEM_MAP[key]} checked={!hiddenKeys.includes(key)} onClick={() => toggleShortcutKey(key)} />
+                                    ) : (
+                                        <div key={`empty-${i}-${j}`} />
+                                    ),
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </MenuShell>
+
+            <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={subPanel === "decoder"} onClose={() => setSubPanel(null)} title="Display Settings" side="bottom">
+                {["hw", "hw+", "sw"].map((mode) => (
+                    <RadioRow key={mode} label={DECODER_LABELS[mode] + (mode === "hw+" ? " (Recommended)" : "")} checked={state.decoderMode === mode} onClick={() => actions.setDecoderMode(mode)} />
+                ))}
+            </MenuShell>
+
+            <MenuShell isMobile={isMobile} controlsPhase={controlsPhase} open={subPanel === "info"} onClose={() => setSubPanel(null)} title="Information" side="bottom" width={360}>
+                <InfoBody mediaId={mediaId} mediaInfo={mediaInfo} />
+            </MenuShell>
+
+            {subPanel === "tutorial" && (
+                <TutorialOverlay
+                    onClose={() => {
+                        setSubPanel(null);
+                        actions.setPlaying(true);
+                    }}
+                />
+            )}
+
+            <CustomiseItemsPanel open={subPanel === "customise"} onClose={() => setSubPanel(null)} isMobile={isMobile} controlsPhase={controlsPhase} />
+        </>
     );
 }

@@ -17,9 +17,12 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //   7   — error swallowing fix (network errors no longer cached as _notFound)
 //   8   — TMDB dual auth (Bearer + api_key), Friends 1x01 title fix,
 //          parsed object no longer stored in cache (cleaner media.json)
-//   9   — expanded schema: ratings{tmdb,imdb,rt,metascore}, reviews, keywords,
-//          watchProviders, crew, cast.tmdbPersonId, videos[], tmdbEpisodeId,
-//          guestStars, networks, collection, contentRating, imdbId
+//   9   — expanded schema: ratings{tmdb,imdb,rt,metascore}, reviews, crew,
+//          cast.tmdbPersonId, videos[], imdbId
+//          (this comment previously also listed keywords, watchProviders,
+//          tmdbEpisodeId, guestStars, networks, collection, contentRating —
+//          watchProviders never actually existed in tmdb.js, and the rest
+//          were removed from tmdb.js as unused dead weight; see tmdb.js)
 //   10  — "date" field added: ISO timestamp of when the file was FIRST added
 //          to the server (first ever cache write). Preserved across refreshes.
 //   11  — _sourceTitle self-heal: every entry (found + _notFound) now stores
@@ -34,7 +37,66 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //          _sourceTitle) are untouched by this check and fall back to the
 //          normal version/TTL validity path — they self-heal the next time
 //          they're written (setCache/setNotFound always stamp _sourceTitle now).
-const PARSER_VERSION = 11;
+//   12  — CLEANUP: removed the duplicate `_title` field from setNotFound().
+//          It always held the exact same value as `_sourceTitle` and was
+//          never read anywhere in the codebase — pure dead weight bloating
+//          metadata.json. `_sourceTitle` is the one actually used for the
+//          drift check.
+//   13  — tmdb.js schema change: added `studios` (production company names)
+//          and `certifications` (per-country age rating, with meaning/order)
+//          to both movie and TV/anime output.
+//   14  — tmdb.js schema change: renamed `studios` (name-only strings) to
+//          `production_companies` (full objects: tmdbCompanyId, name, logo,
+//          originCountry, description, headquarters, homepage,
+//          parentCompany) via a new GET /company/{id} lookup, cached per
+//          company id across the whole library.
+//   15  — tmdb.js schema change: removed the redundant `seasonNumber` field
+//          from the single-season `metadata.seasonDetails` object attached
+//          by lookupMetadata (duplicated the season's own key elsewhere in
+//          the response). getSeasonDetails() itself is unchanged — anything
+//          else calling it directly still gets seasonNumber as before.
+//   16  — shapeCast/shapeCrew null fix: cast.name/character and
+//          crew.name/job/department now fall back to "Unknown"/"Unknown
+//          Role" instead of passing through TMDB's raw null/"" for
+//          guest/uncredited/combined-credit rows. Cast entries with no
+//          usable name at all are dropped instead of kept as a blank card.
+//   17  — certifications trimmed: capped to top 3 countries (US/GB
+//          prioritized, env TMDB_CERT_COUNTRY_LIMIT) instead of every
+//          country TMDB has data for; each country capped to 2 codes.
+//   18  — tmdb.js schema change (metadata upgrade patch layer): added
+//          collection, spokenLanguages, originCountries, keywords,
+//          externalIds{imdb,tmdb,wikidata}, financials{budget,revenue} to
+//          movie output; spokenLanguages, originCountries, keywords,
+//          externalIds, networks, episodeSchedule{lastAirDate,nextAirDate,
+//          nextEpisode} to TV/anime output. TV/anime cast+crew now prefer
+//          aggregate_credits (whole-show, all seasons) with fallback to the
+//          existing per-episode credits. shapeCrew's KEEP job set widened
+//          (Producer, Executive Producer, Editor, Production Designer,
+//          Costume Designer, Casting added) and its limit raised 10 → 15.
+//          `trailer` now uses deterministic scoring (site/official/type/
+//          date) instead of "first Trailer-type video" — same field, better
+//          pick. No existing field removed, renamed, or restructured.
+//   19  — tmdb.js schema change: `financials{budget,revenue}` added to
+//          TV/anime output too (was movie-only in v18). Always {null,null}
+//          on TV/anime — TMDB's /tv endpoint has no budget/revenue data at
+//          all, this is schema parity only, never fabricated.
+//
+//   ⚠ IMPORTANT (read this before shipping ANY tmdb.js change): this version
+//   number is the ONLY thing that saves you from manually deleting
+//   metadata.json + restarting every time tmdb.js's returned object shape
+//   changes. Whenever you add/rename/restructure ANY field that
+//   getMovieDetails/getTVDetails/getSeasonDetails returns — not just
+//   nameParser.js changes — bump this number by 1 and add a line above
+//   describing what changed. That's it. On the next server start, every
+//   cached entry with an older _parserVersion is automatically treated as
+//   stale and silently re-fetched from TMDB the next time that file is
+//   requested (lazy, per-item, as pages load) — OR hit
+//   `POST /api/metadata/refresh-all` once after restarting if you want
+//   every title in the library re-fetched immediately in one shot instead
+//   of waiting for each page to be visited. Either way: restart the server
+//   (Node has to load the new code), then either browse normally or hit
+//   refresh-all — metadata.json itself never needs to be touched by hand.
+const PARSER_VERSION = 19;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
 // from a bad API key or transient network failure blocking real lookups.
@@ -193,13 +255,14 @@ function setCache(fileId, metadata, sourceTitle) {
     scheduleSave();
 }
 
+// v12: dropped `_title` — was an exact duplicate of `_sourceTitle`, never
+// read anywhere. `_sourceTitle` alone drives the drift/self-heal check.
 function setNotFound(fileId, title) {
     const date = resolveAddedDate(fileId);
 
     store.set(fileId, {
         _notFound: true,
-        _title: title,
-        _sourceTitle: title, // same value — uniform drift-check field
+        _sourceTitle: title,
         date,
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
