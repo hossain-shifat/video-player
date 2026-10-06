@@ -287,7 +287,7 @@ function getHlsConfig() {
  *  6. Network error auto-retry with exponential backoff.
  */
 const VideoCore = forwardRef(function VideoCore(
-    { streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated, suppressTimeUpdateRef, sessionTimeOffsetRef, zoomScale = 1, panX = 0, panY = 0 },
+    { streamUrl, onVideoClick, onRetry, mediaDuration, onReadyToSeek, onHlsCreated, suppressTimeUpdateRef, sessionTimeOffsetRef, zoomScale = 1, panX = 0, panY = 0, isResumeSyncing = false },
     ref,
 ) {
     const videoRef = useRef(null);
@@ -297,6 +297,13 @@ const VideoCore = forwardRef(function VideoCore(
     const latestOnReadyToSeek = useRef(onReadyToSeek);
     const { state, actions } = usePlayerState();
     const latestPlaying = useRef(state.playing);
+    // Kept in sync with the isResumeSyncing prop so effects that only fire
+    // occasionally (not every render) can still read the CURRENT value
+    // instead of a stale one captured at effect-setup time.
+    const isResumeSyncingRef = useRef(isResumeSyncing);
+    useEffect(() => {
+        isResumeSyncingRef.current = isResumeSyncing;
+    }, [isResumeSyncing]);
     // ── Audio-switch race/watchdog refs (additive — does not touch existing
     // quality/level logic). audioSwitchBusy prevents overlapping switches
     // when the user taps tracks rapidly; positionBeforeAudioSwitch +
@@ -455,9 +462,44 @@ const VideoCore = forwardRef(function VideoCore(
                 hls.loadSource(streamUrl);
                 hls.attachMedia(video);
 
+                // ── DEBUG ONLY: track per-rendition (audio vs video) manifest
+                // polling and fragment loading with wall-clock timestamps.
+                // Added to diagnose the "video manifest stops being polled for
+                // ~10s while audio keeps polling" report — pure console.log,
+                // no behavior touched. Set AV_DEBUG=0 in localStorage to
+                // silence (window.localStorage.setItem('AV_DEBUG','0')).
+                const avDebugOn = window.localStorage?.getItem("AV_DEBUG") !== "0";
+                if (avDebugOn) {
+                    const tlog = (label, extra) => console.log(`[AV-CLIENT] ${new Date().toISOString().slice(11, 23)} ${label}`, extra || "");
+                    hls.on(Hls.Events.LEVEL_LOADING, (_, data) => tlog("LEVEL_LOADING (video manifest poll)", { level: data.level, url: data.url }));
+                    hls.on(Hls.Events.LEVEL_LOADED, (_, data) => tlog("LEVEL_LOADED (video manifest got)", { level: data.level, live: data.details?.live, frags: data.details?.fragments?.length }));
+                    hls.on(Hls.Events.AUDIO_TRACK_LOADING, (_, data) => tlog("AUDIO_TRACK_LOADING (audio manifest poll)", { id: data.id, url: data.url }));
+                    hls.on(Hls.Events.AUDIO_TRACK_LOADED, (_, data) => tlog("AUDIO_TRACK_LOADED (audio manifest got)", { id: data.id, frags: data.details?.fragments?.length }));
+                    hls.on(Hls.Events.FRAG_LOADING, (_, data) => tlog("FRAG_LOADING", { type: data.frag?.type, sn: data.frag?.sn, start: data.frag?.start }));
+                    hls.on(Hls.Events.FRAG_BUFFERED, (_, data) => tlog("FRAG_BUFFERED", { type: data.frag?.type, sn: data.frag?.sn }));
+                    hls.on(Hls.Events.BUFFER_APPENDING, (_, data) => tlog("BUFFER_APPENDING", { type: data.type }));
+                }
+
                 // ── MANIFEST_PARSED ─────────────────────────────────────────
                 hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
                     if (cancelled) return;
+
+                    // FIX (quality picker shows "814p", "413p" instead of
+                    // clean 1080p/480p etc): l.height here is the RAW pixel
+                    // height ffmpeg actually encoded, read straight off the
+                    // HLS manifest's RESOLUTION attribute. The backend's
+                    // scale filter uses force_original_aspect_ratio=decrease
+                    // — it fits the source inside a WxH box without
+                    // distorting aspect ratio, so a preset built for a
+                    // "1080p" box can genuinely output height=814 on a
+                    // non-16:9 source (letterboxed/cropped content), a
+                    // "480p" box outputs 413, etc. That's correct encoder
+                    // behavior, but showing the literal number to the user
+                    // is meaningless noise — snap to the nearest standard
+                    // tier for display only. l.height itself stays real/
+                    // unrounded for anything that needs the true pixel size.
+                    const STANDARD_HEIGHTS = [2160, 1440, 1080, 720, 480, 360, 240, 144];
+                    const nearestStandardHeight = (h) => (h ? STANDARD_HEIGHTS.reduce((best, std) => (Math.abs(std - h) < Math.abs(best - h) ? std : best), STANDARD_HEIGHTS[0]) : h);
 
                     // Quality levels
                     const levels = hls.levels.map((l, i) => ({
@@ -465,7 +507,7 @@ const VideoCore = forwardRef(function VideoCore(
                         height: l.height,
                         width: l.width,
                         bitrate: l.bitrate,
-                        label: l.height ? `${l.height}p` : `Level ${i}`,
+                        label: l.height ? `${nearestStandardHeight(l.height)}p` : `Level ${i}`,
                     }));
                     actions.setQualityLevels(levels);
                     actions.setActiveQuality(-1); // start on auto
@@ -1101,15 +1143,29 @@ const VideoCore = forwardRef(function VideoCore(
     }, [state.playbackSpeed]);
 
     // ── Sync play/pause ───────────────────────────────────────────────────────
+    // FIX (the actual root cause of audio/video playing immediately during
+    // resume no matter what useProgress.jsx's deferredSeek did): this effect
+    // calls attemptAutoplay() whenever state.playing is true — state.playing
+    // defaults true, so this fires on mount and just plays as soon as ANY
+    // data exists, completely unaware of the resume-sync wait happening
+    // elsewhere. Every previous fix only touched deferredSeek's own
+    // pause()/readyState checks — useless against a totally separate effect
+    // that never knew to wait. Now gated on isResumeSyncing (added as a
+    // dependency too, so this effect re-evaluates the instant syncing ends
+    // and actually plays then, instead of missing that transition).
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
+        if (isResumeSyncing) {
+            if (!video.paused) video.pause();
+            return;
+        }
         if (state.playing) {
             attemptAutoplay(video, actions);
         } else {
             video.pause();
         }
-    }, [state.playing]);
+    }, [state.playing, isResumeSyncing]);
 
     // ── Sync volume / mute ────────────────────────────────────────────────────
     useEffect(() => {
@@ -1169,15 +1225,46 @@ const VideoCore = forwardRef(function VideoCore(
     };
     const handlePause = () => actions.setPlaying(false);
 
+    // ── Instant skip: seeks never show the loading overlay ────────────────
+    // Request: forward/backward skip (double-tap) and drag-seek must feel
+    // instant — never block on a loading spinner, even if the target genuinely
+    // isn't buffered yet. recentSeekRef tracks "we're currently inside a
+    // seek", set the moment ANY seek starts (native "seeking" fires for
+    // double-tap, drag, SeekBar, and keyboard seeks alike — one signal
+    // covers all of them) and cleared once playback has genuinely resumed
+    // ("playing"/"canplay"/"seeked"-while-paused). While it's true, both
+    // handleSeeking and handleWaiting deliberately skip setBuffering(true)
+    // — the video keeps trying to catch up silently in the background;
+    // only stalls that happen OUTSIDE of a seek (real mid-playback
+    // rebuffering, unrelated to the user skipping) still show the spinner.
+    const recentSeekRef = useRef(false);
+
     const handleWaiting = () => {
+        if (recentSeekRef.current) {
+            actions.incrementStall();
+            return;
+        }
         actions.setBuffering(true);
         actions.incrementStall();
     };
 
     const handleCanPlay = () => {
+        recentSeekRef.current = false;
         actions.setBuffering(false);
         actions.setReady(true);
         actions.setError(null);
+    };
+
+    const handleSeeking = () => {
+        recentSeekRef.current = true;
+    };
+
+    const handleSeeked = () => {
+        // If paused, nothing further is "catching up" — clear immediately.
+        // If playing, leave recentSeekRef true until handleCanPlay/
+        // handlePlaying actually confirms real playback resumed.
+        if (videoRef.current?.paused) recentSeekRef.current = false;
+        actions.setBuffering(false);
     };
 
     const handleProgress = () => {
@@ -1248,10 +1335,34 @@ const VideoCore = forwardRef(function VideoCore(
     const userBrightnessPct = Math.min(1, state.brightness); // 0.3-1.0 → 0.3-1.0, anything above 1.0 clamps to 1.0 (no scrim)
     const brightnessScrimOpacity = Math.max(0, Math.min(0.85, 1 - userBrightnessPct));
 
-    const isAutoMode = state.aspectRatio === "auto" || !state.aspectRatio;
-    const isFixedRatioMode = state.aspectRatio === "16:9" || state.aspectRatio === "4:3";
+    // FIX (top/bottom black bars in landscape when there should only be
+    // left/right pillarboxing): isAutoMode used to only catch the literal
+    // string "auto" or a falsy value. Any OTHER unrecognized aspectRatio
+    // value (a stale/mismatched stored preference, a mode name that doesn't
+    // exactly match "16:9"/"4:3"/"cover"/"fill"/"1:1") fell through to the
+    // OLD getAspectStyle() function below — plain CSS object-fit:contain
+    // with a 100%/100% box, which is EXACTLY the already-documented
+    // "top-gap bug" this file fixed for "auto"/"16:9"/"4:3" via pixel-exact
+    // box computation, just never extended to cover every other case that
+    // also wants contain-style (preserve aspect, no crop) behavior. Only
+    // "cover" (crop-to-fill) and "fill" (distort-to-fill) are genuinely
+    // different intents that shouldn't go through letterbox math at all —
+    // everything else gets routed through the known-correct calculation.
+    const isAutoMode = !["16:9", "4:3", "1:1", "cover", "fill"].includes(state.aspectRatio);
+    const isFixedRatioMode = state.aspectRatio === "16:9" || state.aspectRatio === "4:3" || state.aspectRatio === "1:1";
     const computedBox = isAutoMode ? computeLetterboxBox(containerDims.w, containerDims.h, videoDims.w, videoDims.h) : null;
-    const fixedRatioBox = isFixedRatioMode ? computeFixedRatioBox(containerDims.w, containerDims.h, state.aspectRatio === "16:9" ? 16 : 4, state.aspectRatio === "16:9" ? 9 : 3) : null;
+    if (isAutoMode && containerDims.w > 0 && videoDims.w > 0) {
+        console.log("[ASPECT-DEBUG]", {
+            containerDims,
+            videoDims,
+            computedBox,
+            containerRatio: (containerDims.w / containerDims.h).toFixed(4),
+            videoRatio: (videoDims.w / videoDims.h).toFixed(4),
+        });
+    }
+    const fixedRatioW = state.aspectRatio === "16:9" ? 16 : state.aspectRatio === "1:1" ? 1 : 4;
+    const fixedRatioH = state.aspectRatio === "16:9" ? 9 : state.aspectRatio === "1:1" ? 1 : 3;
+    const fixedRatioBox = isFixedRatioMode ? computeFixedRatioBox(containerDims.w, containerDims.h, fixedRatioW, fixedRatioH) : null;
 
     const hasIntrinsicDims = videoDims.w > 0 && videoDims.h > 0 && containerDims.w > 0 && containerDims.h > 0;
     const hasContainerDims = containerDims.w > 0 && containerDims.h > 0;
@@ -1341,8 +1452,12 @@ const VideoCore = forwardRef(function VideoCore(
                     actions.setBuffering(true);
                     actions.incrementStall();
                 }}
-                onSeeking={() => actions.setBuffering(true)}
-                onSeeked={() => actions.setBuffering(false)}
+                onPlaying={() => {
+                    recentSeekRef.current = false;
+                    actions.setBuffering(false);
+                }}
+                onSeeking={handleSeeking}
+                onSeeked={handleSeeked}
             />
             {/* ── Brightness scrim ─────────────────────────────────────────────
                 Pure black layer, NOT a CSS filter on the video — a filter

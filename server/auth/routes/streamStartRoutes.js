@@ -3,7 +3,7 @@
 /**
  * auth/routes/streamStartRoutes.js
  * POST /stream/start/:id — validates auth + permissions, issues stream token.
- * 
+ *
  * CORRECT STREAM TOKEN FLOW:
  *   1. Frontend calls POST /stream/start/:id with JWT
  *   2. Backend validates: JWT + approved + active access + library access

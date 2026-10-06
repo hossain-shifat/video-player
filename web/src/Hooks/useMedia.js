@@ -4,6 +4,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMedia, getMediaById, searchMedia } from "../api/media";
+import { getSeasonDetail } from "../api/metadata";
 import { useAuth } from "../auth/AuthContext";
 
 // ─── Query keys ───────────────────────────────────────────────────────────────
@@ -12,6 +13,7 @@ export const MEDIA_KEYS = {
     list: (params = {}) => ["media", "list", params],
     byId: (id) => ["media", "byId", id],
     search: (q, folderId) => ["media", "search", q, folderId],
+    seasonDetail: (tmdbId, seasonNumber) => ["media", "seasonDetail", tmdbId, seasonNumber],
 };
 
 // Restricted-content rule (mirrors backend mediaController.js canSeeRestricted):
@@ -89,6 +91,29 @@ export function useMediaSearch(q, folderId, options = {}) {
               }
             : query.data,
     };
+}
+
+/**
+ * useSeasonDetail(tmdbId, seasonNumber, options)
+ *
+ * Lazily fetches one season's TMDB detail via the new
+ * GET /api/metadata/tv/:tmdbId/season/:seasonNumber endpoint (metadata
+ * upgrade plan, feature 10). This is SEPARATE from the eager season data
+ * grouper.js already attaches to every series/anime at scan time — that
+ * data flow is untouched. Use this when a season needs an on-demand
+ * (re)fetch: it was missing/empty at scan time, or the user asked to
+ * refresh it. `enabled` defaults to false-when-no-ids so callers control
+ * exactly when the automatic fetch fires; `refetch()` always works
+ * on-demand regardless of `enabled` (TanStack Query behavior).
+ */
+export function useSeasonDetail(tmdbId, seasonNumber, options = {}) {
+    return useQuery({
+        queryKey: MEDIA_KEYS.seasonDetail(tmdbId, seasonNumber),
+        queryFn: () => getSeasonDetail(tmdbId, seasonNumber),
+        enabled: Boolean(tmdbId) && seasonNumber != null,
+        staleTime: 5 * 60 * 1000,
+        ...options,
+    });
 }
 
 /**

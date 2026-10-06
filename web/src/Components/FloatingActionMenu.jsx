@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
     Heart,
@@ -31,6 +31,9 @@ import { getMediaById } from "../api";
 import { shareMedia, shareStream, copyToClipboard, getStreamUrl } from "../utils/shareMedia";
 
 const MENU_W = 208; // w-52
+const MENU_EST_H = 340; // fallback height before the first measurement
+const MENU_GAP = 6; // space between anchor and menu
+const VIEW_EDGE = 8; // min distance kept from the viewport edge
 
 // ─── Menu item ──────────────────────────────────────────────────────────────
 function MenuItem({ icon: Icon, label, onClick, active, danger }) {
@@ -45,7 +48,7 @@ function MenuItem({ icon: Icon, label, onClick, active, danger }) {
                 size={14}
                 strokeWidth={1.8}
                 className={`shrink-0 ${danger ? "text-error/70" : active ? "text-primary" : "text-white/76"}`}
-                fill={active && Icon.name === "Heart" ? "currentColor" : "none"}
+                fill={active && Icon === Heart ? "currentColor" : "none"}
             />
             {label}
         </button>
@@ -407,7 +410,7 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
 
     const [visible, setVisible] = useState(false);
     const [mounted, setMounted] = useState(false);
-    const [pos, setPos] = useState({ top: 0, left: 0 });
+    const [pos, setPos] = useState({ top: 0, left: 0, up: false });
     const [copied, setCopied] = useState(false);
     const [localWatched, setLocalWatched] = useState(false);
     const [showInfoModal, setShowInfoModal] = useState(false);
@@ -473,16 +476,38 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
         onRemove && { icon: Trash2, label: "Remove From History", danger: true, onClick: () => onRemove(media) },
     ].filter(Boolean);
 
+    // Places the menu against the anchor using the menu's REAL height: opens below
+    // by default, flips above when the bottom has no room (and top has more), and is
+    // always clamped inside the viewport. Returns false when the anchor left the screen.
+    const place = useCallback(() => {
+        const a = anchorRef.current;
+        if (!a) return true;
+        const r = a.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        if (r.bottom < 0 || r.top > vh) return false; // anchor scrolled fully out of view
+
+        const menuH = menuRef.current?.offsetHeight || MENU_EST_H;
+        const spaceBelow = vh - r.bottom - MENU_GAP - VIEW_EDGE;
+        const spaceAbove = r.top - MENU_GAP - VIEW_EDGE;
+        const up = spaceBelow < menuH && spaceAbove > spaceBelow;
+
+        let top = up ? r.top - MENU_GAP - menuH : r.bottom + MENU_GAP;
+        top = Math.max(VIEW_EDGE, Math.min(top, vh - menuH - VIEW_EDGE));
+        let left = r.right - MENU_W;
+        left = Math.max(VIEW_EDGE, Math.min(left, vw - MENU_W - VIEW_EDGE));
+
+        setPos((p) => (p.top === top && p.left === left && p.up === up ? p : { top, left, up }));
+        return true;
+    }, [anchorRef]);
+
+    // Measure + place before paint, as soon as the menu exists in the DOM.
+    useLayoutEffect(() => {
+        if (mounted) place();
+    }, [mounted, place]);
+
     useEffect(() => {
         if (open) {
-            if (anchorRef.current) {
-                const r = anchorRef.current.getBoundingClientRect();
-                let left = r.right - MENU_W;
-                const top = r.bottom + 6; // always below the anchor — never flips above
-                if (left < 8) left = 8;
-                if (left + MENU_W > window.innerWidth - 8) left = window.innerWidth - MENU_W - 8;
-                setPos({ top, left });
-            }
             setMounted(true);
             const raf = requestAnimationFrame(() => setVisible(true));
             return () => cancelAnimationFrame(raf);
@@ -499,18 +524,21 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
             onClose();
         };
         const handleKey = (e) => e.key === "Escape" && onClose();
-        const handleScroll = () => onClose();
+        // Scroll/resize: follow the anchor instead of closing; close only when it's off-screen.
+        const handleReflow = () => {
+            if (!place()) onClose();
+        };
         document.addEventListener("mousedown", handleClick);
         document.addEventListener("keydown", handleKey);
-        window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-        window.addEventListener("resize", handleScroll, { passive: true });
+        window.addEventListener("scroll", handleReflow, { capture: true, passive: true });
+        window.addEventListener("resize", handleReflow, { passive: true });
         return () => {
             document.removeEventListener("mousedown", handleClick);
             document.removeEventListener("keydown", handleKey);
-            window.removeEventListener("scroll", handleScroll, { capture: true });
-            window.removeEventListener("resize", handleScroll);
+            window.removeEventListener("scroll", handleReflow, { capture: true });
+            window.removeEventListener("resize", handleReflow);
         };
-    }, [mounted, onClose, anchorRef]);
+    }, [mounted, onClose, anchorRef, place]);
 
     return (
         <>
@@ -526,7 +554,9 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
                             width: MENU_W,
                             opacity: visible ? 1 : 0,
                             transform: visible ? "scale(1)" : "scale(0.95)",
-                            transformOrigin: "top right",
+                            transformOrigin: pos.up ? "bottom right" : "top right",
+                            maxHeight: `calc(100vh - ${VIEW_EDGE * 2}px)`,
+                            overflowY: "auto",
                             transition: "opacity 150ms ease, transform 150ms ease",
                             zIndex: 100,
                         }}

@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
-import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo, Tv } from "lucide-react";
+import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo, Tv, Cloud } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import Logo from "../Components/Logo";
 
@@ -22,6 +22,7 @@ const NAV = [
             { to: "/dashboard/streams", icon: Radio, label: "Live Streams" },
             { to: "/dashboard/jobs", icon: Activity, label: "Jobs" },
             { to: "/dashboard/uploads", icon: Upload, label: "Uploads" },
+            { to: "/dashboard/storage", icon: Cloud, label: "Storage" },
         ],
     },
     {

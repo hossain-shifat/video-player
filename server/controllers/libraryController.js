@@ -3,14 +3,110 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const chokidar = require("chokidar");
 
 const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
 const { invalidateFolder, invalidateAll, fileIndex, getAllCached, getCachedStats } = require("../utils/mediaCache");
-const { reconcile } = require("../utils/metadataStore");
+const { reconcile, getMetadata } = require("../utils/metadataStore");
+const { isVideoFile } = require("../utils/fileHelpers");
 
 // In-memory folders cache — eliminates disk I/O on every API call.
 // Populated on first read, updated atomically on every write.
 let _cachedFolders = null;
+
+// ─── Live folder watching (chokidar) ───────────────────────────────────────────
+// Watches every library folder for add/remove so new movies/series/anime get
+// picked up automatically — no server restart needed to load new media.
+const DEBOUNCE_MS = parseInt(process.env.WATCH_DEBOUNCE_MS || "1500", 10);
+// Set WATCH_USE_POLLING=true in .env for network/SMB/NFS mounts (CasaOS NAS
+// shares often don't fire native inotify events) — costs more CPU but works.
+const USE_POLLING = process.env.WATCH_USE_POLLING === "true";
+
+const _watchers = new Map(); // folderId -> chokidar watcher instance
+const _debounceTimers = new Map(); // folderId -> timeout handle
+
+// Debounced so a big folder copy (50 files landing at once) triggers ONE
+// rescan instead of 50.
+function _scheduleRescan(folder) {
+    if (_debounceTimers.has(folder.id)) clearTimeout(_debounceTimers.get(folder.id));
+
+    _debounceTimers.set(
+        folder.id,
+        setTimeout(async () => {
+            _debounceTimers.delete(folder.id);
+            invalidateFolder(folder.id);
+            console.log(`[Watcher] Change in "${folder.label}" — cache invalidated`);
+
+            try {
+                // Force the rescan NOW and warm TMDB metadata so posters are
+                // ready before the user even opens the app.
+                const { allMedia } = await getAllCached([folder]);
+                await Promise.all(allMedia.map((f) => getMetadata(f).catch(() => null)));
+                console.log(`[Watcher] Rescanned "${folder.label}" — ${allMedia.length} file(s), metadata warmed`);
+            } catch (err) {
+                console.error(`[Watcher] Rescan failed for "${folder.label}":`, err.message);
+            }
+        }, DEBOUNCE_MS),
+    );
+}
+
+// Starts watching one folder. Safe to call again — restarts the watch.
+function _watchFolder(folder) {
+    _stopWatching(folder.id);
+
+    if (!fs.existsSync(folder.path)) {
+        console.warn(`[Watcher] Path missing, skipping: ${folder.path}`);
+        return;
+    }
+
+    const watcher = chokidar.watch(folder.path, {
+        persistent: true,
+        ignoreInitial: true, // startup scan already handles existing files
+        depth: 5, // matches scanner.js MAX_DEPTH
+        usePolling: USE_POLLING,
+        interval: USE_POLLING ? 2000 : undefined,
+        awaitWriteFinish: {
+            stabilityThreshold: 2000, // wait out large video copies before treating as "added"
+            pollInterval: 200,
+        },
+    });
+
+    const onFsEvent = (eventPath) => {
+        if (!isVideoFile(eventPath)) return;
+        _scheduleRescan(folder);
+    };
+
+    watcher.on("add", onFsEvent);
+    watcher.on("unlink", onFsEvent);
+    watcher.on("addDir", () => _scheduleRescan(folder));
+    watcher.on("unlinkDir", () => _scheduleRescan(folder));
+    watcher.on("error", (err) => console.error(`[Watcher] Error on "${folder.label}":`, err.message));
+
+    _watchers.set(folder.id, watcher);
+    console.log(`[Watcher] Watching "${folder.label}" → ${folder.path}`);
+}
+
+function _stopWatching(folderId) {
+    const w = _watchers.get(folderId);
+    if (w) {
+        w.close();
+        _watchers.delete(folderId);
+    }
+    if (_debounceTimers.has(folderId)) {
+        clearTimeout(_debounceTimers.get(folderId));
+        _debounceTimers.delete(folderId);
+    }
+}
+
+// Call once at server boot with all library folders.
+function watchAllFolders(folders) {
+    for (const folder of folders) _watchFolder(folder);
+}
+
+// Call on graceful shutdown.
+function stopAllWatchers() {
+    for (const id of [..._watchers.keys()]) _stopWatching(id);
+}
 
 // Returns true only if resolvedPath exists and is a directory; false on any stat error
 function isDirectory(resolvedPath) {
@@ -113,6 +209,10 @@ async function addFolder(req, res) {
         await writeFolders(folders);
         invalidateFolder(newFolder.id);
 
+        // Live-watch this folder immediately — no restart needed to pick up
+        // files added inside it from now on.
+        _watchFolder(newFolder);
+
         return res.status(201).json({ folder: newFolder });
     } catch (err) {
         console.error("[Library] addFolder error:", err);
@@ -135,11 +235,13 @@ async function removeFolder(req, res) {
         const remainingFolders = folders.filter((_, i) => i !== index);
         const { allMedia } = await getAllCached(remainingFolders);
         const activeIds = new Set(allMedia.map((f) => f.id));
+
         await reconcile(activeIds);
 
         folders.splice(index, 1);
         await writeFolders(folders);
         invalidateFolder(id);
+        _stopWatching(id);
 
         return res.json({ message: "Folder removed", id });
     } catch (err) {
@@ -180,6 +282,9 @@ async function updateFolder(req, res) {
         await writeFolders(folders);
         invalidateFolder(id);
 
+        // Re-arm watcher — picks up new path if it changed, harmless no-op otherwise
+        _watchFolder(folder);
+
         return res.json({ folder });
     } catch (err) {
         console.error("[Library] updateFolder error:", err);
@@ -187,4 +292,13 @@ async function updateFolder(req, res) {
     }
 }
 
-module.exports = { getFolders, addFolder, removeFolder, updateFolder, readFolders, writeFolders };
+module.exports = {
+    getFolders,
+    addFolder,
+    removeFolder,
+    updateFolder,
+    readFolders,
+    writeFolders,
+    watchAllFolders,
+    stopAllWatchers,
+};

@@ -27,9 +27,11 @@ import {
     Loader2,
     Info,
     SquarePen,
+    Cloud,
 } from "lucide-react";
 import { dashApi } from "../api/dashboardApi";
 import { api } from "../../api/client";
+import { storageApi } from "../api/storageApi";
 import { Link } from "react-router";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -395,6 +397,18 @@ function SkeletonRow() {
     );
 }
 
+function CloudSkeletonRow() {
+    return (
+        <tr className="border-b border-base-content/5">
+            {[6, 24, 14, 12, 10, 10, 10].map((w, i) => (
+                <td key={i} className="px-4 py-3.5">
+                    <div className="h-3 rounded bg-base-content/8 animate-pulse" style={{ width: `${w}%`, minWidth: "2rem" }} />
+                </td>
+            ))}
+        </tr>
+    );
+}
+
 // ─── Metric chip ──────────────────────────────────────────────────────────────
 function MetricChip({ icon: Icon, label, value, accent }) {
     return (
@@ -412,9 +426,58 @@ function MetricChip({ icon: Icon, label, value, accent }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function DashLibraries() {
+    const [tab, setTab] = useState("local"); // 'local' (default) | 'cloud'
+
     const [libs, setLibs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+
+    // ── Cloud libraries — separate data source entirely (GoFile/Drive via
+    // StorageManager, scanned recursively by cloudScanner.js which feeds
+    // filenames through the existing nameParser, untouched). Only loaded
+    // when the Cloud tab is actually opened.
+    const [cloudLibs, setCloudLibs] = useState([]);
+    const [cloudLoading, setCloudLoading] = useState(false);
+    const [cloudLoaded, setCloudLoaded] = useState(false);
+    const [cloudError, setCloudError] = useState(null);
+    const [cloudRescanning, setCloudRescanning] = useState({});
+
+    const loadCloud = useCallback(async () => {
+        setCloudLoading(true);
+        setCloudError(null);
+        try {
+            const data = await storageApi.librariesSummary();
+            setCloudLibs(data?.libraries ?? []);
+        } catch (err) {
+            setCloudError(err.message);
+        } finally {
+            setCloudLoading(false);
+            setCloudLoaded(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (tab === "cloud" && !cloudLoaded) loadCloud();
+    }, [tab, cloudLoaded, loadCloud]);
+
+    async function handleCloudRescan(lib) {
+        setCloudRescanning((r) => ({ ...r, [lib.id]: true }));
+        await loadCloud();
+        setCloudRescanning((r) => ({ ...r, [lib.id]: false }));
+    }
+
+    async function handleCloudRemove(lib) {
+        if (!window.confirm(`Remove cloud library "${lib.label}"? Files stay on ${lib.provider}, only the Library link is removed.`)) return;
+        try {
+            await storageApi.removeLibrary(lib.id);
+            setCloudLibs((prev) => prev.filter((l) => l.id !== lib.id));
+        } catch (err) {
+            setCloudError(err.message);
+        }
+    }
+
+    const cloudTotalFiles = cloudLibs.reduce((a, l) => a + (l.fileCount || 0), 0);
+    const cloudTotalSize = cloudLibs.reduce((a, l) => a + (l.sizeBytes || 0), 0);
 
     // modal states
     const [detailLib, setDetailLib] = useState(null);
@@ -491,174 +554,320 @@ export default function DashLibraries() {
                         <p className="text-sm text-base-content/50 mt-0.5">Media folder management and storage monitoring</p>
                     </div>
                     <div className="flex gap-2">
-                        <Link to="/settings" className="btn btn-sm btn-primary gap-1.5 border-none">
-                            <FolderOpen size={12} />
-                            Add Library
-                        </Link>
-                        <button onClick={load} disabled={loading} className="btn btn-sm btn-ghost gap-1.5 disabled:opacity-50 border-none">
-                            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-                            Refresh
-                        </button>
+                        {tab === "local" ? (
+                            <>
+                                <Link to="/settings" className="btn btn-sm btn-primary gap-1.5 border-none">
+                                    <FolderOpen size={12} />
+                                    Add Library
+                                </Link>
+                                <button onClick={load} disabled={loading} className="btn btn-sm btn-ghost gap-1.5 disabled:opacity-50 border-none">
+                                    <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                                    Refresh
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <Link to="/dashboard/storage" className="btn btn-sm btn-primary gap-1.5 border-none">
+                                    <Cloud size={12} />
+                                    Import Cloud Library
+                                </Link>
+                                <button onClick={loadCloud} disabled={cloudLoading} className="btn btn-sm btn-ghost gap-1.5 disabled:opacity-50 border-none">
+                                    <RefreshCw size={12} className={cloudLoading ? "animate-spin" : ""} />
+                                    Refresh
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
 
-                {/* error */}
-                {error && (
-                    <div className="alert alert-error shadow-sm text-sm">
-                        <AlertTriangle size={15} />
-                        <span>{error}</span>
-                    </div>
-                )}
+                {/* Local / Cloud tabs */}
+                <div className="flex bg-base-300 rounded-md p-0.5 gap-0.5 w-fit border border-base-content/8">
+                    <button
+                        onClick={() => setTab("local")}
+                        className={`px-3.5 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border-none ${
+                            tab === "local" ? "bg-primary text-primary-content shadow-sm" : "text-base-content/60 hover:text-base-content hover:bg-base-content/5"
+                        }`}>
+                        <HardDrive size={13} /> Local
+                    </button>
+                    <button
+                        onClick={() => setTab("cloud")}
+                        className={`px-3.5 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border-none ${
+                            tab === "cloud" ? "bg-primary text-primary-content shadow-sm" : "text-base-content/60 hover:text-base-content hover:bg-base-content/5"
+                        }`}>
+                        <Cloud size={13} /> Cloud
+                    </button>
+                </div>
 
-                {/* metrics */}
-                {(!loading || libs.length > 0) && (
-                    <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2">
-                        <MetricChip icon={Layers} label="Libraries" value={loading ? "—" : libs.length} accent="oklch(var(--p))" />
-                        <MetricChip icon={FileVideo} label="Total Files" value={loading ? "—" : totalFiles.toLocaleString()} accent="oklch(var(--in))" />
-                        <MetricChip icon={Database} label="Total Storage" value={loading ? "—" : fmtBytes(totalSize)} accent="oklch(var(--su))" />
-                        <MetricChip
-                            icon={Server}
-                            label="Online / Offline"
-                            value={loading ? "—" : `${onlineCount} / ${offlineCount}`}
-                            accent={offlineCount > 0 ? "oklch(var(--er))" : "oklch(var(--su))"}
-                        />
-                    </div>
-                )}
+                {tab === "local" ? (
+                    <>
+                        {/* error */}
+                        {error && (
+                            <div className="alert alert-error shadow-sm text-sm">
+                                <AlertTriangle size={15} />
+                                <span>{error}</span>
+                            </div>
+                        )}
 
-                {/* main table */}
-                <div className="card bg-base-200 border border-base-content/8 shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto scrollbar-none">
-                        <table className="table w-full text-sm min-w-225">
-                            <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-sm border-b border-base-content/8">
-                                <tr className="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
-                                    <th className="pl-5 pr-3 py-3.5 w-10">#Sl</th>
-                                    <th className="px-3 py-3.5">Library</th>
-                                    <th className="px-3 py-3.5">Path</th>
-                                    <th className="px-3 py-3.5">Type</th>
-                                    <th className="px-3 py-3.5">Status</th>
-                                    <th className="px-3 py-3.5 text-right">Files</th>
-                                    <th className="px-3 py-3.5 text-right">Storage</th>
-                                    <th className="px-3 py-3.5 min-w-130px">Usage %</th>
-                                    {/* action column header */}
-                                    <th className="pl-3 pr-4 py-3.5 text-center w-32">Actions</th>
-                                </tr>
-                            </thead>
+                        {/* metrics */}
+                        {(!loading || libs.length > 0) && (
+                            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                                <MetricChip icon={Layers} label="Libraries" value={loading ? "—" : libs.length} accent="oklch(var(--p))" />
+                                <MetricChip icon={FileVideo} label="Total Files" value={loading ? "—" : totalFiles.toLocaleString()} accent="oklch(var(--in))" />
+                                <MetricChip icon={Database} label="Total Storage" value={loading ? "—" : fmtBytes(totalSize)} accent="oklch(var(--su))" />
+                                <MetricChip
+                                    icon={Server}
+                                    label="Online / Offline"
+                                    value={loading ? "—" : `${onlineCount} / ${offlineCount}`}
+                                    accent={offlineCount > 0 ? "oklch(var(--er))" : "oklch(var(--su))"}
+                                />
+                            </div>
+                        )}
 
-                            <tbody>
-                                {loading ? (
-                                    [...Array(4)].map((_, i) => <SkeletonRow key={i} />)
-                                ) : libs.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={9}>
-                                            <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
-                                                <div className="w-14 h-14 rounded-2xl bg-base-300 flex items-center justify-center">
-                                                    <HardDrive size={26} className="text-base-content/25" />
-                                                </div>
-                                                <div className="max-w-xs">
-                                                    <p className="font-semibold text-base-content/60">No libraries configured</p>
-                                                    <p className="text-[13px] text-base-content/40 mt-1.5 leading-relaxed">
-                                                        Libraries are folders FLUX scans for video files. Add one via <span className="font-medium text-base-content/55">Settings → Library</span>.
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    libs.map((lib, i) => {
-                                        const { label: typeLabel, Icon, badgeClass, barClass } = guessType(lib);
-                                        const online = lib.status === "online";
-                                        const pct = totalSize > 0 ? Math.min(100, Math.round(((lib.sizeBytes || 0) / totalSize) * 100)) : 0;
+                        {/* main table */}
+                        <div className="card bg-base-200 border border-base-content/8 shadow-sm overflow-hidden">
+                            <div className="overflow-x-auto scrollbar-none">
+                                <table className="table w-full text-sm min-w-225">
+                                    <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-sm border-b border-base-content/8">
+                                        <tr className="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
+                                            <th className="pl-5 pr-3 py-3.5 w-10">#Sl</th>
+                                            <th className="px-3 py-3.5">Library</th>
+                                            <th className="px-3 py-3.5">Path</th>
+                                            <th className="px-3 py-3.5">Type</th>
+                                            <th className="px-3 py-3.5">Status</th>
+                                            <th className="px-3 py-3.5 text-right">Files</th>
+                                            <th className="px-3 py-3.5 text-right">Storage</th>
+                                            <th className="px-3 py-3.5 min-w-130px">Usage %</th>
+                                            {/* action column header */}
+                                            <th className="pl-3 pr-4 py-3.5 text-center w-32">Actions</th>
+                                        </tr>
+                                    </thead>
 
-                                        return (
-                                            <tr
-                                                key={lib.id}
-                                                className="group border-b border-base-content/5 last:border-0
-                                                    hover:bg-base-content/4 transition-colors cursor-pointer"
-                                                onClick={() => setDetailLib(lib)}>
-                                                {/* # */}
-                                                <td className="pl-5 pr-3 py-3.5 text-base-content/30 font-mono text-xs tabular-nums">{String(i + 1).padStart(2, "0")}</td>
-
-                                                {/* name */}
-                                                <td className="px-3 py-3.5">
-                                                    <div className="flex items-center gap-2.5">
-                                                        <div
-                                                            className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0
-                                                            ${online ? "bg-base-300" : "bg-base-300/60"}`}>
-                                                            <Icon size={13} className={online ? "text-base-content/60" : "text-base-content/25"} />
+                                    <tbody>
+                                        {loading ? (
+                                            [...Array(4)].map((_, i) => <SkeletonRow key={i} />)
+                                        ) : libs.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={9}>
+                                                    <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
+                                                        <div className="w-14 h-14 rounded-2xl bg-base-300 flex items-center justify-center">
+                                                            <HardDrive size={26} className="text-base-content/25" />
                                                         </div>
-                                                        <span className="font-semibold text-base-content leading-tight">{lib.label || "Unnamed Library"}</span>
-                                                    </div>
-                                                </td>
-
-                                                {/* path */}
-                                                <td className="px-3 py-3.5 max-w-180px">
-                                                    <p className="text-[12px] font-mono text-base-content/45 truncate" title={lib.path}>
-                                                        {lib.path}
-                                                    </p>
-                                                </td>
-
-                                                {/* type */}
-                                                <td className="px-3 py-3.5">
-                                                    <span className={`badge badge-sm badge-outline rounded-full font-medium ${badgeClass}`}>{typeLabel}</span>
-                                                </td>
-
-                                                {/* status */}
-                                                <td className="px-3 py-3.5">
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${online ? "bg-success" : "bg-error"}`} />
-                                                        <span className={`text-xs font-medium ${online ? "text-success" : "text-error"}`}>{online ? "Online" : "Offline"}</span>
-                                                    </div>
-                                                </td>
-
-                                                {/* files */}
-                                                <td className="px-3 py-3.5 text-right">
-                                                    <span className="text-sm font-medium text-base-content tabular-nums">{(lib.fileCount ?? 0).toLocaleString()}</span>
-                                                </td>
-
-                                                {/* storage */}
-                                                <td className="px-3 py-3.5 text-right">
-                                                    <span className="text-sm font-medium text-base-content tabular-nums">{lib.size || fmtBytes(lib.sizeBytes)}</span>
-                                                </td>
-
-                                                {/* usage % */}
-                                                <td className="px-3 py-3.5">
-                                                    <div className="flex items-center gap-2.5">
-                                                        <progress className={`progress h-1.5 w-20 rounded-full ${online ? barClass : "progress-error"}`} value={pct} max="100" />
-                                                        <span className="text-[11px] font-semibold text-base-content/50 tabular-nums w-8 text-right">{pct}%</span>
-                                                    </div>
-                                                </td>
-
-                                                {/* ── action icon buttons ── */}
-                                                <td className="pl-3 pr-4 py-3.5" onClick={(e) => e.stopPropagation()}>
-                                                    <div className="flex items-center justify-center gap-0.5">
-                                                        {/* Details */}
-                                                        <ActionBtn icon={Info} title="View details" onClick={() => setDetailLib(lib)} />
-                                                        {/* Rescan */}
-                                                        <ActionBtn icon={RotateCcw} title="Rescan library" onClick={() => handleRescan(lib)} spinning={!!rescanning[lib.id]} />
-                                                        {/* Edit */}
-                                                        <ActionBtn icon={SquarePen} title="Edit library" onClick={() => setEditLib(lib)} />
-                                                        {/* Remove */}
-                                                        <ActionBtn icon={Trash2} title="Remove library" onClick={() => setRemoveLib(lib)} danger />
+                                                        <div className="max-w-xs">
+                                                            <p className="font-semibold text-base-content/60">No libraries configured</p>
+                                                            <p className="text-[13px] text-base-content/40 mt-1.5 leading-relaxed">
+                                                                Libraries are folders FLUX scans for video files. Add one via{" "}
+                                                                <span className="font-medium text-base-content/55">Settings → Library</span>.
+                                                            </p>
+                                                        </div>
                                                     </div>
                                                 </td>
                                             </tr>
-                                        );
-                                    })
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
+                                        ) : (
+                                            libs.map((lib, i) => {
+                                                const { label: typeLabel, Icon, badgeClass, barClass } = guessType(lib);
+                                                const online = lib.status === "online";
+                                                const pct = totalSize > 0 ? Math.min(100, Math.round(((lib.sizeBytes || 0) / totalSize) * 100)) : 0;
 
-                    {/* table footer */}
-                    {!loading && libs.length > 0 && (
-                        <div className="px-5 py-3 border-t border-base-content/5 flex items-center justify-between">
-                            <p className="text-[11px] text-base-content/40">
-                                {libs.length} {libs.length === 1 ? "library" : "libraries"} · {totalFiles.toLocaleString()} files · {fmtBytes(totalSize)} total
-                            </p>
-                            <p className="text-[11px] text-base-content/30 hidden sm:block">Click row to inspect</p>
+                                                return (
+                                                    <tr
+                                                        key={lib.id}
+                                                        className="group border-b border-base-content/5 last:border-0
+                                                    hover:bg-base-content/4 transition-colors cursor-pointer"
+                                                        onClick={() => setDetailLib(lib)}>
+                                                        {/* # */}
+                                                        <td className="pl-5 pr-3 py-3.5 text-base-content/30 font-mono text-xs tabular-nums">{String(i + 1).padStart(2, "0")}</td>
+
+                                                        {/* name */}
+                                                        <td className="px-3 py-3.5">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div
+                                                                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0
+                                                            ${online ? "bg-base-300" : "bg-base-300/60"}`}>
+                                                                    <Icon size={13} className={online ? "text-base-content/60" : "text-base-content/25"} />
+                                                                </div>
+                                                                <span className="font-semibold text-base-content leading-tight">{lib.label || "Unnamed Library"}</span>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* path */}
+                                                        <td className="px-3 py-3.5 max-w-180px">
+                                                            <p className="text-[12px] font-mono text-base-content/45 truncate" title={lib.path}>
+                                                                {lib.path}
+                                                            </p>
+                                                        </td>
+
+                                                        {/* type */}
+                                                        <td className="px-3 py-3.5">
+                                                            <span className={`badge badge-sm badge-outline rounded-full font-medium ${badgeClass}`}>{typeLabel}</span>
+                                                        </td>
+
+                                                        {/* status */}
+                                                        <td className="px-3 py-3.5">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${online ? "bg-success" : "bg-error"}`} />
+                                                                <span className={`text-xs font-medium ${online ? "text-success" : "text-error"}`}>{online ? "Online" : "Offline"}</span>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* files */}
+                                                        <td className="px-3 py-3.5 text-right">
+                                                            <span className="text-sm font-medium text-base-content tabular-nums">{(lib.fileCount ?? 0).toLocaleString()}</span>
+                                                        </td>
+
+                                                        {/* storage */}
+                                                        <td className="px-3 py-3.5 text-right">
+                                                            <span className="text-sm font-medium text-base-content tabular-nums">{lib.size || fmtBytes(lib.sizeBytes)}</span>
+                                                        </td>
+
+                                                        {/* usage % */}
+                                                        <td className="px-3 py-3.5">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <progress className={`progress h-1.5 w-20 rounded-full ${online ? barClass : "progress-error"}`} value={pct} max="100" />
+                                                                <span className="text-[11px] font-semibold text-base-content/50 tabular-nums w-8 text-right">{pct}%</span>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* ── action icon buttons ── */}
+                                                        <td className="pl-3 pr-4 py-3.5" onClick={(e) => e.stopPropagation()}>
+                                                            <div className="flex items-center justify-center gap-0.5">
+                                                                {/* Details */}
+                                                                <ActionBtn icon={Info} title="View details" onClick={() => setDetailLib(lib)} />
+                                                                {/* Rescan */}
+                                                                <ActionBtn icon={RotateCcw} title="Rescan library" onClick={() => handleRescan(lib)} spinning={!!rescanning[lib.id]} />
+                                                                {/* Edit */}
+                                                                <ActionBtn icon={SquarePen} title="Edit library" onClick={() => setEditLib(lib)} />
+                                                                {/* Remove */}
+                                                                <ActionBtn icon={Trash2} title="Remove library" onClick={() => setRemoveLib(lib)} danger />
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* table footer */}
+                            {!loading && libs.length > 0 && (
+                                <div className="px-5 py-3 border-t border-base-content/5 flex items-center justify-between">
+                                    <p className="text-[11px] text-base-content/40">
+                                        {libs.length} {libs.length === 1 ? "library" : "libraries"} · {totalFiles.toLocaleString()} files · {fmtBytes(totalSize)} total
+                                    </p>
+                                    <p className="text-[11px] text-base-content/30 hidden sm:block">Click row to inspect</p>
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
+                    </>
+                ) : (
+                    <>
+                        {/* cloud error */}
+                        {cloudError && (
+                            <div className="alert alert-error shadow-sm text-sm">
+                                <AlertTriangle size={15} />
+                                <span>{cloudError}</span>
+                            </div>
+                        )}
+
+                        {/* cloud metrics */}
+                        {(!cloudLoading || cloudLibs.length > 0) && (
+                            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                <MetricChip icon={Layers} label="Cloud Libraries" value={cloudLoading ? "—" : cloudLibs.length} accent="oklch(var(--p))" />
+                                <MetricChip icon={FileVideo} label="Total Files" value={cloudLoading ? "—" : cloudTotalFiles.toLocaleString()} accent="oklch(var(--in))" />
+                                <MetricChip icon={Database} label="Total Storage" value={cloudLoading ? "—" : fmtBytes(cloudTotalSize)} accent="oklch(var(--su))" />
+                            </div>
+                        )}
+
+                        {/* cloud table */}
+                        <div className="card bg-base-200 border border-base-content/8 shadow-sm overflow-hidden">
+                            <div className="overflow-x-auto scrollbar-none">
+                                <table className="table w-full text-sm min-w-175">
+                                    <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-sm border-b border-base-content/8">
+                                        <tr className="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
+                                            <th className="pl-5 pr-3 py-3.5 w-10">#Sl</th>
+                                            <th className="px-3 py-3.5">Library</th>
+                                            <th className="px-3 py-3.5">Provider</th>
+                                            <th className="px-3 py-3.5">Status</th>
+                                            <th className="px-3 py-3.5 text-right">Files</th>
+                                            <th className="px-3 py-3.5 text-right">Storage</th>
+                                            <th className="pl-3 pr-4 py-3.5 text-center w-24">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {cloudLoading ? (
+                                            [...Array(3)].map((_, i) => <CloudSkeletonRow key={i} />)
+                                        ) : cloudLibs.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={7}>
+                                                    <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
+                                                        <div className="w-14 h-14 rounded-2xl bg-base-300 flex items-center justify-center">
+                                                            <Cloud size={26} className="text-base-content/25" />
+                                                        </div>
+                                                        <div className="max-w-xs">
+                                                            <p className="font-semibold text-base-content/60">No cloud libraries imported</p>
+                                                            <p className="text-[13px] text-base-content/40 mt-1.5 leading-relaxed">
+                                                                Import a Google Drive or GoFile folder as a Library from the <span className="font-medium text-base-content/55">Storage</span> page.
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            cloudLibs.map((lib, i) => {
+                                                const online = lib.status === "online";
+                                                return (
+                                                    <tr key={lib.id} className="group border-b border-base-content/5 last:border-0 hover:bg-base-content/4 transition-colors">
+                                                        <td className="pl-5 pr-3 py-3.5 text-base-content/30 font-mono text-xs tabular-nums">{String(i + 1).padStart(2, "0")}</td>
+                                                        <td className="px-3 py-3.5">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${online ? "bg-base-300" : "bg-base-300/60"}`}>
+                                                                    <Cloud size={13} className={online ? "text-base-content/60" : "text-base-content/25"} />
+                                                                </div>
+                                                                <span className="font-semibold text-base-content leading-tight">{lib.label || "Unnamed Library"}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-3 py-3.5">
+                                                            <span className="badge badge-sm badge-outline rounded-md font-medium uppercase">{lib.provider}</span>
+                                                        </td>
+                                                        <td className="px-3 py-3.5">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${online ? "bg-success" : "bg-error"}`} />
+                                                                <span className={`text-xs font-medium ${online ? "text-success" : "text-error"}`} title={lib.error || ""}>
+                                                                    {online ? "Online" : lib.error || "Error"}
+                                                                </span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-3 py-3.5 text-right">
+                                                            <span className="text-sm font-medium text-base-content tabular-nums">{(lib.fileCount ?? 0).toLocaleString()}</span>
+                                                        </td>
+                                                        <td className="px-3 py-3.5 text-right">
+                                                            <span className="text-sm font-medium text-base-content tabular-nums">{fmtBytes(lib.sizeBytes)}</span>
+                                                        </td>
+                                                        <td className="pl-3 pr-4 py-3.5" onClick={(e) => e.stopPropagation()}>
+                                                            <div className="flex items-center justify-center gap-0.5">
+                                                                <ActionBtn icon={RotateCcw} title="Rescan library" onClick={() => handleCloudRescan(lib)} spinning={!!cloudRescanning[lib.id]} />
+                                                                <ActionBtn icon={Trash2} title="Remove library" onClick={() => handleCloudRemove(lib)} danger />
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {!cloudLoading && cloudLibs.length > 0 && (
+                                <div className="px-5 py-3 border-t border-base-content/5 flex items-center justify-between">
+                                    <p className="text-[11px] text-base-content/40">
+                                        {cloudLibs.length} {cloudLibs.length === 1 ? "library" : "libraries"} · {cloudTotalFiles.toLocaleString()} files · {fmtBytes(cloudTotalSize)} total
+                                    </p>
+                                    <p className="text-[11px] text-base-content/30 hidden sm:block">Scanned live via nameParser — same parser local libraries use</p>
+                                </div>
+                            )}
+                        </div>
+                    </>
+                )}
             </div>
         </>
     );

@@ -596,6 +596,20 @@ const _WEBSITE_DASH_TITLE_RE = /^([A-Za-z0-9]+)[\s.]+(com|net|org|co|io|tv|to|me
 
 const _origParseFilenameAdvanced = parseFilenameAdvanced;
 
+// ── ADDED: scoped only to the object returned by parseFilenamePatched below.
+// Nothing above this line (the ORIGINAL parser, parseFilenameOriginal) is
+// touched. Strips any key whose value is null/undefined right before the
+// parsed object goes out — e.g. movies never had season/episode, so those
+// keys just disappear instead of shipping as "season": null in the API
+// response/media.json. Every other field/behavior is untouched.
+function stripNullish(obj) {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+        if (v !== null && v !== undefined) out[k] = v;
+    }
+    return out;
+}
+
 function parseFilenamePatched(filename) {
     // ── STEP 1: Strip paren site prefix ──────────────────────────────────
     let fn = filename;
@@ -838,7 +852,7 @@ function parseFilenamePatched(filename) {
         }
     }
 
-    return adv;
+    return stripNullish(adv);
 }
 
 // Re-export with patched version

@@ -151,7 +151,7 @@ function getAllHistory(req, res) {
 function getOne(req, res) {
     const clientId = getClientId(req);
     const entry = getHistoryEntry(req.params.id, clientId);
-    if (!entry) return res.json({ position: null, duration: null, exists: false });
+    if (!entry) return res.json({ position: null, duration: null, subtitlePosition: null, exists: false });
     return res.json({ ...entry, exists: true });
 }
 

@@ -101,6 +101,8 @@ function detectPartNumber(...fields) {
 //       poster, streamUrl,
 //       watchedAt,      // refreshed on every progress save → drives chronological sort
 //       position, maxPositionReached, duration, completed,
+//       subtitlePosition, // NEW — mirrors `position`; explicit resume seed
+//                         //   for the subtitle renderer's clock
 //       watchCount, lastSessionStart, subtitlePref,
 //       // NOTE: no thumbnail field — frames generated on demand by
 //       // GET /api/media/:id/thumbnail (ffmpeg), never stored here.
@@ -167,7 +169,28 @@ function saveProgress(id, data, clientId) {
 
     const isReset = !!data.isResetAction;
     const incomingPosition = typeof data.position === "number" ? data.position : existing.position;
-    const duration = typeof data.duration === "number" ? data.duration : (existing.duration ?? 0);
+    const incomingDuration = typeof data.duration === "number" ? data.duration : null;
+    const existingDuration = existing.duration || 0;
+    // FIX (entry silently marked completed → resume never fires, even though
+    // position was saved correctly): duration used to be
+    // `typeof data.duration === "number" ? data.duration : existing.duration`
+    // — accepting whatever the caller sent, no floor. But the caller's
+    // duration comes from video.duration (native <video> element), which for
+    // HLS EVENT playlists starts small and grows as segments append, and
+    // resets small again on every fresh session (quality switch, resume-load,
+    // etc) — the exact same session-relative problem as currentTime, just for
+    // the total-length side instead of the position side. A save landing
+    // while that's still small — e.g. right after a quality switch, before
+    // the frontend's real (ffprobe) duration has propagated — could shrink
+    // the STORED duration. `completed = position/duration >= 0.9` then
+    // false-triggers on a perfectly normal mid-watch position, and `completed`
+    // never resets itself back to false afterward even once duration recovers
+    // (nothing here decrements it) — permanently blocking resume from this
+    // point on, both the resume-dialog path and the dialog-less auto-resume
+    // path in the frontend, since both gate strictly on `!completed`. Once a
+    // real duration (>60s — long enough to rule out an early/tiny manifest
+    // read) has been recorded, never accept anything smaller than it again.
+    const duration = incomingDuration == null ? existingDuration : existingDuration > 60 ? Math.max(existingDuration, incomingDuration) : incomingDuration;
     const maxReached = existing.maxPositionReached || 0;
 
     // ── Milestone lock ─────────────────────────────────────────────────────
@@ -232,6 +255,13 @@ function saveProgress(id, data, clientId) {
         streamUrl: data.streamUrl || existing.streamUrl || null,
         watchedAt: new Date().toISOString(),
         position: completed ? 0 : position,
+        // NEW: explicit subtitle-resume position. Same value as `position`
+        // (derived from the same incoming video currentTime, guarded by the
+        // same milestone lock / completed-reset logic above) — kept as its
+        // own key so the frontend can seed the subtitle clock directly from
+        // history without any ambiguity about which field it's reading for
+        // which purpose. Always in sync with position; never diverges.
+        subtitlePosition: completed ? 0 : position,
         maxPositionReached, // never zeroed on completion — milestone lock integrity
         duration,
         completed,

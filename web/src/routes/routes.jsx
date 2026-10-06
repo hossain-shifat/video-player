@@ -4,11 +4,13 @@ import Home from "../Pages/Home/Home";
 import AllCategory from "../Pages/Category/AllCategory";
 import CategoryPage from "../Pages/Category/CategoryPage";
 import MediaDetails from "../Pages/Media/Details/MediaDetails";
+import PersonPage from "../Pages/Person/PersonPage";
 import Movies from "../Pages/Media/Movies/Movies";
 import Series from "../Pages/Media/Series/Series";
 import PlayerPage from "../Pages/Player/PlayerPage";
 import Settings from "../Pages/Settings/Settings";
 import WatchList from "../Pages/WatchList/WatchList";
+import RecommendationsPage from "../Pages/Recommendations/RecommendationsPage";
 // import Player from "../Pages/Player/Player";
 import TermsPage from "../Pages/Terms/TermsPage";
 import PrivacyPage from "../Pages/Privacy/PrivacyPage";
@@ -32,6 +34,7 @@ import DashLibraries from "../dashboard/pages/DashLibraries";
 import DashMedia from "../dashboard/pages/DashMedia";
 import DashJobs from "../dashboard/pages/DashJobs";
 import DashUploads from "../dashboard/pages/DashUploads";
+import DashStorage from "../dashboard/pages/DashStorage";
 import DashIPTV from "../dashboard/pages/DashIPTV";
 import ErrorPreview from "../Errors/ErrorPreview";
 import ErrorShowcase from "../Errors/ErrorShowcase";
@@ -74,6 +77,7 @@ export const router = createBrowserRouter([
             { path: "media", Component: DashMedia },
             { path: "jobs", Component: DashJobs },
             { path: "uploads", Component: DashUploads },
+            { path: "storage", Component: DashStorage },
         ],
     },
 
@@ -86,12 +90,14 @@ export const router = createBrowserRouter([
             { path: "category/all", Component: AllCategory },
             { path: "category/:name", Component: CategoryPage },
             { path: "media/:id", Component: MediaDetails },
+            { path: "person/:personId", Component: PersonPage },
             { path: "live", Component: Live },
             { path: "live/category/:slug", Component: LiveCategory },
             { path: "movies", Component: Movies },
             { path: "series", Component: Series },
             { path: "settings", Component: Settings },
             { path: "watchlist", Component: WatchList },
+            { path: "recommendations", Component: RecommendationsPage },
             { path: "library", Component: MyLibrary },
             { path: "my-media", Component: MyMedia },
             { path: "terms", Component: TermsPage },

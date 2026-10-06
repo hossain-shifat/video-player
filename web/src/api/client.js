@@ -36,6 +36,14 @@ export function setAuthLoading(loading) {
     _isAuthLoading = loading;
 }
 
+// Plain token getter for call sites that can't go through the axios instance
+// (e.g. raw XMLHttpRequest used for upload-progress tracking in DashUploads.jsx).
+// axios requests already get this automatically via the request interceptor below —
+// this export exists only for those manual XHR cases.
+export function getAuthToken() {
+    return _getToken ? _getToken() : null;
+}
+
 // ─── Axios instance ───────────────────────────────────────────────────────────
 
 export const axiosInstance = axios.create({

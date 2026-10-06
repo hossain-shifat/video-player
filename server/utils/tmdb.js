@@ -30,8 +30,27 @@ function getAuth() {
 }
 
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
-const RATE_LIMIT = 38;
-const RATE_WINDOW = 10_000;
+// SPEED FIX: this was capped at 38 requests per 10 SECONDS (~3.8 req/sec) —
+// a leftover from TMDB's old v3-era "40 requests / 10 seconds" policy. With
+// ~3-4 TMDB calls per title (base + release_dates/content_ratings + up to 2
+// review pages), 1000 titles = ~3500-4000 calls. At 3.8/sec that's
+// 900-1050 SECONDS (15-17 minutes) just waiting in the rate-limit queue —
+// this alone was the entire "too slow" problem, and it's also why
+// production_companies looked permanently null for later titles: their
+// /company/{id} calls were sitting in that same backed-up queue and simply
+// hadn't gotten a turn yet, not actually failing.
+//
+// TMDB's modern real-world ceiling is far higher than the old 40/10s policy
+// — effectively no hard cap with a valid key, ~50 req/sec is a commonly
+// used safe target. Defaulting to that; override via env if you're hitting
+// 429s on your specific key/plan, or want to push it higher.
+//   TMDB_RATE_LIMIT      — max requests per window (default 45)
+//   TMDB_RATE_WINDOW_MS  — window length in ms (default 1000 = 1 second)
+// 45 req/sec ≈ 2700 req/min — at ~3-4 calls/title that's roughly 700-900
+// titles/min on a cold cache, and much faster once production companies
+// start hitting their cross-title cache.
+const RATE_LIMIT = parseInt(process.env.TMDB_RATE_LIMIT || "45", 10);
+const RATE_WINDOW = parseInt(process.env.TMDB_RATE_WINDOW_MS || "1000", 10);
 let requestsInWindow = 0;
 let windowStart = Date.now();
 let _rateMutex = Promise.resolve();
@@ -187,7 +206,19 @@ function pickBestResult(results, queryTitle, year, dateField) {
 
 const LOGO_SIZE = "w185";
 
-// ─── New helper functions (reviews, OMDB, content rating, etc.) ───────────────
+// ─── New helper functions (reviews, OMDB, etc.) ───────────────────────────────
+//
+// CLEANUP: fetchContentRating() and fetchKeywords() were removed here.
+// They each cost one extra TMDB request PER TITLE (2 extra calls x every
+// movie/show in your library) and fed `contentRating` / `keywords` fields
+// that are never read by MediaDetails.jsx, CastAndCrew.jsx, Reviews.jsx,
+// SimilarMedia.jsx, or DashMedia.jsx — confirmed by grep across all of them.
+// Removing them cuts TMDB traffic and speeds up first-time scans/refreshes.
+//
+// v18 NOTE: keywords is reintroduced below via the metadata-upgrade patch
+// layer near the bottom of this file — the frontend now has a planned use
+// for it, so it's no longer dead weight. This block/comment is left as-is
+// for history; the new fetch path is separate and additive.
 
 // Silent fetch — returns null on error (for optional enrichment calls)
 async function tmdbFetchSafe(endpoint, params = {}) {
@@ -198,10 +229,19 @@ async function tmdbFetchSafe(endpoint, params = {}) {
     }
 }
 
-// Collect review IDs only — frontend queries /api/review/:id for full data
+// Collect review IDs only — frontend queries /api/review/:id for full data.
+// SPEED FIX: was always fetching page 1 AND page 2 unconditionally — most
+// titles have 20 or fewer reviews total (fits on page 1), so that second
+// call was wasted on the common case. Only fetch page 2 when page 1 itself
+// says there's more (total_pages > 1). At 1000-title scale that's roughly
+// 1000 fewer TMDB calls for titles with a single page of reviews.
 async function fetchReviews(endpoint) {
-    const [p1, p2] = await Promise.all([tmdbFetchSafe(`${endpoint}/reviews`, { page: 1 }), tmdbFetchSafe(`${endpoint}/reviews`, { page: 2 })]);
-    const all = [...(p1?.results ?? []), ...(p2?.results ?? [])];
+    const p1 = await tmdbFetchSafe(`${endpoint}/reviews`, { page: 1 });
+    let all = p1?.results ?? [];
+    if ((p1?.total_pages ?? 1) > 1) {
+        const p2 = await tmdbFetchSafe(`${endpoint}/reviews`, { page: 2 });
+        all = all.concat(p2?.results ?? []);
+    }
     return all.slice(0, 10).map((r) => r.id);
 }
 
@@ -234,50 +274,127 @@ async function fetchOmdbRatings(imdbId) {
     }
 }
 
-// Content rating (US): "PG-13", "TV-MA", etc.
-async function fetchContentRating(mediaId, type) {
-    if (type === "movie") {
-        const data = await tmdbFetchSafe(`/movie/${mediaId}/release_dates`);
-        const us = (data?.results || []).find((r) => r.iso_3166_1 === "US");
-        return us?.release_dates?.[0]?.certification || null;
-    }
-    const data = await tmdbFetchSafe(`/tv/${mediaId}/content_ratings`);
-    const us = (data?.results || []).find((r) => r.iso_3166_1 === "US");
-    return us?.rating || null;
-}
-
-// Top 20 TMDB keywords
-async function fetchKeywords(mediaId, type) {
-    const endpoint = type === "movie" ? `/movie/${mediaId}/keywords` : `/tv/${mediaId}/keywords`;
-    const data = await tmdbFetchSafe(endpoint);
-    const arr = data?.keywords ?? data?.results ?? [];
-    return arr.slice(0, 20).map((k) => ({ id: k.id, name: k.name }));
+// NULL FIX: TMDB sometimes sends null/empty for name, character, job,
+// department on individual credit entries (guest/uncredited/combined-credit
+// rows). Previously these passed straight through as `null`, which the
+// frontend then rendered literally as the text "null" in the cast/crew UI.
+// Every string field below now falls back to a safe display value instead.
+function safeStr(val, fallback) {
+    return typeof val === "string" && val.trim() ? val.trim() : fallback;
 }
 
 // Cast with tmdbPersonId (for future /person/:id lookups)
 function shapeCast(castArr, limit = 15) {
-    return (castArr || []).slice(0, limit).map((c) => ({
-        tmdbPersonId: c.id,
-        name: c.name,
-        character: c.character,
-        order: c.order ?? null,
-        photo: imgUrl("w185", c.profile_path),
-    }));
-}
-
-// Key crew: director, writers, DP, composer
-function shapeCrew(crewArr) {
-    const KEEP = new Set(["Director", "Screenplay", "Writer", "Story", "Original Music Composer", "Director of Photography"]);
-    return (crewArr || [])
-        .filter((c) => KEEP.has(c.job))
-        .slice(0, 10)
+    return (castArr || [])
+        .filter((c) => c && safeStr(c.name, null)) // drop entries with no usable name at all
+        .slice(0, limit)
         .map((c) => ({
             tmdbPersonId: c.id,
-            name: c.name,
-            job: c.job,
-            department: c.department,
+            name: safeStr(c.name, "Unknown"),
+            character: safeStr(c.character, "Unknown Role"),
+            order: c.order ?? null,
             photo: imgUrl("w185", c.profile_path),
         }));
+}
+
+// Key crew — expanded (v18) from the original director/writer/DP/composer-only
+// set to also cover producing, editing, and design roles (metadata upgrade
+// plan, "expanded crew" feature). Purely additive: existing job names kept,
+// new ones appended. Limit raised 10 → 15 to give the wider role set room
+// without starving out directors/writers.
+function shapeCrew(crewArr) {
+    const KEEP = new Set([
+        "Director",
+        "Screenplay",
+        "Writer",
+        "Story",
+        "Producer",
+        "Executive Producer",
+        "Editor",
+        "Director of Photography",
+        "Original Music Composer",
+        "Production Designer",
+        "Costume Designer",
+        "Casting",
+    ]);
+    return (crewArr || [])
+        .filter((c) => c && KEEP.has(c.job) && safeStr(c.name, null))
+        .slice(0, 15)
+        .map((c) => ({
+            tmdbPersonId: c.id,
+            name: safeStr(c.name, "Unknown"),
+            job: safeStr(c.job, "Unknown Role"),
+            department: safeStr(c.department, "Unknown"),
+            photo: imgUrl("w185", c.profile_path),
+        }));
+}
+
+// ─── Production companies ──────────────────────────────────────────────────────
+// ADDED. `data.production_companies` on the base /movie or /tv response only
+// gives {id, name, logo_path, origin_country} — no description, no
+// headquarters, no homepage, no parent company. Those live on a SEPARATE
+// per-company endpoint: GET /company/{id}.
+//
+// Cached per company id, not per title — the same studio (Marvel Studios,
+// Warner Bros, Toei Animation, etc.) shows up across many titles in your
+// library, and a company's own details barely ever change. First movie that
+// references "Marvel Studios" pays for the call; every other title that also
+// has Marvel Studios attached reuses the cached result for free.
+//
+// FIX: only a SUCCESSFUL fetch gets cached permanently now. Previously the
+// in-flight promise itself was cached immediately — if that first fetch
+// failed (timeout/rate-limit/etc, easy to hit during a big first scan with
+// lots of companies), the cached result was a resolved `null` FOREVER, with
+// no retry ever happening again for that company. That's exactly why
+// description/parentCompany were stuck null — those two fields have no
+// fallback to the base list data (unlike name/logo/originCountry, which do),
+// so a permanently-poisoned cache entry showed up as "always null" for them
+// specifically. A separate in-flight map still dedupes concurrent requests
+// for the same company without permanently caching a failure.
+const _companyDetailsCache = new Map(); // companyId -> resolved data, ONLY on success
+const _companyDetailsInFlight = new Map(); // companyId -> pending promise, cleared once settled
+
+function _fetchCompanyDetails(companyId) {
+    if (_companyDetailsCache.has(companyId)) return Promise.resolve(_companyDetailsCache.get(companyId));
+    if (_companyDetailsInFlight.has(companyId)) return _companyDetailsInFlight.get(companyId);
+
+    const promise = tmdbFetchSafe(`/company/${companyId}`).then((data) => {
+        _companyDetailsInFlight.delete(companyId);
+        if (data) _companyDetailsCache.set(companyId, data); // only cache real success
+        return data;
+    });
+    _companyDetailsInFlight.set(companyId, promise);
+    return promise;
+}
+
+// De-dupes overlapping fields between the base list entry and the detail
+// fetch (both can carry `name`/`origin_country`) — each ends up as exactly
+// ONE key in the output, detail-fetch value preferred when present, base
+// list value as fallback. No duplicate/near-duplicate keys shipped.
+async function shapeProductionCompanies(companiesArr) {
+    if (!companiesArr || !companiesArr.length) return [];
+    return Promise.all(
+        companiesArr.map(async (c) => {
+            const details = await _fetchCompanyDetails(c.id);
+            const parent = details?.parent_company;
+            return {
+                tmdbCompanyId: c.id,
+                name: details?.name || c.name,
+                logo: imgUrl(LOGO_SIZE, details?.logo_path || c.logo_path),
+                originCountry: details?.origin_country || c.origin_country || null,
+                description: details?.description || null,
+                headquarters: details?.headquarters || null,
+                homepage: details?.homepage || null,
+                parentCompany: parent
+                    ? {
+                          tmdbCompanyId: parent.id,
+                          name: parent.name,
+                          logo: imgUrl(LOGO_SIZE, parent.logo_path),
+                      }
+                    : null,
+            };
+        }),
+    );
 }
 
 // ─── Movie endpoints ──────────────────────────────────────────────────────────
@@ -298,11 +415,14 @@ async function searchMovie(title, year = null) {
 async function getMovieDetails(tmdbId) {
     const data = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: "credits,videos,external_ids" });
 
-    // Parallel optional enrichment (all safe — won't throw)
-    const [reviews, contentRating, keywords] = await Promise.all([fetchReviews(`/movie/${tmdbId}`), fetchContentRating(tmdbId, "movie"), fetchKeywords(tmdbId, "movie")]);
-
     const imdbId = data.external_ids?.imdb_id ?? null;
-    const omdbRatings = await fetchOmdbRatings(imdbId);
+
+    // SPEED FIX: these three don't depend on each other at all — reviews and
+    // production companies only need `data` (already have it), OMDB only
+    // needs imdbId (already have it). They were being awaited one at a time
+    // before, which just stacks up latency for no reason. Fire all three at
+    // once instead.
+    const [reviews, omdbRatings, production_companies] = await Promise.all([fetchReviews(`/movie/${tmdbId}`), fetchOmdbRatings(imdbId), shapeProductionCompanies(data.production_companies)]);
 
     const allVideos = (data.videos?.results || []).filter((v) => v.site === "YouTube");
     const trailer = allVideos.find((v) => v.type === "Trailer")?.key || null;
@@ -332,12 +452,8 @@ async function getMovieDetails(tmdbId) {
         language: data.original_language || null,
         // ── Upgraded cast (added tmdbPersonId + order) ──
         cast: shapeCast(data.credits?.cast, 15),
-        // ── New fields ──
+        // ── Confirmed-used enrichment ──
         imdbId,
-        contentRating,
-        popularity: data.popularity ? Math.round(data.popularity * 10) / 10 : null,
-        budget: data.budget || null,
-        revenue: data.revenue || null,
         ratings: {
             tmdb: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
             tmdbVotes: data.vote_count || 0,
@@ -348,20 +464,16 @@ async function getMovieDetails(tmdbId) {
         },
         crew: shapeCrew(data.credits?.crew),
         videos,
-        keywords,
         reviews,
-        collection: data.belongs_to_collection
-            ? {
-                  id: data.belongs_to_collection.id,
-                  name: data.belongs_to_collection.name,
-                  poster: imgUrl(POSTER_SIZE, data.belongs_to_collection.poster_path),
-                  backdrop: imgUrl(BACKDROP_SIZE, data.belongs_to_collection.backdrop_path),
-              }
-            : null,
-        spokenLanguages: (data.spoken_languages || []).map((l) => ({
-            code: l.iso_639_1,
-            name: l.english_name || l.name,
-        })),
+        // ── UPDATED: was `studios` (name-only strings), now `production_companies`
+        // (full objects: name, logo, description, headquarters, homepage,
+        // parentCompany) — see shapeProductionCompanies() above.
+        production_companies,
+        // NOTE: popularity, budget, revenue, collection, spokenLanguages,
+        // contentRating, keywords were removed here — confirmed unused by
+        // every frontend file that reads this object.
+        // v18: budget, collection, spokenLanguages, keywords are back — see
+        // the metadata-upgrade patch layer near the bottom of this file.
     };
 }
 
@@ -383,10 +495,11 @@ async function searchTV(title, year = null) {
 async function getTVDetails(tmdbId) {
     const data = await tmdbFetch(`/tv/${tmdbId}`, { append_to_response: "credits,videos,external_ids" });
 
-    const [reviews, contentRating, keywords] = await Promise.all([fetchReviews(`/tv/${tmdbId}`), fetchContentRating(tmdbId, "tv"), fetchKeywords(tmdbId, "tv")]);
-
     const imdbId = data.external_ids?.imdb_id ?? null;
-    const omdbRatings = await fetchOmdbRatings(imdbId);
+
+    // SPEED FIX: same as getMovieDetails — these three are independent,
+    // fire them together instead of one at a time.
+    const [reviews, omdbRatings, production_companies] = await Promise.all([fetchReviews(`/tv/${tmdbId}`), fetchOmdbRatings(imdbId), shapeProductionCompanies(data.production_companies)]);
 
     const allVideos = (data.videos?.results || []).filter((v) => v.site === "YouTube");
     const trailer = allVideos.find((v) => v.type === "Trailer")?.key || null;
@@ -416,14 +529,8 @@ async function getTVDetails(tmdbId) {
         language: data.original_language || null,
         // ── Upgraded cast (added tmdbPersonId + order) ──
         cast: shapeCast(data.credits?.cast, 15),
-        // ── New fields ──
+        // ── Confirmed-used enrichment ──
         imdbId,
-        contentRating,
-        popularity: data.popularity ? Math.round(data.popularity * 10) / 10 : null,
-        episodeRuntime: data.episode_run_time?.[0] ?? null,
-        inProduction: data.in_production ?? null,
-        lastAirDate: data.last_air_date || null,
-        nextEpisodeAirDate: data.next_episode_to_air?.air_date ?? null,
         ratings: {
             tmdb: data.vote_average ? Math.round(data.vote_average * 10) / 10 : null,
             tmdbVotes: data.vote_count || 0,
@@ -434,14 +541,19 @@ async function getTVDetails(tmdbId) {
         },
         crew: shapeCrew(data.credits?.crew),
         videos,
-        keywords,
         reviews,
-        networks: (data.networks || []).slice(0, 3).map((n) => ({
-            id: n.id,
-            name: n.name,
-            logo: imgUrl(LOGO_SIZE, n.logo_path),
-            country: n.origin_country,
-        })),
+        // ── UPDATED: was `studios` (name-only strings), now `production_companies`
+        // (full objects: name, logo, description, headquarters, homepage,
+        // parentCompany) — see shapeProductionCompanies() above. Anime goes
+        // through this same function (see lookupMetadata), so covered too.
+        production_companies,
+        // NOTE: popularity, episodeRuntime, inProduction, lastAirDate,
+        // nextEpisodeAirDate, networks, contentRating, keywords were removed
+        // here — confirmed unused by every frontend file that reads this object.
+        // v18: networks, lastAirDate/nextEpisode (as episodeSchedule),
+        // spokenLanguages, keywords are back — see the metadata-upgrade patch
+        // layer near the bottom of this file. Aggregate (all-season) credits
+        // are also applied there, replacing cast/crew above when available.
     };
 }
 
@@ -455,7 +567,6 @@ async function getSeasonDetails(tmdbId, seasonNumber) {
         airDate: data.air_date || null,
         episodeCount: (data.episodes || []).length,
         episodes: (data.episodes || []).map((ep) => ({
-            // ── Existing fields ──
             episode: ep.episode_number,
             title: ep.name,
             overview: ep.overview || null,
@@ -463,15 +574,9 @@ async function getSeasonDetails(tmdbId, seasonNumber) {
             runtime: ep.runtime || null,
             still: imgUrl(STILL_SIZE, ep.still_path),
             rating: ep.vote_average ? Math.round(ep.vote_average * 10) / 10 : null,
-            // ── New fields ──
-            tmdbEpisodeId: ep.id,
-            voteCount: ep.vote_count || 0,
-            guestStars: (ep.guest_stars || []).slice(0, 5).map((g) => ({
-                tmdbPersonId: g.id,
-                name: g.name,
-                character: g.character,
-                photo: imgUrl("w185", g.profile_path),
-            })),
+            // NOTE: tmdbEpisodeId, voteCount, guestStars were removed here —
+            // confirmed unused (EpisodeRow in MediaDetails.jsx only reads
+            // episode/title/overview/airDate/runtime/still/rating).
         })),
     };
 }
@@ -508,6 +613,25 @@ function buildMovieTitleCandidates(title, part) {
     return [`${title} Chapter ${part}`, `${title} Part ${part}`, title];
 }
 
+// ADDED: getSeasonDetails() itself still returns `seasonNumber` — that's the
+// right, generic behavior for a "get details of season N" function, and
+// anything else calling it directly (e.g. grouper.js building the
+// per-season `seasons: {"1": {...}, "2": {...}}` map) is untouched and still
+// gets the full object exactly as before.
+//
+// The ONLY duplicate was here: lookupMetadata attaches a SINGLE season's
+// details directly onto the metadata object as `metadata.seasonDetails`
+// (used when a filename parses to one specific season), sitting right next
+// to the already-keyed `seasons` object elsewhere in the same response —
+// `seasonNumber` inside `seasonDetails` was just repeating what's already
+// the outer `seasons` object's own key. Stripped only at this one attach
+// point, in all 3 places lookupMetadata does this (anime, series, cross-type
+// movie→series fallback).
+function _seasonDetailsWithoutNumber(seasonDetails) {
+    const { seasonNumber: _drop, ...rest } = seasonDetails;
+    return rest;
+}
+
 // ─── Main lookup ──────────────────────────────────────────────────────────────
 
 async function lookupMetadata(parsed) {
@@ -535,7 +659,7 @@ async function lookupMetadata(parsed) {
         const details = await getTVDetails(hit.id);
         details.type = "anime";
         if (Number.isInteger(season) && season > 0) {
-            details.seasonDetails = await getSeasonDetails(hit.id, season);
+            details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(hit.id, season));
         }
         return details;
     }
@@ -547,7 +671,7 @@ async function lookupMetadata(parsed) {
             if (!hit) return null;
             const details = await getTVDetails(hit.id);
             if (Number.isInteger(season) && season > 0) {
-                details.seasonDetails = await getSeasonDetails(hit.id, season);
+                details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(hit.id, season));
             }
             return details;
         };
@@ -584,7 +708,7 @@ async function lookupMetadata(parsed) {
         console.log(`[TMDB] cross-type: movie → series for "${title}"`);
         const details = await getTVDetails(tvHit.id);
         if (Number.isInteger(season) && season > 0) {
-            details.seasonDetails = await getSeasonDetails(tvHit.id, season);
+            details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(tvHit.id, season));
         }
         return details;
     }
@@ -594,21 +718,85 @@ async function lookupMetadata(parsed) {
 }
 
 // ============================================================================
-// ─── NEW: Release-date backfill patch layer ─────────────────────────────────
-// Problem: some TMDB records have no release_date / first_air_date on the
-// main endpoint (common for newer/regional/streaming-only titles). When that
-// happens `releaseDate`/`firstAirDate`/`year` all come back null, which makes
-// it look like metadata "didn't load" even though everything else (poster,
-// overview, cast, etc.) fetched fine. This wraps the existing functions —
-// none of their internal logic is touched — and fills the gap from
-// alternate TMDB endpoints, falling back to the parsed filename year as a
-// last resort.
+// ─── Merged enrichment patch layer (release-date backfill + certifications) ──
+// SPEED FIX: this used to be TWO separate wrap layers stacked on top of each
+// other (release-date-backfill wrap, then certification wrap on top of
+// THAT). Because each wrap fully awaits the one underneath before doing its
+// own extra work, that stacked 2-3 sequential round trips end-to-end for
+// every single title. On top of that, the two layers were EACH independently
+// calling GET /movie/{id}/release_dates — the exact same endpoint, fetched
+// twice, thrown away once. Both problems fixed by merging into one wrap that
+// fires everything it needs in parallel via Promise.all and shares the one
+// release_dates fetch between both features.
+//
+// None of getMovieDetails/getTVDetails' own internal logic (still further
+// up in this file) is touched — this wraps the fully-built function exactly
+// like before, just as a single combined layer instead of two nested ones.
+//
+// Problem 1 (release-date backfill): some TMDB records have no release_date
+// / first_air_date on the main endpoint (common for newer/regional/
+// streaming-only titles). Falls back to alternate TMDB endpoints.
+//
+// Problem 2 (certifications): per-title certification (e.g. "PG-13") comes
+// from a different endpoint per type:
+//   Movie → GET /movie/{id}/release_dates   → results[].release_dates[].certification
+//   TV    → GET /tv/{id}/content_ratings    → results[].rating
+// enriched with human-readable meaning/order from TMDB's MASTER reference
+// tables (GET /certification/movie/list, GET /certification/tv/list) —
+// those are static, fetched once per server process, cached forever after.
+//
+// Anime routes through getMovieDetails/getTVDetails just like everything
+// else (see lookupMetadata's anime branch), so it's covered automatically.
 // ============================================================================
 
-// Earliest dated release across all countries from /movie/:id/release_dates
-async function _fetchFallbackMovieReleaseDate(tmdbId) {
-    const data = await tmdbFetchSafe(`/movie/${tmdbId}/release_dates`);
-    const allDates = (data?.results || [])
+// Master reference tables — fetched once, reused for every title afterward.
+// Only SUCCESSFUL responses are cached (a failed fetch stays retryable), and
+// concurrent callers share one in-flight request per endpoint.
+const _certListState = {
+    movie: { cache: null, inflight: null },
+    tv: { cache: null, inflight: null },
+};
+
+async function _getCertList(kind) {
+    const state = _certListState[kind];
+    if (state.cache) return state.cache;
+    if (!state.inflight) {
+        state.inflight = (async () => {
+            try {
+                const data = await tmdbFetchSafe(`/certification/${kind}/list`);
+                if (data && data.certifications) state.cache = data.certifications;
+                return state.cache || {};
+            } finally {
+                state.inflight = null; // settled — next miss may retry
+            }
+        })();
+    }
+    return state.inflight;
+}
+
+async function _getMovieCertList() {
+    return _getCertList("movie");
+}
+
+async function _getTVCertList() {
+    return _getCertList("tv");
+}
+
+// Cross-references one certification code against the master list for that
+// country, returning the full {certification, meaning, order} entry. Falls
+// back to a bare object (meaning/order null) if TMDB's master list doesn't
+// have a matching entry for some reason.
+function _lookupCertEntry(certList, country, certValue) {
+    const entries = certList[country] || [];
+    const found = entries.find((e) => e.certification === certValue);
+    return found ? { certification: found.certification, meaning: found.meaning, order: found.order } : { certification: certValue, meaning: null, order: null };
+}
+
+// Pulls both the fallback release date AND the certification map out of the
+// SAME already-fetched /movie/{id}/release_dates payload — one call serving
+// two features instead of one call each.
+function _extractFallbackReleaseDate(releaseDatesRaw) {
+    const allDates = (releaseDatesRaw?.results || [])
         .flatMap((r) => r.release_dates || [])
         .map((d) => d.release_date)
         .filter(Boolean)
@@ -616,7 +804,51 @@ async function _fetchFallbackMovieReleaseDate(tmdbId) {
     return allDates[0] ? allDates[0].slice(0, 10) : null;
 }
 
-// Earliest season air_date, falling back to last_air_date, from /tv/:id
+// LIMIT FIX: TMDB returns certifications for every country it has data for
+// (often 15-20+) — nobody scrolls through that many badges. Keep only the
+// top N, env-configurable via TMDB_CERT_COUNTRY_LIMIT (default 3).
+// US (and GB as a secondary anchor) are prioritized if present, then the
+// rest fill in whatever order TMDB returned them in.
+const CERT_COUNTRY_LIMIT = parseInt(process.env.TMDB_CERT_COUNTRY_LIMIT || "3", 10);
+const CERT_COUNTRY_PRIORITY = ["US", "GB"];
+
+function _limitCertCountries(out) {
+    const keys = Object.keys(out);
+    if (keys.length <= CERT_COUNTRY_LIMIT) return out;
+
+    const picked = CERT_COUNTRY_PRIORITY.filter((cc) => keys.includes(cc));
+    for (const cc of keys) {
+        if (picked.length >= CERT_COUNTRY_LIMIT) break;
+        if (!picked.includes(cc)) picked.push(cc);
+    }
+
+    const limited = {};
+    for (const cc of picked.slice(0, CERT_COUNTRY_LIMIT)) limited[cc] = out[cc];
+    return limited;
+}
+
+function _extractMovieCertifications(releaseDatesRaw, certList) {
+    const countries = releaseDatesRaw?.results || [];
+    const out = {};
+    for (const c of countries) {
+        const codes = [...new Set((c.release_dates || []).map((d) => d.certification).filter((v) => v && v.trim()))];
+        if (!codes.length) continue;
+        // Sorted ascending by `order` (mildest → strictest), matching the
+        // reference structure you gave. Capped to top 2 codes per country —
+        // a country re-releasing with a second rating is rare and the extra
+        // entries were just noise.
+        out[c.iso_3166_1] = codes
+            .map((code) => _lookupCertEntry(certList, c.iso_3166_1, code))
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .slice(0, 2);
+    }
+    return _limitCertCountries(out);
+}
+
+// Earliest season air_date, falling back to last_air_date, from /tv/:id —
+// only fetched when firstAirDate is actually missing (rare), kept as a
+// separate conditional step so the common case (date already present)
+// doesn't pay for an extra call it doesn't need.
 async function _fetchFallbackTVReleaseDate(tmdbId) {
     const data = await tmdbFetchSafe(`/tv/${tmdbId}`);
     if (!data) return null;
@@ -627,29 +859,239 @@ async function _fetchFallbackTVReleaseDate(tmdbId) {
     return seasonDates[0] || data.last_air_date || null;
 }
 
+function _extractTVCertifications(contentRatingsRaw, certList) {
+    const countries = contentRatingsRaw?.results || [];
+    const out = {};
+    for (const c of countries) {
+        if (!c.rating || !c.rating.trim()) continue;
+        out[c.iso_3166_1] = [_lookupCertEntry(certList, c.iso_3166_1, c.rating)];
+    }
+    return _limitCertCountries(out);
+}
+
+// ── Movie: base call + release_dates (shared by date-fallback AND
+// certifications) + cert master list, ALL in parallel. release_dates ends up
+// fetched exactly once per movie no matter what, instead of 0-2 times.
 const _origGetMovieDetails = getMovieDetails;
 getMovieDetails = async function (tmdbId) {
-    const result = await _origGetMovieDetails(tmdbId);
-    if (result && !result.releaseDate) {
-        const fallbackDate = await _fetchFallbackMovieReleaseDate(tmdbId);
+    const [result, releaseDatesRaw, certList] = await Promise.all([_origGetMovieDetails(tmdbId), tmdbFetchSafe(`/movie/${tmdbId}/release_dates`), _getMovieCertList()]);
+    if (!result) return result;
+
+    if (!result.releaseDate) {
+        const fallbackDate = _extractFallbackReleaseDate(releaseDatesRaw);
         if (fallbackDate) {
             result.releaseDate = fallbackDate;
             result.year = parseInt(fallbackDate.slice(0, 4), 10);
         }
     }
+    result.certifications = _extractMovieCertifications(releaseDatesRaw, certList);
     return result;
 };
 
+// ── TV/anime: base call + content_ratings (always needed) + cert master
+// list, in parallel. The release-date fallback fetch is a DIFFERENT
+// endpoint (/tv/{id}, not /content_ratings) and only actually needed when
+// firstAirDate is missing (rare) — kept as a conditional follow-up so the
+// common case doesn't pay for a call it doesn't need.
 const _origGetTVDetails = getTVDetails;
 getTVDetails = async function (tmdbId) {
-    const result = await _origGetTVDetails(tmdbId);
-    if (result && !result.firstAirDate) {
+    const [result, contentRatingsRaw, certList] = await Promise.all([_origGetTVDetails(tmdbId), tmdbFetchSafe(`/tv/${tmdbId}/content_ratings`), _getTVCertList()]);
+    if (!result) return result;
+
+    if (!result.firstAirDate) {
         const fallbackDate = await _fetchFallbackTVReleaseDate(tmdbId);
         if (fallbackDate) {
             result.firstAirDate = fallbackDate;
             result.year = parseInt(fallbackDate.slice(0, 4), 10);
         }
     }
+    result.certifications = _extractTVCertifications(contentRatingsRaw, certList);
+    return result;
+};
+
+// ============================================================================
+// ─── Metadata upgrade patch layer (v18) ──────────────────────────────────────
+// ADDITIVE ONLY — wraps the already-certified getMovieDetails/getTVDetails
+// (the layer directly above) with ONE more parallel TMDB call each, same
+// pattern as the certifications layer: everything fired together via
+// Promise.all, nothing above this line touched.
+//
+// Re-adds fields that a previous cleanup pass removed as "confirmed unused"
+// (collection, spokenLanguages, keywords, budget/revenue, networks,
+// nextEpisodeAirDate) — the frontend now has planned uses for them (collection
+// row, language/country badges, keyword search foundation, next-episode
+// card). Nothing existing is removed, renamed, or restructured.
+//
+// Also applies TV aggregate_credits (whole-show cast/crew across every
+// season, not just whichever episode happened to be the TMDB match) with a
+// safe fallback to the existing per-episode credits if TMDB doesn't return
+// usable aggregate data for a given show.
+//
+// PARSER_VERSION note: this changes both getMovieDetails' and getTVDetails'
+// returned shape, so metadataStore.js's PARSER_VERSION was bumped to 18 in
+// the same delivery — old cache entries auto-invalidate, no manual
+// metadata.json deletion needed. See metadataStore.js version history.
+// ============================================================================
+
+// belongs_to_collection → safe object or null. Never fabricated.
+function _mapCollection(bc) {
+    if (!bc) return null;
+    return {
+        tmdbId: bc.id,
+        name: bc.name,
+        poster: imgUrl(POSTER_SIZE, bc.poster_path),
+        backdrop: imgUrl(BACKDROP_SIZE, bc.backdrop_path),
+    };
+}
+
+// spoken_languages[] → safe array
+function _mapSpokenLanguages(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((l) => ({
+        code: l.iso_639_1 || null,
+        name: l.name || null,
+        englishName: l.english_name || null,
+    }));
+}
+
+// origin_country[] → safe array (movie or TV) — NOT production-company origin
+function _mapOriginCountries(arr) {
+    return Array.isArray(arr) ? arr.filter(Boolean) : [];
+}
+
+// keywords response shape differs by endpoint: movie → {keywords:[...]},
+// tv → {results:[...]}. This is a backend/search foundation — not meant to
+// be dumped prominently into the UI.
+function _mapKeywords(raw) {
+    const list = Array.isArray(raw?.keywords) ? raw.keywords : Array.isArray(raw?.results) ? raw.results : [];
+    return list.map((k) => ({ tmdbId: k.id, name: k.name }));
+}
+
+// external_ids → structured object. The existing top-level `imdbId` string
+// field is left completely untouched — this is an additional representation.
+function _mapExternalIds(ext, tmdbId) {
+    return {
+        imdb: ext?.imdb_id || null,
+        tmdb: tmdbId != null ? String(tmdbId) : null,
+        wikidata: ext?.wikidata_id || null,
+    };
+}
+
+// TV aggregate_credits crew items carry a jobs[] array instead of a single
+// job — flatten to one entry per job so shapeCrew()'s KEEP-set filter/dedupe
+// applies exactly the same way it does for regular movie/TV credits.
+function _flattenAggregateCrew(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const c of arr) {
+        const jobs = Array.isArray(c.jobs) && c.jobs.length ? c.jobs.map((j) => j.job) : [];
+        for (const job of jobs) {
+            out.push({ id: c.id, name: c.name, job, department: c.department, profile_path: c.profile_path });
+        }
+    }
+    return out;
+}
+
+// Deterministic trailer scoring: YouTube > official > Trailer > Teaser >
+// Featurette/Clip, tie-broken by newest publish date. Replaces the base
+// function's naive "first Trailer-type video" pick with an intelligent one,
+// using the full (untrimmed) videos.results TMDB gave us — the existing
+// trimmed `videos` array on the result object is left exactly as-is.
+function _scoreVideoForTrailer(v) {
+    let score = 0;
+    if (v.site === "YouTube") score += 100;
+    if (v.official) score += 50;
+    if (v.type === "Trailer") score += 40;
+    else if (v.type === "Teaser") score += 30;
+    else if (v.type === "Featurette") score += 10;
+    else if (v.type === "Clip") score += 5;
+    if (typeof v.size === "number" && v.size >= 1080) score += 5;
+    return score;
+}
+
+function _pickBestTrailerKey(videosResults) {
+    // Only YouTube entries with a real key are eligible — a non-YouTube key
+    // can't be played by the frontend's YouTube embed.
+    const list = (Array.isArray(videosResults) ? videosResults : []).filter((v) => v && v.site === "YouTube" && v.key);
+    if (!list.length) return null;
+    const sorted = [...list].sort((a, b) => {
+        const diff = _scoreVideoForTrailer(b) - _scoreVideoForTrailer(a);
+        if (diff !== 0) return diff;
+        return new Date(b.published_at || 0) - new Date(a.published_at || 0);
+    });
+    return sorted[0]?.key || null;
+}
+
+const _origGetMovieDetailsV2 = getMovieDetails;
+getMovieDetails = async function (tmdbId) {
+    const [result, extra] = await Promise.all([_origGetMovieDetailsV2(tmdbId), tmdbFetchSafe(`/movie/${tmdbId}`, { append_to_response: "keywords,external_ids,videos" })]);
+    if (!result) return result;
+
+    result.collection = _mapCollection(extra?.belongs_to_collection);
+    result.spokenLanguages = _mapSpokenLanguages(extra?.spoken_languages);
+    result.originCountries = _mapOriginCountries(extra?.origin_country);
+    result.keywords = _mapKeywords(extra?.keywords);
+    result.externalIds = _mapExternalIds(extra?.external_ids, tmdbId);
+    result.financials = {
+        budget: extra?.budget || null,
+        revenue: extra?.revenue || null,
+    };
+    result.trailer = _pickBestTrailerKey(extra?.videos?.results) || result.trailer;
+    return result;
+};
+
+const _origGetTVDetailsV2 = getTVDetails;
+getTVDetails = async function (tmdbId) {
+    const [result, extra] = await Promise.all([_origGetTVDetailsV2(tmdbId), tmdbFetchSafe(`/tv/${tmdbId}`, { append_to_response: "aggregate_credits,keywords,external_ids,videos" })]);
+    if (!result) return result;
+
+    result.spokenLanguages = _mapSpokenLanguages(extra?.spoken_languages);
+    result.originCountries = _mapOriginCountries(extra?.origin_country);
+    result.keywords = _mapKeywords(extra?.keywords);
+    result.externalIds = _mapExternalIds(extra?.external_ids, tmdbId);
+    result.networks = (extra?.networks || []).map((n) => ({
+        id: n.id,
+        name: n.name,
+        logo: imgUrl(LOGO_SIZE, n.logo_path),
+    }));
+    result.episodeSchedule = {
+        lastAirDate: extra?.last_air_date || null,
+        nextAirDate: extra?.next_episode_to_air?.air_date || null,
+        nextEpisode: extra?.next_episode_to_air
+            ? {
+                  season: extra.next_episode_to_air.season_number,
+                  episode: extra.next_episode_to_air.episode_number,
+                  name: extra.next_episode_to_air.name,
+                  airDate: extra.next_episode_to_air.air_date,
+              }
+            : null,
+    };
+    // TMDB's /tv endpoint has no budget/revenue data at all — it's a movie-only
+    // concept on TMDB's side, not something we're failing to fetch. Kept null
+    // (never fabricated) purely so the frontend can read `financials` off
+    // movie AND series/anime without a type check.
+    result.financials = {
+        budget: null,
+        revenue: null,
+    };
+    result.trailer = _pickBestTrailerKey(extra?.videos?.results) || result.trailer;
+
+    // Aggregate credits represent the show across ALL seasons — prefer them
+    // for cast/crew when TMDB actually returned usable data. If not (some
+    // shows genuinely have no aggregate_credits), the existing per-episode
+    // cast/crew from the base layer is left untouched — safe degrade.
+    const aggCast = extra?.aggregate_credits?.cast;
+    if (Array.isArray(aggCast) && aggCast.length) {
+        result.cast = shapeCast(
+            aggCast.map((c) => ({ ...c, character: c.roles?.[0]?.character || null })),
+            15,
+        );
+    }
+    const aggCrew = extra?.aggregate_credits?.crew;
+    if (Array.isArray(aggCrew) && aggCrew.length) {
+        result.crew = shapeCrew(_flattenAggregateCrew(aggCrew));
+    }
+
     return result;
 };
 
@@ -670,6 +1112,65 @@ lookupMetadata = async function (parsed) {
     return result;
 };
 
+// ============================================================================
+// ─── Trailer discovery (v20) ─────────────────────────────
+// ADDITIVE ONLY. Powers trailerController.js's discover feed: NEW
+// movies/series from production companies already in your library, that
+// you don't own yet. Does NOT touch metadata.json / PARSER_VERSION — results
+// are cached separately in trailers.json via trailerStore.js.
+//
+// Not the full getMovieDetails/getTVDetails pipeline on purpose: no
+// credits/reviews/OMDB/company-detail fetches needed just to know a trailer
+// exists — keeps discovery cheap even across many studios/pages.
+// ============================================================================
+
+// Only titles releasing within this window count as "new" — otherwise every
+// studio dumps its entire back catalog into the discover row. No upper bound,
+// so upcoming/unreleased titles are included too (Plex shows those as well).
+function _discoverCutoffDate() {
+    const days = parseInt(process.env.TMDB_DISCOVER_WINDOW_DAYS || "180", 10);
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.toISOString().slice(0, 10);
+}
+
+// mediaType: "movie" | "tv" (series + anime both live under /tv on TMDB —
+// caller maps its own type before calling this).
+async function discoverByCompany(companyId, mediaType, page = 1) {
+    const endpoint = mediaType === "tv" ? "/discover/tv" : "/discover/movie";
+    const sortField = mediaType === "tv" ? "first_air_date.desc" : "primary_release_date.desc";
+    const dateParam = mediaType === "tv" ? "first_air_date.gte" : "primary_release_date.gte";
+
+    const data = await tmdbFetchSafe(endpoint, {
+        with_companies: companyId,
+        sort_by: sortField,
+        [dateParam]: _discoverCutoffDate(),
+        include_adult: false,
+        page,
+    });
+    return data?.results || [];
+}
+
+// Lightweight videos-only fetch for one discovered result — reuses the same
+// deterministic trailer scoring (_pickBestTrailerKey / _scoreVideoForTrailer)
+// the main pipeline uses, so "best trailer" logic never drifts between the
+// two features.
+async function getVideosFor(tmdbId, mediaType) {
+    const endpoint = mediaType === "tv" ? `/tv/${tmdbId}/videos` : `/movie/${tmdbId}/videos`;
+    const data = await tmdbFetchSafe(endpoint);
+    const yt = (data?.results || []).filter((v) => v.site === "YouTube");
+    const trailer = _pickBestTrailerKey(yt);
+    const videos = yt
+        .filter((v) => ["Trailer", "Teaser"].includes(v.type))
+        .slice(0, 3)
+        // published_at is what powers the "New Trailers" freshness sort in
+        // trailerController.js — when the TRAILER was published on YouTube,
+        // not the movie/show's own release date.
+        .map((v) => ({ type: v.type, key: v.key, name: v.name, publishedAt: v.published_at || null }));
+    const trailerVideo = videos.find((v) => v.key === trailer);
+    return { trailer, trailerPublishedAt: trailerVideo?.publishedAt || videos[0]?.publishedAt || null, videos };
+}
+
 module.exports = {
     lookupMetadata,
     searchMovie,
@@ -678,4 +1179,7 @@ module.exports = {
     getMovieDetails,
     getTVDetails,
     getSeasonDetails,
+    discoverByCompany,
+    getVideosFor,
+    tmdbFetch, // server-side TMDB proxy (metadataController.getTmdbItem)
 };

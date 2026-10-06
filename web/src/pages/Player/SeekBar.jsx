@@ -10,20 +10,44 @@ function formatTime(secs) {
     return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// Compute buffered percentage from TimeRanges covering currentTime
-function getBufferedPct(buffered, duration, currentTime) {
-    if (!buffered || !duration || !buffered.length) return 0;
+// Finds the buffered range relevant to currentTime and returns its absolute
+// start/end as percentages of duration.
+// FIX (buffered bar shows starting from 0:00 instead of from where the
+// buffered content actually starts, e.g. after a resume): this used to only
+// return a single "end" percentage, and the bar was always rendered with
+// left:0 + that width — i.e. it could only ever represent "buffered from
+// 0:00 to X", which happens to be true for a normal fresh play (buffering
+// naturally starts at the beginning) but is WRONG after a resume — the
+// backend seeks ffmpeg to start encoding near the resume position (see
+// PlayerPage.jsx's seekSec fix), so the actual buffered content genuinely
+// starts near there, not at 0:00. Returning both edges lets the bar be
+// positioned with left+width instead of assuming left is always 0.
+//
+// buffered.start(i)/end(i) are reported in the CURRENT session's own
+// relative timeline (same session-relative issue currentTime had) — adding
+// sessionOffset converts them to absolute before computing percentages.
+function getBufferedRange(buffered, duration, currentTime, sessionOffset = 0) {
+    if (!buffered || !duration || !buffered.length) return { startPct: 0, endPct: 0 };
+
+    // Prefer the range that actually covers currentTime.
     for (let i = 0; i < buffered.length; i++) {
-        if (buffered.start(i) <= currentTime && buffered.end(i) >= currentTime) {
-            return (buffered.end(i) / duration) * 100;
+        const start = buffered.start(i) + sessionOffset;
+        const end = buffered.end(i) + sessionOffset;
+        if (start <= currentTime && end >= currentTime) {
+            return { startPct: (start / duration) * 100, endPct: (end / duration) * 100 };
         }
     }
-    // Fallback: use the furthest buffered end
-    let maxEnd = 0;
+
+    // Fallback: no range covers currentTime exactly (e.g. still landing
+    // right after a seek) — use whichever range reaches furthest.
+    let best = null;
     for (let i = 0; i < buffered.length; i++) {
-        if (buffered.end(i) > maxEnd) maxEnd = buffered.end(i);
+        const start = buffered.start(i) + sessionOffset;
+        const end = buffered.end(i) + sessionOffset;
+        if (!best || end > best.end) best = { start, end };
     }
-    return (maxEnd / duration) * 100;
+    if (!best) return { startPct: 0, endPct: 0 };
+    return { startPct: (best.start / duration) * 100, endPct: (best.end / duration) * 100 };
 }
 
 /**
@@ -61,8 +85,36 @@ const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
             // VideoCore.jsx's handleTimeUpdate comment for the full why) —
             // assigning the raw absolute t directly would seek to the wrong
             // spot the same way the original restore bug did.
-            if (videoRef.current) videoRef.current.currentTime = Math.max(0, t - (sessionTimeOffsetRef?.current || 0));
+            const v = videoRef.current;
+            if (v) v.currentTime = Math.max(0, t - (sessionTimeOffsetRef?.current || 0));
             actions.setCurrentTime(t);
+
+            // ADD (subtitle not matching after a mid-playback seek):
+            // seeking to a position outside the currently-buffered HLS
+            // segments silently restarts the backend transcode session
+            // with a NEW segment-numbering baseline (see streamController.
+            // js's serveHLSFile "backward seek... restart" handling) —
+            // nothing on the client is told this happened, so
+            // sessionTimeOffsetRef keeps using the OLD session's offset
+            // for a video that's now actually playing from a different
+            // session. This never mattered for small in-buffer seeks
+            // (no restart happens, offset stays valid) — only for seeks
+            // landing outside what's currently cached.
+            //
+            // One-shot: wait for this specific seek to actually land
+            // (native 'seeked'), then recalibrate the offset from where
+            // the video REALLY ended up vs. the absolute position `t` we
+            // asked for — the exact same self-correcting math the resume
+            // flow already uses once its own seek lands. If no restart
+            // happened, v.currentTime already equals what was assigned
+            // above and this recalibrates to the SAME value — a safe
+            // no-op, not a second, competing correction.
+            if (v && sessionTimeOffsetRef) {
+                const onSeeked = () => {
+                    sessionTimeOffsetRef.current = t - v.currentTime;
+                };
+                v.addEventListener("seeked", onSeeked, { once: true });
+            }
         },
         [getTimeFromClientX, videoRef, actions, sessionTimeOffsetRef],
     );
@@ -133,7 +185,7 @@ const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
     }, [applySeek, state.duration]);
 
     const playedPct = state.duration ? (state.currentTime / state.duration) * 100 : 0;
-    const bufferedPct = getBufferedPct(state.buffered, state.duration, state.currentTime);
+    const { endPct: bufferedEndPct } = getBufferedRange(state.buffered, state.duration, state.currentTime, sessionTimeOffsetRef?.current || 0);
     const showThumb = isHovered || isDragging;
 
     return (
@@ -156,10 +208,25 @@ const SeekBar = memo(function SeekBar({ videoRef, sessionTimeOffsetRef }) {
 
             {/* Track */}
             <div ref={barRef} className={`flux-seek-track ${isDragging ? "dragging" : ""}`}>
-                {/* Buffered */}
-                <div className="flux-seek-buffered" style={{ width: `${bufferedPct}%`, transition: "width 400ms ease-out" }} />
+                {/* Buffered — total width = played + buffer loaded ahead,
+                    always anchored at left:0 (bufferedEndPct already IS
+                    played + additional buffer, mathematically). */}
+                <div
+                    className="flux-seek-buffered"
+                    style={{
+                        width: `${Math.max(0, Math.min(100, bufferedEndPct || 0))}%`,
+                        // FIX: width computes to ~0 (visually invisible)
+                        // whenever playback has caught right up to the edge
+                        // of what's loaded — a thin-buffer margin, not "no
+                        // buffer at all". As long as there IS any buffered
+                        // data (bufferedEndPct > 0), keep a small visible
+                        // marker instead of letting it fully vanish.
+                        minWidth: (bufferedEndPct || 0) > 0 ? "3px" : 0,
+                        transition: "width 400ms ease-out",
+                    }}
+                />
                 {/* Played */}
-                <div className="flux-seek-played" style={{ width: `${playedPct}%` }} />
+                <div className="flux-seek-played" style={{ width: `${Math.max(0, Math.min(100, playedPct || 0))}%` }} />
             </div>
 
             {/* Thumb */}

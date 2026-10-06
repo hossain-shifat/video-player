@@ -27,7 +27,7 @@ const initialState = {
     // Advanced sections.
     subtitleSpeed: 100, // % — independent of playback rate, slows/speeds the subtitle TIMELINE itself
     subtitleAlignment: "center", // 'left' | 'center' | 'right'
-    subtitleBottomMargin: 0, // px, distance from the bottom edge
+    subtitleBottomMargin: 40, // px above the bottom edge (0 = flush with bottom edge; 40 = default resting position)
     subtitleBackgroundEnabled: false,
     subtitleBackgroundColor: "#000000",
     subtitleFitToVideo: false, // constrain subtitle box to the video frame instead of the full player
@@ -102,6 +102,15 @@ const initialState = {
     // Which 5 icons show in the collapsed mobile row before the chevron;
     // order also defines "Customise Items" drag-reorder result.
     quickIconOrder: ["eq", "speed", "screenshot", "audioFx", "rotation"],
+    // Which quick-item keys are hidden from the quick icon row entirely —
+    // driven by the Shortcuts checklist in MoreOptionsPanel (3-dot menu).
+    // Separate from quickIconOrder (which only controls the top-5/rest
+    // split) — this can hide an item outright regardless of its position.
+    hiddenQuickKeys: [],
+    // Shortcuts toggle in MoreOptionsPanel (3-dot menu) — default ON. When
+    // off, the entire quick icon row is hidden (not just individual items
+    // via hiddenQuickKeys above).
+    shortcutsEnabled: true,
     volumeBoost: 1, // 1.0-2.0 — software gain multiplier on top of native volume, doc: "Volume Boost up to 200%"
 };
 
@@ -186,6 +195,8 @@ export const A = {
     SET_BASS_BOOST_LEVEL: "SET_BASS_BOOST_LEVEL",
     SET_VIRTUALIZER_LEVEL: "SET_VIRTUALIZER_LEVEL",
     SET_QUICK_ICON_ORDER: "SET_QUICK_ICON_ORDER",
+    TOGGLE_QUICK_ITEM_HIDDEN: "TOGGLE_QUICK_ITEM_HIDDEN",
+    SET_SHORTCUTS_ENABLED: "SET_SHORTCUTS_ENABLED",
     SET_VOLUME_BOOST: "SET_VOLUME_BOOST",
 };
 
@@ -320,6 +331,16 @@ function playerReducer(state, action) {
             return { ...state, virtualizerLevel: Math.max(0, Math.min(100, action.payload)) };
         case A.SET_QUICK_ICON_ORDER:
             return { ...state, quickIconOrder: action.payload };
+        case A.TOGGLE_QUICK_ITEM_HIDDEN: {
+            const key = action.payload;
+            const hidden = state.hiddenQuickKeys.includes(key);
+            return {
+                ...state,
+                hiddenQuickKeys: hidden ? state.hiddenQuickKeys.filter((k) => k !== key) : [...state.hiddenQuickKeys, key],
+            };
+        }
+        case A.SET_SHORTCUTS_ENABLED:
+            return { ...state, shortcutsEnabled: action.payload };
         case A.SET_VOLUME_BOOST:
             return { ...state, volumeBoost: Math.max(1, Math.min(2, action.payload)) };
         case A.RESET:
@@ -391,6 +412,8 @@ export function PlayerProvider({ children }) {
     const setBassBoostLevel = useCallback((v) => dispatch({ type: A.SET_BASS_BOOST_LEVEL, payload: v }), []);
     const setVirtualizerLevel = useCallback((v) => dispatch({ type: A.SET_VIRTUALIZER_LEVEL, payload: v }), []);
     const setQuickIconOrder = useCallback((v) => dispatch({ type: A.SET_QUICK_ICON_ORDER, payload: v }), []);
+    const toggleQuickItemHidden = useCallback((key) => dispatch({ type: A.TOGGLE_QUICK_ITEM_HIDDEN, payload: key }), []);
+    const setShortcutsEnabled = useCallback((v) => dispatch({ type: A.SET_SHORTCUTS_ENABLED, payload: v }), []);
     const setVolumeBoost = useCallback((v) => dispatch({ type: A.SET_VOLUME_BOOST, payload: v }), []);
 
     const actions = useMemo(
@@ -447,6 +470,8 @@ export function PlayerProvider({ children }) {
             setBassBoostLevel,
             setVirtualizerLevel,
             setQuickIconOrder,
+            toggleQuickItemHidden,
+            setShortcutsEnabled,
             setVolumeBoost,
         }),
         [
@@ -502,6 +527,8 @@ export function PlayerProvider({ children }) {
             setBassBoostLevel,
             setVirtualizerLevel,
             setQuickIconOrder,
+            toggleQuickItemHidden,
+            setShortcutsEnabled,
             setVolumeBoost,
         ],
     );

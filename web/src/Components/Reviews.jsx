@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Star, ThumbsUp, X, Calendar, User, Quote } from "lucide-react";
+import { ChevronLeft, ChevronRight, Star, StarHalf, ThumbsUp, X, Calendar, User, Quote } from "lucide-react";
 
 const Profile_IMG = "https://image.tmdb.org/t/p/w45";
 
@@ -14,13 +14,18 @@ async function fetchReview(reviewId) {
 
 // ─── Star Rating ──────────────────────────────────────────────────────────────
 function StarRating({ rating, max = 10, size = 13 }) {
-    const stars = rating != null ? Math.round((rating / max) * 5) : null;
-    if (stars == null) return null;
+    if (rating == null) return null;
+    const exact = (rating / max) * 5;
+    const full = Math.floor(exact);
+    const hasHalf = exact - full >= 0.25 && exact - full < 0.75;
+    const roundedFull = exact - full >= 0.75 ? full + 1 : full;
     return (
         <div className="flex items-center gap-0.5">
-            {Array.from({ length: 5 }).map((_, i) => (
-                <Star key={i} size={size} className={i < stars ? "text-warning fill-warning" : "text-base-content/20 fill-base-content/10"} />
-            ))}
+            {Array.from({ length: 5 }).map((_, i) => {
+                if (i < roundedFull) return <Star key={i} size={size} className="text-warning fill-warning" />;
+                if (i === roundedFull && hasHalf) return <StarHalf key={i} size={size} className="text-warning fill-warning" />;
+                return <Star key={i} size={size} className="text-base-content/20 fill-base-content/10" />;
+            })}
         </div>
     );
 }
@@ -77,12 +82,6 @@ function ReviewModal({ data, onClose }) {
                             </span>
                         )}
                     </div>
-                    {rating != null && (
-                        <div className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl bg-base-100 border border-white/8 shrink-0">
-                            <StarRating rating={rating} size={11} />
-                            <span className="text-[11px] font-bold text-white/90 leading-none">{rating}/10</span>
-                        </div>
-                    )}
                 </div>
 
                 {/* Close */}
@@ -102,10 +101,18 @@ function ReviewModal({ data, onClose }) {
 
                 {/* ── Footer ── */}
                 <div className="flex items-center justify-between px-6 py-3.5 border-t border-white/8 shrink-0 bg-base-300/25">
-                    <button className="flex items-center gap-1.5 text-[11px] font-semibold text-base-content/60 hover:text-primary transition-colors cursor-pointer">
-                        <ThumbsUp size={12} />
-                        <span>Helpful</span>
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <button className="flex items-center gap-1.5 text-[11px] font-semibold text-base-content/60 hover:text-primary transition-colors cursor-pointer">
+                            <ThumbsUp size={12} />
+                            <span>Helpful</span>
+                        </button>
+                        {rating != null && (
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-100 border border-white/8">
+                                <StarRating rating={rating} size={10} />
+                                <span className="text-[11px] font-bold text-white/90 leading-none">{((rating / 10) * 5).toFixed(1)}</span>
+                            </div>
+                        )}
+                    </div>
                     <button onClick={onClose} className="text-[11px] font-bold text-primary-content bg-primary hover:bg-primary/85 transition-colors cursor-pointer px-4 py-1.5 rounded-full">
                         Done
                     </button>
@@ -178,7 +185,7 @@ function ReviewCard({ data, featured }) {
                     {rating != null && (
                         <div className="flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-full bg-base-300/70 border border-white/8 shrink-0">
                             <StarRating rating={rating} size={10} />
-                            <span className="text-[11px] font-bold text-white/90">{rating}</span>
+                            <span className="text-[11px] font-bold text-white/90">{((rating / 10) * 5).toFixed(1)}</span>
                         </div>
                     )}
                 </div>
@@ -208,13 +215,17 @@ export default function Reviews({ reviews, tmdbId, mediaType }) {
         }
         let cancelled = false;
         setSorted(null);
-        Promise.all(reviews.map((rid) => fetchReview(rid))).then((results) => {
-            if (cancelled) return;
-            const valid = results.filter(Boolean);
-            // Longest review (by word count) surfaces first
-            valid.sort((a, b) => (b.content || "").trim().split(/\s+/).length - (a.content || "").trim().split(/\s+/).length);
-            setSorted(valid);
-        });
+        Promise.allSettled(reviews.map((rid) => fetchReview(rid)))
+            .then((results) => {
+                if (cancelled) return;
+                const valid = results.filter((r) => r.status === "fulfilled" && r.value).map((r) => r.value);
+                // Longest review (by word count) surfaces first
+                valid.sort((a, b) => (b.content || "").trim().split(/\s+/).length - (a.content || "").trim().split(/\s+/).length);
+                setSorted(valid);
+            })
+            .catch(() => {
+                if (!cancelled) setSorted([]);
+            });
         return () => {
             cancelled = true;
         };
