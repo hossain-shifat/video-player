@@ -83,10 +83,12 @@ function detectPartNumber(...fields) {
 }
 
 // ─── History ─────────────────────────────────────────────────────────────────
-// Schema (multi-client namespaced) — MERGED old + new:
+// Storage layout (per ACCOUNT, media is an ARRAY of entry objects):
 // {
-//   "<clientId>": {
-//     "<mediaId>": {
+//   "<userId>": {
+//     "email": "mail@gmail.com",   // readable label only — never used for lookup
+//     "media": [
+//       {
 //       id, mediaType, type,
 //       title,          // movie title -OR- series/anime show name
 //       name,           // ← OLD legacy field, kept — some older client builds
@@ -106,28 +108,74 @@ function detectPartNumber(...fields) {
 //       watchCount, lastSessionStart, subtitlePref,
 //       // NOTE: no thumbnail field — frames generated on demand by
 //       // GET /api/media/:id/thumbnail (ffmpeg), never stored here.
-//     }
+//       }
+//     ]
 //   }
 // }
+// Legacy layouts ({ "<clientId>": { "<mediaId>": entry } }) are converted
+// in memory on read and rewritten in the new layout on the next save.
 
-function getHistory(clientId) {
-    const store = readJson(HISTORY_FILE);
-    const cid = resolveClientId(clientId);
-    if (clientId) return safeGet(store, cid) || {};
-    const merged = {};
-    for (const cStore of Object.values(store)) {
-        if (cStore && typeof cStore === "object") Object.assign(merged, cStore);
+// ── Store helpers (account → { email, media[] }) ───────────────────────────
+function normalizeBlock(block) {
+    if (!block || typeof block !== "object") return { email: null, media: [] };
+    if (Array.isArray(block.media)) {
+        return { email: block.email ?? null, media: block.media.filter((e) => e && typeof e === "object" && e.id) };
     }
-    return merged;
+    // Legacy: { "<mediaId>": entry, ... }
+    return { email: null, media: Object.values(block).filter((e) => e && typeof e === "object" && e.id) };
 }
 
-function getHistoryEntry(id, clientId) {
+// In-memory cache keyed on the file's mtime+size: GET /api/history and the
+// 4s progress saves no longer re-read + re-parse history.json every request.
+// Deleting / hand-editing the file changes mtime/size → cache reloads itself.
+let _cache = null; // { mtimeMs, size, store }
+
+function statHistory() {
+    try {
+        const st = fs.statSync(HISTORY_FILE);
+        return { mtimeMs: st.mtimeMs, size: st.size };
+    } catch {
+        return null;
+    }
+}
+
+function loadStore() {
+    const st = statHistory();
+    if (!st) {
+        _cache = null;
+        return {};
+    }
+    if (_cache && _cache.mtimeMs === st.mtimeMs && _cache.size === st.size) return _cache.store;
+    const raw = readJson(HISTORY_FILE);
+    const store = {};
+    for (const [uid, block] of Object.entries(raw)) store[uid] = normalizeBlock(block);
+    _cache = { ...st, store };
+    return store;
+}
+
+function saveStore(store) {
+    const out = {};
+    for (const [uid, block] of Object.entries(store)) out[uid] = { email: block.email ?? null, media: block.media };
+    writeJson(HISTORY_FILE, out);
+    const st = statHistory();
+    _cache = st ? { ...st, store } : null;
+}
+
+// Returns { "<mediaId>": entry } for ONE account — same shape the controller
+// always received, so nothing upstream changes.
+function getHistory(userId) {
+    if (!userId) return {};
+    const block = safeGet(loadStore(), resolveClientId(userId));
+    const out = {};
+    if (block) for (const e of block.media) out[e.id] = e;
+    return out;
+}
+
+function getHistoryEntry(id, userId) {
     if (!isValidId(id)) return null;
-    const store = readJson(HISTORY_FILE);
-    const cid = resolveClientId(clientId);
-    const clientStore = safeGet(store, cid);
-    if (!clientStore) return null;
-    return safeGet(clientStore, id);
+    const block = safeGet(loadStore(), resolveClientId(userId));
+    if (!block) return null;
+    return block.media.find((e) => e.id === id) || null;
 }
 
 /**
@@ -149,18 +197,20 @@ function getHistoryEntry(id, clientId) {
  *   data.partNumber            — explicit multi-part movie part number (optional;
  *                                 auto-detected from title/name/streamUrl if omitted)
  */
-function saveProgress(id, data, clientId) {
+function saveProgress(id, data, clientId, email) {
     if (!isValidId(id)) throw new Error("Invalid media ID");
 
     const cid = resolveClientId(clientId);
-    const store = readJson(HISTORY_FILE);
+    const store = loadStore();
 
-    if (!Object.prototype.hasOwnProperty.call(store, cid) || typeof store[cid] !== "object") {
-        store[cid] = {};
+    if (!Object.prototype.hasOwnProperty.call(store, cid)) {
+        store[cid] = { email: null, media: [] };
     }
 
-    const clientStore = store[cid];
-    const existing = safeGet(clientStore, id) || {
+    const block = store[cid];
+    if (email) block.email = email;
+    const existingIdx = block.media.findIndex((e) => e.id === id);
+    const existing = (existingIdx >= 0 ? block.media[existingIdx] : null) || {
         watchCount: 0,
         position: 0,
         maxPositionReached: 0,
@@ -285,31 +335,36 @@ function saveProgress(id, data, clientId) {
           }
         : { episodeTitle: null };
 
-    clientStore[id] = { ...base, ...movieExtra, ...seriesExtra };
+    const entry = { ...base, ...movieExtra, ...seriesExtra };
+    if (existingIdx >= 0) block.media[existingIdx] = entry;
+    else block.media.unshift(entry);
 
-    writeJson(HISTORY_FILE, store);
-    return clientStore[id];
+    saveStore(store);
+    return entry;
 }
 
-function deleteHistoryEntry(id, clientId) {
+function deleteHistoryEntry(id, userId) {
     if (!isValidId(id)) return false;
-    const cid = resolveClientId(clientId);
-    const store = readJson(HISTORY_FILE);
-    const clientStore = safeGet(store, cid);
-    if (!clientStore) return false;
-    if (!safeDelete(clientStore, id)) return false;
-    writeJson(HISTORY_FILE, store);
+    const store = loadStore();
+    const block = safeGet(store, resolveClientId(userId));
+    if (!block) return false;
+    const before = block.media.length;
+    block.media = block.media.filter((e) => e.id !== id);
+    if (block.media.length === before) return false;
+    saveStore(store);
     return true;
 }
 
-function clearHistory(clientId) {
-    if (clientId !== null && clientId !== undefined) {
-        if (!isValidClientId(clientId)) throw new Error("Invalid clientId");
-        const store = readJson(HISTORY_FILE);
-        store[resolveClientId(clientId)] = {};
-        writeJson(HISTORY_FILE, store);
+function clearHistory(userId) {
+    if (userId !== null && userId !== undefined) {
+        if (!isValidClientId(userId)) throw new Error("Invalid userId");
+        const store = loadStore();
+        const cid = resolveClientId(userId);
+        store[cid] = { email: store[cid]?.email ?? null, media: [] };
+        saveStore(store);
     } else {
         writeJson(HISTORY_FILE, {});
+        _cache = null;
     }
 }
 

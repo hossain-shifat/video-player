@@ -1,10 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { getOrCreateClientId } from "../../api/stream";
-
-function historyHeaders(clientId) {
-    return { "X-Flux-Client": clientId || getOrCreateClientId() };
-}
+import { HISTORY_KEYS } from "../../Hooks/useHistory";
 
 // FIX: Never save ephemeral HLS session URLs. Build a stable /stream/video/:id
 // URL from the mediaId so history links survive server restarts.
@@ -51,7 +48,7 @@ export function useProgress({
     // FIX (Report-25): capture currentTime continuously so unmount cleanup
     // doesn't rely on videoRef.current (nullified before cleanup runs in React 17+)
     const lastTimeRef = useRef(0);
-    const scopedClientId = clientId || getOrCreateClientId();
+    const queryClient = useQueryClient();
 
     // NEW: deferredSeek — polls video.seekable until targetSec is reachable,
     // then seeks. Solves HLS EVENT playlist clamping (duration starts tiny).
@@ -317,6 +314,21 @@ export function useProgress({
         [name, type, poster, stableStreamUrl, activeSubtitle],
     );
 
+    // Push a saved entry straight into the history cache so "Continue Watching"
+    // (and the Resume button) are current with no refetch / reload.
+    // Only touches an already-loaded list (never fabricates one).
+    const pushToCache = useCallback(
+        (entry) => {
+            if (!entry || !entry.id) return;
+            queryClient.setQueryData(HISTORY_KEYS.list(), (old) => {
+                if (!old) return old;
+                const next = [entry, ...(old.history ?? []).filter((h) => h.id !== entry.id)];
+                return { ...old, total: next.length, history: next };
+            });
+        },
+        [queryClient],
+    );
+
     const saveProgress = useCallback(
         async (time) => {
             if (!mediaId) return;
@@ -333,14 +345,12 @@ export function useProgress({
             const duration = mediaDuration && mediaDuration > 60 ? mediaDuration : videoDur;
 
             try {
-                await api.post(`/api/history/${mediaId}`, buildPayload(time, duration), {
-                    headers: historyHeaders(scopedClientId),
-                });
+                pushToCache(await api.post(`/api/history/${mediaId}`, buildPayload(time, duration)));
             } catch {
                 // non-fatal
             }
         },
-        [mediaId, buildPayload, scopedClientId, videoRef, mediaDuration],
+        [mediaId, buildPayload, videoRef, mediaDuration, pushToCache],
     );
 
     // FIX: Keep a ref to saveProgress so event handlers and page-exit listeners
@@ -349,6 +359,32 @@ export function useProgress({
     useEffect(() => {
         saveProgressRef.current = saveProgress;
     }, [saveProgress]);
+
+    // ── Create the history entry the moment the player OPENS ──────────────────
+    // The periodic save only starts once `playing` flips true, which on a first
+    // play (HLS / transcode start-up) can take several seconds — so a brand-new
+    // title used to appear in history late. Post position 0 right away instead.
+    // Server-side milestone lock makes this a no-op for titles that already have
+    // progress, so it can never move a resume point backwards.
+    const buildPayloadRef = useRef(buildPayload);
+    useEffect(() => {
+        buildPayloadRef.current = buildPayload;
+    }, [buildPayload]);
+    const initialSavedRef = useRef(null);
+    useEffect(() => {
+        if (!mediaId || initialSavedRef.current === mediaId) return undefined;
+        // 300ms: let auth provider + title/poster props settle first
+        const t = setTimeout(async () => {
+            initialSavedRef.current = mediaId;
+            try {
+                pushToCache(await api.post(`/api/history/${mediaId}`, buildPayloadRef.current(0, mediaDuration && mediaDuration > 60 ? mediaDuration : 0)));
+            } catch {
+                // non-fatal — the normal save loop still runs once playback starts
+            }
+        }, 300);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mediaId]);
 
     // ── Load resume point ─────────────────────────────────────────────────────
     // FIX (Report-19): Race condition — AuthContext registers the token via
@@ -374,10 +410,7 @@ export function useProgress({
 
         const load = async () => {
             try {
-                const data = await api.get(`/api/history/${mediaId}`, {
-                    headers: historyHeaders(scopedClientId),
-                    skipAuthHandler: true,
-                });
+                const data = await api.get(`/api/history/${mediaId}`, { skipAuthHandler: true });
                 if (cancelled) return;
                 if (data?.position && data.position > 10 && !data.completed) {
                     setResumePoint(data);
@@ -404,7 +437,7 @@ export function useProgress({
             cancelled = true;
             clearTimeout(t);
         };
-    }, [mediaId, scopedClientId]);
+    }, [mediaId]);
 
     // ── Resume dialog actions ─────────────────────────────────────────────────
 
@@ -545,7 +578,7 @@ export function useProgress({
             // FIX (Report-29): navigator.sendBeacon() is keepalive-safe and CORS-exempt
             // for text/plain blobs. Token + clientId go in query params since
             // sendBeacon cannot set custom headers.
-            const qs = new URLSearchParams({ clientId: scopedClientId });
+            const qs = new URLSearchParams();
             if (token) qs.set("token", token);
             const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
             const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
@@ -560,7 +593,7 @@ export function useProgress({
                 }).catch(() => {});
             }
         };
-    }, [mediaId, buildPayload, scopedClientId, getToken, mediaDuration, videoRef]);
+    }, [mediaId, buildPayload, getToken, mediaDuration, videoRef]);
 
     // ── pagehide + visibilitychange — catch tab close / refresh / navigate ────
     // FIX: useEffect cleanup (unmount) fires for SPA navigation but NOT for
@@ -588,6 +621,9 @@ export function useProgress({
             clearInterval(intervalRef.current);
             clearTimeout(dialogFadeTimer.current);
             clearInterval(seekPollRef.current); // NEW: cancel any pending deferred seek poll
+            // Final save goes out via sendBeacon below — give it a moment to land,
+            // then refetch so Continue Watching reflects the exact final position.
+            setTimeout(() => queryClient.invalidateQueries({ queryKey: HISTORY_KEYS.all }), 800);
 
             if (!mediaId) return;
             // FIX (Report-25): videoRef.current is null by cleanup time (React 17+
@@ -607,7 +643,7 @@ export function useProgress({
             // Solution: navigator.sendBeacon() is always keepalive-safe and CORS-exempt
             // for text/plain blobs. Token + clientId go in query params since
             // sendBeacon cannot set custom headers.
-            const qs = new URLSearchParams({ clientId: scopedClientId });
+            const qs = new URLSearchParams();
             if (token) qs.set("token", token);
             const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
             const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
@@ -624,7 +660,7 @@ export function useProgress({
             }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mediaId, mediaDuration, buildPayload, scopedClientId, videoRef]);
+    }, [mediaId, mediaDuration, buildPayload, videoRef]);
 
     // Manual dismiss (new X close button in PlayerControls) — immediate, no
     // fade wait like the natural 6s timeout above. Same end state either way

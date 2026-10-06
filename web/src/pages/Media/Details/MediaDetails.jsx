@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
 import { useSeasonDetail } from "../../../Hooks/useMedia";
+import { useHistory } from "../../../Hooks/useHistory";
 import { getMediaById } from "../../../api";
 import { api } from "../../../api/client";
 import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
@@ -761,14 +762,13 @@ export default function MediaDetails() {
     const { id } = useParams();
     const navigate = useNavigate();
 
-    const { getResume, movies, series, anime } = useApi();
+    const { movies, series, anime } = useApi();
 
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [overviewExpanded, setOverviewExpanded] = useState(false);
     const [imgError, setImgError] = useState(false);
-    const [resumePos, setResumePos] = useState(null);
     const [showTrailer, setShowTrailer] = useState(false);
     const [videoModalKey, setVideoModalKey] = useState(null);
     const [showNotInLibrary, setShowNotInLibrary] = useState(false);
@@ -839,20 +839,18 @@ export default function MediaDetails() {
     // network round-trip for the new item's history entry.
     useEffect(() => {
         setSelectedSeasonNum(null);
-        setResumePos(null);
     }, [decodedId]);
-    useEffect(() => {
-        if (!item || item.seasons || item.notInLibrary) return;
-        let cancelled = false;
-        getResume(decodedId)
-            .then((r) => {
-                if (!cancelled) setResumePos(r?.position ?? null);
-            })
-            .catch(() => {});
-        return () => {
-            cancelled = true;
-        };
-    }, [item, decodedId]);
+
+    // ── Resume position — derived LIVE from the shared history cache ─────────
+    // Same TanStack query as Continue Watching (useHistory), so it updates with
+    // no reload: deleting this title from history on ANY device flips the
+    // button back to "Play"; watching it on another device flips it to "Resume".
+    // Completed titles are stored with position 0 → "Play".
+    const { data: historyList = [] } = useHistory();
+    const resumePos = useMemo(() => {
+        const entry = historyList.find((h) => h.id === decodedId);
+        return entry && entry.position > 0 ? entry.position : null;
+    }, [historyList, decodedId]);
 
     // ── Derived values ─────────────────────────────────────────────────────────
     const isSeries = Boolean(item?.seasons);

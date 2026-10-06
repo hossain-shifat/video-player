@@ -5,8 +5,10 @@ const path = require("path");
 const { getHistory, getHistoryEntry, saveProgress, deleteHistoryEntry, clearHistory } = require("../utils/userStore");
 const { getCached, getCachedSeason } = require("../utils/metadataStore");
 
+// History is keyed by the authenticated user's id (JWT sub), set by
+// resolveHistoryUser in routes/history.js — NOT by device/client id.
 function getClientId(req) {
-    return req.headers["x-flux-client"] || req.query.clientId || null;
+    return req.historyUserId || null;
 }
 
 function decodeId(id) {
@@ -138,11 +140,91 @@ function deleteThumbnailFile(id) {
     }
 }
 
+// ─── Live push (Server-Sent Events) ───────────────────────────────────────────
+// Every open "Continue Watching" screen holds one SSE connection. When an
+// account's history changes (save / delete / clear), all connections of THAT
+// account get a tiny ping and refetch → other devices update with no reload.
+// Pings are throttled (leading + trailing) so the 4s progress saves don't spam.
+const THROTTLE_MS = 1500;
+const HEARTBEAT_MS = 25_000;
+
+const clients = new Map(); // userId -> Set<res>
+const lastSent = new Map(); // userId -> ms
+const timers = new Map(); // userId -> Timeout (trailing ping)
+
+function send(userId) {
+    const set = clients.get(userId);
+    if (!set || !set.size) return;
+    lastSent.set(userId, Date.now());
+    for (const res of set) {
+        try {
+            res.write(`data: ${JSON.stringify({ t: Date.now() })}\n\n`);
+        } catch {
+            /* connection already gone — 'close' handler cleans up */
+        }
+    }
+}
+
+/** Tell every open connection of this account that history changed. */
+// force=true skips the throttle — used for events users wait on (new entry, delete, clear).
+function notify(userId, force = false) {
+    if (!userId) return;
+    const set = clients.get(userId);
+    if (!set || !set.size) return;
+    const wait = THROTTLE_MS - (Date.now() - (lastSent.get(userId) || 0));
+    if (force || wait <= 0) return send(userId);
+    if (!timers.has(userId)) {
+        timers.set(
+            userId,
+            setTimeout(() => {
+                timers.delete(userId);
+                send(userId);
+            }, wait),
+        );
+    }
+}
+
+/** GET /api/history/events — must run AFTER resolveHistoryUser (needs req.historyUserId). */
+function sseHandler(req, res) {
+    const userId = req.historyUserId;
+    res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // nginx: don't buffer the stream
+    });
+    res.write("retry: 3000\n\n");
+    res.write(": connected\n\n");
+
+    if (!clients.has(userId)) clients.set(userId, new Set());
+    clients.get(userId).add(res);
+
+    const heartbeat = setInterval(() => {
+        try {
+            res.write(": ping\n\n");
+        } catch {}
+    }, HEARTBEAT_MS);
+
+    req.on("close", () => {
+        clearInterval(heartbeat);
+        const set = clients.get(userId);
+        if (set) {
+            set.delete(res);
+            if (!set.size) {
+                clients.delete(userId);
+                clearTimeout(timers.get(userId));
+                timers.delete(userId);
+                lastSent.delete(userId);
+            }
+        }
+    });
+}
+
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
 function getAllHistory(req, res) {
     const clientId = getClientId(req);
-    if (!clientId) return res.status(400).json({ error: "X-Flux-Client header required" });
+    if (!clientId) return res.status(401).json({ error: "Authentication required" });
     const history = getHistory(clientId);
     const items = Object.values(history).sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt));
     return res.json({ total: items.length, history: items });
@@ -150,6 +232,7 @@ function getAllHistory(req, res) {
 
 function getOne(req, res) {
     const clientId = getClientId(req);
+    if (!clientId) return res.status(401).json({ error: "Authentication required" });
     const entry = getHistoryEntry(req.params.id, clientId);
     if (!entry) return res.json({ position: null, duration: null, subtitlePosition: null, exists: false });
     return res.json({ ...entry, exists: true });
@@ -173,8 +256,12 @@ async function logProgress(req, res) {
         if (isLiveMedia(req.body)) return res.status(204).end();
 
         const clientId = getClientId(req);
+        if (!clientId) return res.status(401).json({ error: "Authentication required" });
+        const existed = !!getHistoryEntry(req.params.id, clientId);
         const enriched = await enrichMediaData(req.params.id, req.body);
-        const entry = saveProgress(req.params.id, enriched, clientId);
+        const entry = saveProgress(req.params.id, enriched, clientId, req.historyEmail);
+        notify(clientId, !existed); // push to this account's other open devices (instant for a brand-new entry)
+        console.log(`[History] saved user=${clientId} email=${req.historyEmail} pos=${entry.position} "${entry.title}"`);
         return res.json(entry);
     } catch (err) {
         console.error("[History] logProgress error:", err);
@@ -184,6 +271,7 @@ async function logProgress(req, res) {
 
 function deleteOne(req, res) {
     const clientId = getClientId(req);
+    if (!clientId) return res.status(401).json({ error: "Authentication required" });
     const { id } = req.params;
     const deleted = deleteHistoryEntry(id, clientId);
     if (!deleted) return res.status(404).json({ error: "History entry not found" });
@@ -192,18 +280,17 @@ function deleteOne(req, res) {
     } catch (err) {
         console.warn("[History] Thumbnail cleanup error for", id, err.message);
     }
+    notify(clientId, true);
     return res.json({ message: "Removed from history", id });
 }
 
 function clearAll(req, res) {
     const clientId = getClientId(req);
-    if (!clientId) {
-        if (req.query.all !== "true") return res.status(400).json({ error: "X-Flux-Client header required. Pass ?all=true to clear all." });
-        clearHistory(null);
-        return res.json({ message: "All history cleared" });
-    }
+    // Only ever clears THIS user's history — never everyone's.
+    if (!clientId) return res.status(401).json({ error: "Authentication required" });
     clearHistory(clientId);
+    notify(clientId, true);
     return res.json({ message: "History cleared" });
 }
 
-module.exports = { getAllHistory, getOne, logProgress, deleteOne, clearAll };
+module.exports = { getAllHistory, getOne, logProgress, deleteOne, clearAll, sseHandler };
