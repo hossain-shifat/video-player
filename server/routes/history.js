@@ -37,6 +37,10 @@ async function resolveHistoryUser(req, res, next) {
     }
     try {
         const payload = verifyAccessToken(token);
+        if (payload?.sub == null || payload.sub === "") {
+            console.warn(`[History] 401 token missing sub — ${req.method} ${req.originalUrl.split("?")[0]}`);
+            return res.status(401).json({ error: "Invalid token" });
+        }
         req.historyUserId = String(payload.sub);
         req.historyEmail = await getEmail(req.historyUserId);
         return next();
