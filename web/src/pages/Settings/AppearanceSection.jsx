@@ -1,19 +1,19 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Palette, Plus, Trash2, Edit3, Check, Moon, Sun, ChevronDown, RotateCcw, Type, Layout, Accessibility } from "lucide-react";
+import { Plus, Trash2, Edit3, Check, Moon, Sun, ChevronDown, RotateCcw } from "lucide-react";
 import { useTheme } from "../../Context/themeContext";
 import { Card, Row, Toggle, Modal, ThemeSwatch, SectionLabel, Select } from "./shared";
 
 // ─── Segmented control ────────────────────────────────────────────────────────
 function Seg({ opts, value, onChange }) {
     return (
-        <div className="flex bg-white/[0.04] rounded-lg p-0.5 gap-0.5 border border-white/[0.06] w-full">
+        <div className="flex bg-base-content/5 rounded-lg p-0.5 gap-0.5 border border-base-content/10 w-full">
             {opts.map((o) => (
                 <button
                     key={o.id}
                     onClick={() => onChange(o.id)}
                     style={{ outline: "none" }}
-                    className={`flex-1 text-[11px] px-1.5 py-1.5 rounded-md transition-all font-medium whitespace-nowrap ${value === o.id ? "bg-white/12 text-white" : "text-white/35 hover:text-white/60"}`}>
+                    className={`flex-1 text-[11px] px-1.5 py-1.5 rounded-md transition-all font-medium whitespace-nowrap ${value === o.id ? "bg-base-content/15 text-base-content" : "text-base-content/60 hover:text-base-content"}`}>
                     {o.label}
                 </button>
             ))}
@@ -25,11 +25,11 @@ function Seg({ opts, value, onChange }) {
 // Use this instead of <Row> when the right-side control is wide (Seg with 3+ options)
 function StackRow({ label, desc, children }) {
     return (
-        <div className="px-5 py-4 border-b border-white/[0.045] last:border-0 hover:bg-white/[0.015] transition-colors">
+        <div className="px-5 py-4 border-b border-base-content/10 last:border-0 hover:bg-base-content/10 transition-colors">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-6">
                 <div className="min-w-0">
-                    <p className="text-[13px] font-medium text-white/90 leading-tight">{label}</p>
-                    {desc && <p className="text-[11px] text-white/35 mt-0.5 leading-snug">{desc}</p>}
+                    <p className="text-[13px] font-medium text-base-content/85 leading-tight">{label}</p>
+                    {desc && <p className="text-[11px] text-base-content/60 mt-0.5 leading-snug">{desc}</p>}
                 </div>
                 <div className="w-full sm:w-auto sm:shrink-0 sm:min-w-[12rem]">{children}</div>
             </div>
@@ -49,9 +49,9 @@ function Slider({ value, onChange, min, max, step, fmt }) {
                 value={value}
                 onChange={(e) => onChange(parseFloat(e.target.value))}
                 style={{ outline: "none", border: "none", boxShadow: "none" }}
-                className="flex-1 h-[3px] rounded-full cursor-pointer appearance-none accent-primary bg-white/10"
+                className="flex-1 h-[3px] rounded-full cursor-pointer appearance-none accent-primary bg-base-content/10"
             />
-            <span className="text-[11px] text-white/40 w-10 text-right shrink-0 font-mono tabular-nums">{fmt ? fmt(value) : value}</span>
+            <span className="text-[11px] text-base-content/60 w-10 text-right shrink-0 font-mono tabular-nums">{fmt ? fmt(value) : value}</span>
         </div>
     );
 }
@@ -63,7 +63,7 @@ function ColorPick({ value, onChange, label }) {
         <div className="flex items-center gap-2">
             <button
                 onClick={() => ref.current?.click()}
-                style={{ background: value, outline: "none", border: "1px solid rgba(255,255,255,0.12)" }}
+                style={{ background: value, outline: "none", border: "1px solid color-mix(in oklab, var(--color-base-content) 25%, transparent)" }}
                 className="w-7 h-7 rounded-lg shrink-0 cursor-pointer"
             />
             <input ref={ref} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
@@ -72,7 +72,7 @@ function ColorPick({ value, onChange, label }) {
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 style={{ outline: "none" }}
-                className="flex-1 bg-white/[0.05] border border-white/[0.07] rounded-lg px-2.5 py-1.5 text-[11px] text-white font-mono focus:border-primary/40 transition-colors min-w-0"
+                className="flex-1 bg-base-content/5 border border-base-content/10 rounded-lg px-2.5 py-1.5 text-[11px] text-base-content font-mono focus:border-primary/40 transition-colors min-w-0"
             />
         </div>
     );
@@ -113,14 +113,14 @@ function ThemeDropdown({ themes, activeId, onSelect }) {
             <button
                 onClick={() => { onSelect(t.id); setOpen(false); }}
                 style={{ outline: "none" }}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left ${on ? "bg-primary/12" : "hover:bg-white/[0.05]"}`}>
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left ${on ? "bg-primary/12" : "hover:bg-base-content/10"}`}>
                 <ThemeSwatch preview={t.preview} size="sm" />
                 <div className="flex-1 min-w-0">
-                    <p className={`text-[12px] font-semibold truncate ${on ? "text-primary" : "text-white/75"}`}>{t.label}</p>
-                    {t.description && <p className="text-[10px] text-white/25 truncate">{t.description}</p>}
+                    <p className={`text-[12px] font-semibold truncate ${on ? "text-primary" : "text-base-content/85"}`}>{t.label}</p>
+                    {t.description && <p className="text-[10px] text-base-content/60 truncate">{t.description}</p>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                    {t.colorScheme === "dark" ? <Moon size={9} className="text-white/20" /> : <Sun size={9} className="text-white/20" />}
+                    {t.colorScheme === "dark" ? <Moon size={9} className="text-base-content/60" /> : <Sun size={9} className="text-base-content/60" />}
                     {on && <Check size={11} className="text-primary" strokeWidth={3} />}
                 </div>
             </button>
@@ -131,7 +131,7 @@ function ThemeDropdown({ themes, activeId, onSelect }) {
         if (!items.length) return null;
         return (
             <div>
-                <p className="text-[9px] font-bold text-white/20 uppercase tracking-[0.12em] px-2.5 py-1.5">{label}</p>
+                <p className="text-[9px] font-bold text-base-content/60 uppercase tracking-[0.12em] px-2.5 py-1.5">{label}</p>
                 {items.map((t) => <TRow key={t.id} t={t} />)}
             </div>
         );
@@ -152,17 +152,17 @@ function ThemeDropdown({ themes, activeId, onSelect }) {
                         left: rect.left,
                         width: rect.width,
                         zIndex: 9999,
-                        background: "oklch(13% 0.01 260)",
+                        background: "var(--color-base-200)",
                         maxHeight: 280,
                         overflowY: "auto",
                         borderRadius: "0.75rem",
-                        border: "1px solid rgba(255,255,255,0.09)",
-                        boxShadow: "0 24px 64px rgba(0,0,0,0.75)",
+                        border: "1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent)",
+                        boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
                         animation: "dropIn .12s ease-out both",
                     }}>
                     <div className="p-1.5 space-y-0.5">
                         <Group label="Dark" items={dark} />
-                        {dark.length > 0 && light.length > 0 && <div className="border-t border-white/[0.05] my-1" />}
+                        {dark.length > 0 && light.length > 0 && <div className="border-t border-base-content/10 my-1" />}
                         <Group label="Light" items={light} />
                     </div>
                 </div>
@@ -175,10 +175,10 @@ function ThemeDropdown({ themes, activeId, onSelect }) {
             <button
                 onClick={openMenu}
                 style={{ outline: "none", boxShadow: "none" }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] hover:border-white/[0.14] transition-all cursor-pointer">
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-base-content/10 bg-base-content/5 hover:bg-base-content/10 hover:border-base-content/30 transition-all cursor-pointer">
                 {active && <ThemeSwatch preview={active.preview} size="sm" />}
-                <span className="flex-1 text-left text-[13px] font-medium text-white truncate">{active?.label || "Select"}</span>
-                <ChevronDown size={13} className={`text-white/30 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+                <span className="flex-1 text-left text-[13px] font-medium text-base-content truncate">{active?.label || "Select"}</span>
+                <ChevronDown size={13} className={`text-base-content/60 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
             </button>
             {panel}
         </div>
@@ -219,57 +219,57 @@ function ThemeBuilder({ initial, onSave, onClose }) {
         <div className="space-y-5 max-h-[60vh] overflow-y-auto pr-0.5">
             <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2 space-y-1.5">
-                    <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Name</label>
+                    <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Name</label>
                     <input
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         maxLength={30}
                         placeholder="My Theme"
                         style={{ outline: "none" }}
-                        className="input input-sm w-full bg-white/[0.05] border border-white/[0.08] rounded-lg text-[13px] text-white"
+                        className="input input-sm w-full bg-base-content/5 border border-base-content/10 rounded-lg text-[13px] text-base-content"
                     />
                 </div>
                 <div className="col-span-2 space-y-1.5">
-                    <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Description</label>
+                    <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Description</label>
                     <input
                         value={desc}
                         onChange={(e) => setDesc(e.target.value)}
                         maxLength={60}
                         placeholder="Short description"
                         style={{ outline: "none" }}
-                        className="input input-sm w-full bg-white/[0.05] border border-white/[0.08] rounded-lg text-[13px] text-white"
+                        className="input input-sm w-full bg-base-content/5 border border-base-content/10 rounded-lg text-[13px] text-base-content"
                     />
                 </div>
             </div>
 
             <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-white/25 uppercase tracking-[0.1em] block">Scheme</label>
+                <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Scheme</label>
                 <Seg opts={[{ id: "dark", label: "Dark" }, { id: "light", label: "Light" }]} value={scheme} onChange={setScheme} />
             </div>
 
-            <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl bg-base-content/5 border border-base-content/10">
                 <ThemeSwatch preview={prev} />
                 <div>
-                    <p className="text-[12px] font-semibold text-white">{name || "Preview"}</p>
-                    <p className="text-[10px] text-white/30">{scheme} theme</p>
+                    <p className="text-[12px] font-semibold text-base-content">{name || "Preview"}</p>
+                    <p className="text-[10px] text-base-content/60">{scheme} theme</p>
                 </div>
             </div>
 
             <div className="space-y-3">
-                <p className="text-[9px] font-bold text-white/20 uppercase tracking-[0.12em]">Colors</p>
+                <p className="text-[9px] font-bold text-base-content/60 uppercase tracking-[0.12em]">Colors</p>
                 {Object.entries(VAR_LABELS).map(([k, lbl]) => (
                     <div key={k}>
-                        <label className="text-[10px] text-white/30 block mb-1">{lbl}</label>
+                        <label className="text-[10px] text-base-content/60 block mb-1">{lbl}</label>
                         <ColorPick value={vars[k] || "#888"} onChange={(v) => sv(k, v)} label={lbl} />
                     </div>
                 ))}
             </div>
 
-            <div className="flex gap-2 pt-1 border-t border-white/[0.06] sticky bottom-0 pb-0.5" style={{ background: "oklch(13% 0.01 260)" }}>
+            <div className="flex gap-2 pt-1 border-t border-base-content/10 sticky bottom-0 pb-0.5" style={{ background: "var(--color-base-200)" }}>
                 <button
                     onClick={onClose}
                     style={{ outline: "none" }}
-                    className="flex-1 py-2 rounded-lg text-[12px] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-colors border border-white/[0.07]">
+                    className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 hover:text-base-content hover:bg-base-content/10 transition-colors border border-base-content/10">
                     Cancel
                 </button>
                 <button
@@ -288,12 +288,12 @@ function ThemeBuilder({ initial, onSave, onClose }) {
 
 function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
     return (
-        <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border transition-all ${active ? "border-primary/30 bg-primary/6" : "border-white/[0.06] hover:border-white/[0.10]"}`}>
+        <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border transition-all ${active ? "border-primary/30 bg-primary/6" : "border-base-content/10 hover:border-base-content/30"}`}>
             <button onClick={() => onSelect(t.id)} style={{ outline: "none" }} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
                 <ThemeSwatch preview={t.preview} size="sm" />
                 <div className="flex-1 min-w-0">
-                    <p className={`text-[12px] font-semibold truncate ${active ? "text-primary" : "text-white/70"}`}>{t.label}</p>
-                    {t.description && <p className="text-[10px] text-white/25 truncate">{t.description}</p>}
+                    <p className={`text-[12px] font-semibold truncate ${active ? "text-primary" : "text-base-content/85"}`}>{t.label}</p>
+                    {t.description && <p className="text-[10px] text-base-content/60 truncate">{t.description}</p>}
                 </div>
                 {active && <Check size={11} className="text-primary shrink-0" strokeWidth={3} />}
             </button>
@@ -301,13 +301,13 @@ function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
                 <button
                     onClick={() => onEdit(t)}
                     style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-white/20 hover:text-white hover:bg-white/10 transition-colors">
+                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/60 hover:text-base-content hover:bg-base-content/10 transition-colors">
                     <Edit3 size={11} />
                 </button>
                 <button
                     onClick={() => onDelete(t.id)}
                     style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-white/20 hover:text-error hover:bg-error/10 transition-colors">
+                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/60 hover:text-error hover:bg-error/10 transition-colors">
                     <Trash2 size={11} />
                 </button>
             </div>
@@ -341,8 +341,8 @@ export default function AppearanceSection() {
             <div>
                 <SectionLabel>Theme</SectionLabel>
                 <Card>
-                    <Row label="Theme" desc="Active color scheme">
-                        <div className="w-48">
+                    <Row stack label="Theme" desc="Active color scheme">
+                        <div className="w-full">
                             <ThemeDropdown themes={allThemes} activeId={theme} onSelect={setTheme} />
                         </div>
                     </Row>
@@ -350,12 +350,12 @@ export default function AppearanceSection() {
                         <button
                             onClick={openCreate}
                             style={{ outline: "none" }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.09] text-white/45 hover:text-white hover:border-white/20 hover:bg-white/[0.05] transition-all text-[11px] font-medium">
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-base-content/10 text-base-content/60 hover:text-base-content hover:border-base-content/30 hover:bg-base-content/10 transition-all text-[11px] font-medium">
                             <Plus size={12} /> New Theme
                         </button>
                     </Row>
                     {customThemes?.length > 0 && (
-                        <div className="px-4 pb-4 pt-2 border-t border-white/[0.04] space-y-1.5">
+                        <div className="px-4 pb-4 pt-2 border-t border-base-content/10 space-y-1.5">
                             {customThemes.map((t) => (
                                 <CustomThemeItem key={t.id} t={t} active={theme === t.id} onSelect={setTheme} onEdit={openEdit} onDelete={setDeleteTarget} />
                             ))}
@@ -368,8 +368,8 @@ export default function AppearanceSection() {
             <div>
                 <SectionLabel>Typography</SectionLabel>
                 <Card>
-                    <Row label="Font family" desc="UI font used throughout the app">
-                        <Select id="ff" name="fontFamily" value={appearance?.fontFamily || "inter"} onChange={(e) => set("fontFamily")(e.target.value)} className="min-w-[9rem]">
+                    <Row stack label="Font family" desc="UI font used throughout the app">
+                        <Select id="ff" name="fontFamily" value={appearance?.fontFamily || "inter"} onChange={(e) => set("fontFamily")(e.target.value)} className="w-full">
                             {(fontFamilies || []).map((f) => (
                                 <option key={f.id} value={f.id}>{f.label}</option>
                             ))}
@@ -423,7 +423,7 @@ export default function AppearanceSection() {
                 <button
                     onClick={() => setResetOpen(true)}
                     style={{ outline: "none" }}
-                    className="flex items-center gap-1.5 text-[11px] text-white/20 hover:text-white/45 transition-colors px-2 py-1 rounded-lg hover:bg-white/[0.04] border-none">
+                    className="flex items-center gap-1.5 text-[11px] text-base-content/60 hover:text-base-content transition-colors px-2 py-1 rounded-lg hover:bg-base-content/10 border-none">
                     <RotateCcw size={10} /> Reset appearance
                 </button>
             </div>
@@ -435,14 +435,14 @@ export default function AppearanceSection() {
 
             <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete theme?" subtitle="This custom theme will be permanently removed.">
                 <div className="flex gap-2 mt-2">
-                    <button onClick={() => setDeleteTarget(null)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-white/40 border border-white/[0.07] hover:bg-white/[0.05] transition-colors">Cancel</button>
+                    <button onClick={() => setDeleteTarget(null)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 border border-base-content/10 hover:bg-base-content/10 transition-colors">Cancel</button>
                     <button onClick={() => { deleteCustomTheme(deleteTarget); setDeleteTarget(null); }} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-error text-error-content hover:opacity-90 transition-opacity border-none">Delete</button>
                 </div>
             </Modal>
 
             <Modal open={resetOpen} onClose={() => setResetOpen(false)} title="Reset appearance?" subtitle="Restores all layout and typography settings to defaults.">
                 <div className="flex gap-2 mt-2">
-                    <button onClick={() => setResetOpen(false)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-white/40 border border-white/[0.07] hover:bg-white/[0.05] transition-colors">Cancel</button>
+                    <button onClick={() => setResetOpen(false)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 border border-base-content/10 hover:bg-base-content/10 transition-colors">Cancel</button>
                     <button
                         onClick={() => {
                             setAppearance({ fontFamily: "inter", fontScale: 1, uiScale: 1, lineHeight: 1.5, density: "comfortable", radius: "moderate", sidebarWidth: 224, reducedMotion: false, highContrast: false, focusVisible: true });

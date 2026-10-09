@@ -13,6 +13,7 @@ import HistoryCard from "./HistoryCard";
  * - Wires useDeleteHistory() into each card's onRemove prop — optimistic
  *   cache update via TanStack Query so the card vanishes instantly without
  *   a refetch round-trip.
+ * - Hides fully-watched (completed) titles — they move to the Watch Time page.
  * - Renders nothing if empty / loading / errored — safe to drop into Home.jsx.
  */
 export default function ContinueWatchingRow() {
@@ -20,10 +21,13 @@ export default function ContinueWatchingRow() {
     const { mutate: deleteItem } = useDeleteHistory();
     const rowRef = useRef(null);
 
-    if (isLoading || !history.length) return null;
-
+    // Fully watched titles (completed) leave this row but STAY in history.json —
+    // they live on the Watch Time page. A re-watch flips `completed` back, so the
+    // title returns here until it's finished again.
     // Sort descending by watchedAt — most recently watched always first (spec §5)
-    const sorted = [...history].sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt));
+    const sorted = [...history].filter((h) => !h.completed).sort((a, b) => new Date(b.watchedAt) - new Date(a.watchedAt));
+
+    if (isLoading || !sorted.length) return null;
 
     function handleRemove(item) {
         deleteItem(item.id);
@@ -33,7 +37,7 @@ export default function ContinueWatchingRow() {
         <section className="relative">
             <Link to="/history" className="group flex items-center gap-2 mb-3 w-fit">
                 <h2 className="text-base sm:text-lg font-semibold text-base-content group-hover:text-primary transition-colors">Continue Watching</h2>
-                <span className="text-xs text-base-content/35 font-medium bg-base-300 px-2 py-0.5 rounded-full">{history.length}</span>
+                <span className="text-xs text-base-content/35 font-medium bg-base-300 px-2 py-0.5 rounded-full">{sorted.length}</span>
                 <ChevronRight size={16} className="text-base-content/40 group-hover:text-primary transition-colors" />
             </Link>
 

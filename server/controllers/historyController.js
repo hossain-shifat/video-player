@@ -257,10 +257,13 @@ async function logProgress(req, res) {
 
         const clientId = getClientId(req);
         if (!clientId) return res.status(401).json({ error: "Authentication required" });
-        const existed = !!getHistoryEntry(req.params.id, clientId);
+        const before = getHistoryEntry(req.params.id, clientId);
+        const existed = !!before;
+        const wasCompleted = !!before?.completed; // primitive copy — cached entry is mutated in place
         const enriched = await enrichMediaData(req.params.id, req.body);
         const entry = saveProgress(req.params.id, enriched, clientId, req.historyEmail);
-        notify(clientId, !existed); // push to this account's other open devices (instant for a brand-new entry)
+        // instant push for a brand-new entry or a watched/un-watched flip; throttled otherwise
+        notify(clientId, !existed || wasCompleted !== !!entry.completed);
         console.log(`[History] saved user=${clientId} email=${req.historyEmail} pos=${entry.position} "${entry.title}"`);
         return res.json(entry);
     } catch (err) {
@@ -293,4 +296,4 @@ function clearAll(req, res) {
     return res.json({ message: "History cleared" });
 }
 
-module.exports = { getAllHistory, getOne, logProgress, deleteOne, clearAll, sseHandler };
+module.exports = { getAllHistory, getOne, logProgress, deleteOne, clearAll, sseHandler, notify, enrichMediaData, isLiveMedia };

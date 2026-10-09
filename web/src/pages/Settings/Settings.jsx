@@ -107,7 +107,7 @@ export default function Settings() {
     })();
 
     return (
-        <div className="-m-4 sm:-m-6 lg:-m-8 flex flex-col w-full">
+        <div className="-m-4 sm:-m-6 lg:-m-8 flex flex-col">
             {/* ── Mobile tab strip ── */}
             <div className="sm:hidden shrink-0 border-b border-white/[0.10]" style={{ background: "rgba(10,10,14,0.97)", backdropFilter: "blur(16px)" }}>
                 <div className="flex overflow-x-auto px-3 py-2.5 gap-1" style={{ scrollbarWidth: "none" }}>

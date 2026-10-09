@@ -5,18 +5,19 @@ import AllCategory from "../Pages/Category/AllCategory";
 import CategoryPage from "../Pages/Category/CategoryPage";
 import MediaDetails from "../Pages/Media/Details/MediaDetails";
 import PersonPage from "../Pages/Person/PersonPage";
+import DiscoverPage from "../Pages/Discover/DiscoverPage";
 import Movies from "../Pages/Media/Movies/Movies";
 import Series from "../Pages/Media/Series/Series";
 import PlayerPage from "../Pages/Player/PlayerPage";
 import Settings from "../Pages/Settings/Settings";
 import WatchList from "../Pages/WatchList/WatchList";
+import WatchTime from "../Pages/WatchTime/WatchTime";
 import RecommendationsPage from "../Pages/Recommendations/RecommendationsPage";
 // import Player from "../Pages/Player/Player";
 import TermsPage from "../Pages/Terms/TermsPage";
 import PrivacyPage from "../Pages/Privacy/PrivacyPage";
 import LicensesPage from "../Pages/Licenses/LicensesPage";
 import OAuthCallbackPage from "../Pages/Auth/OAuthCallbackPage";
-import MyLibrary from "../Pages/Library/MyLibrary";
 import MyMedia from "../Pages/Media/MyMedia/MyMedia";
 
 // ─── Error Pages ────────────────────────────────────────────────────────────
@@ -91,14 +92,15 @@ export const router = createBrowserRouter([
             { path: "category/:name", Component: CategoryPage },
             { path: "media/:id", Component: MediaDetails },
             { path: "person/:personId", Component: PersonPage },
+            { path: "discover", Component: DiscoverPage },
             { path: "live", Component: Live },
             { path: "live/category/:slug", Component: LiveCategory },
             { path: "movies", Component: Movies },
             { path: "series", Component: Series },
             { path: "settings", Component: Settings },
             { path: "watchlist", Component: WatchList },
+            { path: "my-activity", Component: WatchTime },
             { path: "recommendations", Component: RecommendationsPage },
-            { path: "library", Component: MyLibrary },
             { path: "my-media", Component: MyMedia },
             { path: "terms", Component: TermsPage },
             { path: "privacy", Component: PrivacyPage },

@@ -368,6 +368,23 @@ function clearHistory(userId) {
     }
 }
 
+/**
+ * markHistoryCompleted — flip ONE entry's `completed` flag (Continue Watching hides
+ * completed titles). Called by the Watch Time controller when a replay starts/finishes;
+ * Watch Time itself never reads or writes history.json.
+ */
+function markHistoryCompleted(userId, id, completed) {
+    if (!isValidId(id)) return false;
+    const store = loadStore();
+    const block = safeGet(store, resolveClientId(userId));
+    const entry = block ? block.media.find((e) => e.id === id) : null;
+    if (!entry || !!entry.completed === !!completed) return false;
+    entry.completed = !!completed;
+    entry.watchedAt = new Date().toISOString();
+    saveStore(store);
+    return true;
+}
+
 // ─── Userdata (watchlist + favourites) — unchanged ───────────────────────────
 
 function getUserdata() {
@@ -415,6 +432,9 @@ module.exports = {
     saveProgress,
     deleteHistoryEntry,
     clearHistory,
+    markHistoryCompleted,
+    readJson,
+    writeJson,
     getUserdata,
     addToWatchlist,
     removeFromWatchlist,

@@ -47,11 +47,11 @@ const Home = () => {
 
             <LiveMediaRow />
 
+            <TrailerRow title="Trending Trailers" items={discoverTrailers} loading={trailersLoading} />
+
             <HomeMediaSections movieItems={movieItems} seriesItems={seriesItems} animeItems={animeItems} onPlay={handlePlay} onWatchTrailer={handleTrailer} loading={isLoading} />
 
             <Recommendations />
-
-            <TrailerRow title="Trending Trailers" items={discoverTrailers} loading={trailersLoading} />
 
             <TrailerRow title="New Trailers" items={newTrailers} loading={trailersLoading} />
         </div>

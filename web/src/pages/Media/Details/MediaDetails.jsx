@@ -1285,7 +1285,7 @@ export default function MediaDetails() {
                 )}
 
                 {/* ── Episode schedule (metadata upgrade, v18) ────────────────── */}
-                {isSeries && episodeSchedule && (episodeSchedule.nextEpisode || episodeSchedule.lastAirDate) && (
+                {isSeries && episodeSchedule && (episodeSchedule.nextEpisode || (episodeSchedule.lastAirDate && m?.status !== "Ended" && m?.status !== "Canceled")) && (
                     <section className="w-full">
                         <SectionHeading icon={CalendarClock}>Episode Schedule</SectionHeading>
                         {episodeSchedule.nextEpisode ? (
