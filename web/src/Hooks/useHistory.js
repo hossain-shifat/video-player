@@ -15,6 +15,12 @@ export const HISTORY_KEYS = {
     list: () => ["history", "list"],
 };
 
+// Live pings refresh everything derived from watching: history + the Watch Time page.
+const refreshLive = (qc) => {
+    qc.invalidateQueries({ queryKey: HISTORY_KEYS.all });
+    qc.invalidateQueries({ queryKey: ["watchtime"] });
+};
+
 // Safety-net poll only. Real-time updates come from the SSE push below
 // (server → "history changed" ping → refetch), so this can be slow.
 const HISTORY_POLL_MS = 30_000;
@@ -47,10 +53,10 @@ function openHistoryStream(qc) {
     es.onopen = () => {
         console.debug("[History] live stream connected");
         // Re-sync once after a drop so nothing missed while offline is lost.
-        if (_wasDown) qc.invalidateQueries({ queryKey: HISTORY_KEYS.list() });
+        if (_wasDown) refreshLive(qc);
         _wasDown = false;
     };
-    es.onmessage = () => qc.invalidateQueries({ queryKey: HISTORY_KEYS.list() });
+    es.onmessage = () => refreshLive(qc);
     es.onerror = () => {
         // Browser auto-retry doesn't refresh the token; rebuild with a fresh one.
         console.debug("[History] live stream dropped — reconnecting");
@@ -79,10 +85,8 @@ function closeHistoryStream() {
  *  - refetchInterval          → slow safety-net poll in case the push drops
  *  - useProgress also writes each save straight into this cache (same device = instant)
  */
-export function useHistory(options = {}) {
-    const { isAuthenticated } = useAuth();
+export function useHistoryLive(isAuthenticated) {
     const qc = useQueryClient();
-
     useEffect(() => {
         if (!isAuthenticated || typeof EventSource === "undefined") return undefined;
         _refs++;
@@ -95,6 +99,11 @@ export function useHistory(options = {}) {
             }
         };
     }, [isAuthenticated, qc]);
+}
+
+export function useHistory(options = {}) {
+    const { isAuthenticated } = useAuth();
+    useHistoryLive(isAuthenticated);
 
     return useQuery({
         queryKey: HISTORY_KEYS.list(),

@@ -1,6 +1,25 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { NavLink, Link } from "react-router";
-import { Search as SearchIcon, BarChart2, Bookmark, User, Users, Layers, ShieldCheck, FolderTree, Settings, List, Library, X, LogOut, LogIn, Bell, LayoutDashboard, Heart } from "lucide-react";
+import {
+    Search as SearchIcon,
+    BarChart2,
+    Bookmark,
+    User,
+    Users,
+    Layers,
+    ShieldCheck,
+    FolderTree,
+    Settings,
+    List,
+    Library,
+    X,
+    LogOut,
+    LogIn,
+    Bell,
+    LayoutDashboard,
+    Heart,
+    Activity,
+} from "lucide-react";
 import Logo from "./Logo";
 import Search from "./Search";
 import { useAuth } from "../auth/AuthContext";
@@ -11,6 +30,7 @@ const profileMenuItems = [
     { icon: User, label: "Profile", to: "/settings?tab=profile" },
     { icon: Users, label: "Friends", to: "/friends" },
     { icon: List, label: "My Watchlist", to: "/watchlist" },
+    { icon: Activity, label: "My Activity", to: "/my-activity" },
     { icon: Library, label: "My Media", to: "/my-media", adminOnly: true },
     { icon: FolderTree, label: "Folders", to: "/settings?tab=library", adminOnly: true },
     { icon: Layers, label: "Services", to: "/services" },
@@ -50,9 +70,9 @@ const Navbar = () => {
         if (movies?.length > 0) links.push({ to: "/movies", label: "Movies" });
         if (series?.length > 0) links.push({ to: "/series", label: "Series" });
         if (anime?.length > 0) links.push({ to: "/anime", label: "Anime" });
-        if (isAdmin) links.push({ to: "/library", label: "My Library" });
+        links.push({ to: "/discover", label: "Discover" }); // everyone (admin + normal users)
         return links;
-    }, [movies, series, anime, isAdmin]);
+    }, [movies, series, anime]);
 
     useEffect(() => {
         function handleClickOutside(e) {

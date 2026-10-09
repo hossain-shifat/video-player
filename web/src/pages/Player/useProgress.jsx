@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { sendWatchBeat } from "../../api/watchtime";
 import { HISTORY_KEYS } from "../../Hooks/useHistory";
 
 // FIX: Never save ephemeral HLS session URLs. Build a stable /stream/video/:id
@@ -344,8 +345,12 @@ export function useProgress({
             // Prefer the real ffprobe duration passed in from PlayerPage
             const duration = mediaDuration && mediaDuration > 60 ? mediaDuration : videoDur;
 
+            const payload = buildPayload(time, duration);
+            // Watch Time has its own beat — independent of history (survives history
+            // deletes, never blocked by the history milestone lock). Fire-and-forget.
+            sendWatchBeat(mediaId, payload).catch(() => {});
             try {
-                pushToCache(await api.post(`/api/history/${mediaId}`, buildPayload(time, duration)));
+                pushToCache(await api.post(`/api/history/${mediaId}`, payload));
             } catch {
                 // non-fatal
             }
@@ -580,6 +585,7 @@ export function useProgress({
             // sendBeacon cannot set custom headers.
             const qs = new URLSearchParams();
             if (token) qs.set("token", token);
+            navigator.sendBeacon(`${BASE}/api/watchtime/${mediaId}?${qs}`, new Blob([JSON.stringify(payload)], { type: "text/plain" }));
             const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
             const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
             const sent = navigator.sendBeacon(beaconUrl, blob);
@@ -645,6 +651,7 @@ export function useProgress({
             // sendBeacon cannot set custom headers.
             const qs = new URLSearchParams();
             if (token) qs.set("token", token);
+            navigator.sendBeacon(`${BASE}/api/watchtime/${mediaId}?${qs}`, new Blob([JSON.stringify(payload)], { type: "text/plain" }));
             const beaconUrl = `${BASE}/api/history/${mediaId}?${qs}`;
             const blob = new Blob([JSON.stringify(payload)], { type: "text/plain" });
             const sent = navigator.sendBeacon(beaconUrl, blob);
