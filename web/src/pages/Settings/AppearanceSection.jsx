@@ -1,186 +1,166 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Trash2, Edit3, Check, Moon, Sun, ChevronDown, RotateCcw } from "lucide-react";
+import { Plus, Trash2, Pencil, Check, RotateCcw, Moon, Sun, ChevronDown } from "lucide-react";
 import { useTheme } from "../../Context/themeContext";
-import { Card, Row, Toggle, Modal, ThemeSwatch, SectionLabel, Select } from "./shared";
+import { Card, Row, Toggle, Modal, ConfirmModal, SectionLabel, Select, Seg, Slider, Field, Input, PrimaryButton, GhostButton, ThemeSwatch, FOCUS } from "./shared";
 
-// ─── Segmented control ────────────────────────────────────────────────────────
-function Seg({ opts, value, onChange }) {
-    return (
-        <div className="flex bg-base-content/5 rounded-lg p-0.5 gap-0.5 border border-base-content/10 w-full">
-            {opts.map((o) => (
-                <button
-                    key={o.id}
-                    onClick={() => onChange(o.id)}
-                    style={{ outline: "none" }}
-                    className={`flex-1 text-[11px] px-1.5 py-1.5 rounded-md transition-all font-medium whitespace-nowrap ${value === o.id ? "bg-base-content/15 text-base-content" : "text-base-content/60 hover:text-base-content"}`}>
-                    {o.label}
-                </button>
-            ))}
-        </div>
-    );
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+// <input type="color"> only takes hex, theme vars are oklch → convert through a canvas pixel.
+function toHex(css) {
+    try {
+        const c = document.createElement("canvas");
+        c.width = c.height = 1;
+        const x = c.getContext("2d", { willReadFrequently: true });
+        x.clearRect(0, 0, 1, 1);
+        x.fillStyle = "#000000";
+        x.fillStyle = css;
+        x.fillRect(0, 0, 1, 1);
+        const [r, g, b] = x.getImageData(0, 0, 1, 1).data;
+        return "#" + [r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("");
+    } catch {
+        return "#000000";
+    }
 }
 
-// ─── Stack row — label + control stacked on mobile, inline on sm+ ─────────────
-// Use this instead of <Row> when the right-side control is wide (Seg with 3+ options)
-function StackRow({ label, desc, children }) {
+const isColor = (v) => {
+    try {
+        return typeof v === "string" && v.trim() !== "" && CSS.supports("color", v);
+    } catch {
+        return true;
+    }
+};
+
+// ─── Theme dropdown (portal, grouped dark / light) ───────────────────────────
+function ThemeRow({ t, on, onPick }) {
     return (
-        <div className="px-5 py-4 border-b border-base-content/10 last:border-0 hover:bg-base-content/10 transition-colors">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-6">
-                <div className="min-w-0">
-                    <p className="text-[13px] font-medium text-base-content/85 leading-tight">{label}</p>
-                    {desc && <p className="text-[11px] text-base-content/60 mt-0.5 leading-snug">{desc}</p>}
-                </div>
-                <div className="w-full sm:w-auto sm:shrink-0 sm:min-w-[12rem]">{children}</div>
+        <button
+            type="button"
+            role="option"
+            aria-selected={on}
+            onClick={() => onPick(t.id)}
+            className={`flex w-full cursor-pointer items-center gap-2.5 rounded-field px-2.5 py-2 text-left transition-colors ${FOCUS} ${on ? "bg-primary/12" : "hover:bg-base-content/10"}`}>
+            <ThemeSwatch preview={t.preview} size="sm" />
+            <div className="min-w-0 flex-1">
+                <p className={`truncate text-[13px] font-medium ${on ? "text-primary" : "text-base-content"}`}>{t.label}</p>
+                {t.description && <p className="truncate text-xs text-base-content/55">{t.description}</p>}
             </div>
-        </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+                {t.colorScheme === "light" ? <Sun size={12} className="text-base-content/55" /> : <Moon size={12} className="text-base-content/55" />}
+                {on && <Check size={13} className="text-primary" strokeWidth={3} />}
+            </div>
+        </button>
     );
 }
 
-// ─── Slider ───────────────────────────────────────────────────────────────────
-function Slider({ value, onChange, min, max, step, fmt }) {
-    return (
-        <div className="flex items-center gap-3">
-            <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={value}
-                onChange={(e) => onChange(parseFloat(e.target.value))}
-                style={{ outline: "none", border: "none", boxShadow: "none" }}
-                className="flex-1 h-[3px] rounded-full cursor-pointer appearance-none accent-primary bg-base-content/10"
-            />
-            <span className="text-[11px] text-base-content/60 w-10 text-right shrink-0 font-mono tabular-nums">{fmt ? fmt(value) : value}</span>
-        </div>
-    );
+function ThemeGroupLabel({ children }) {
+    return <p className="px-2.5 pb-1 pt-2 text-xs font-medium text-base-content/55">{children}</p>;
 }
 
-// ─── Color swatch input ───────────────────────────────────────────────────────
-function ColorPick({ value, onChange, label }) {
-    const ref = useRef(null);
-    return (
-        <div className="flex items-center gap-2">
-            <button
-                onClick={() => ref.current?.click()}
-                style={{ background: value, outline: "none", border: "1px solid color-mix(in oklab, var(--color-base-content) 25%, transparent)" }}
-                className="w-7 h-7 rounded-lg shrink-0 cursor-pointer"
-            />
-            <input ref={ref} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
-            <input
-                type="text"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                style={{ outline: "none" }}
-                className="flex-1 bg-base-content/5 border border-base-content/10 rounded-lg px-2.5 py-1.5 text-[11px] text-base-content font-mono focus:border-primary/40 transition-colors min-w-0"
-            />
-        </div>
-    );
-}
-
-// ─── Portal dropdown for theme picker ─────────────────────────────────────────
-// FIX: self-contained `dropIn` keyframe injected inside the portal so it
-// works even when no <Modal> is rendered (modalIn keyframe would be missing).
 function ThemeDropdown({ themes, activeId, onSelect }) {
     const [open, setOpen] = useState(false);
-    const trigRef = useRef(null);
     const [rect, setRect] = useState(null);
-    const active = themes.find((t) => t.id === activeId) || themes[0];
-    const dark = themes.filter((t) => t.colorScheme === "dark");
-    const light = themes.filter((t) => t.colorScheme !== "dark");
+    const trigRef = useRef(null);
 
-    function openMenu() {
-        if (trigRef.current) setRect(trigRef.current.getBoundingClientRect());
-        setOpen(true);
-    }
+    const active = themes.find((t) => t.id === activeId) || themes[0];
+    const dark = themes.filter((t) => t.colorScheme !== "light");
+    const light = themes.filter((t) => t.colorScheme === "light");
+
+    const measure = () => trigRef.current && setRect(trigRef.current.getBoundingClientRect());
 
     useEffect(() => {
         if (!open) return;
-        const upd = () => {
-            if (trigRef.current) setRect(trigRef.current.getBoundingClientRect());
-        };
-        window.addEventListener("scroll", upd, true);
-        window.addEventListener("resize", upd);
+        const onKey = (e) => e.key === "Escape" && setOpen(false);
+        window.addEventListener("scroll", measure, true);
+        window.addEventListener("resize", measure);
+        window.addEventListener("keydown", onKey);
         return () => {
-            window.removeEventListener("scroll", upd, true);
-            window.removeEventListener("resize", upd);
+            window.removeEventListener("scroll", measure, true);
+            window.removeEventListener("resize", measure);
+            window.removeEventListener("keydown", onKey);
         };
     }, [open]);
 
-    function TRow({ t }) {
-        const on = t.id === activeId;
-        return (
-            <button
-                onClick={() => { onSelect(t.id); setOpen(false); }}
-                style={{ outline: "none" }}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left ${on ? "bg-primary/12" : "hover:bg-base-content/10"}`}>
-                <ThemeSwatch preview={t.preview} size="sm" />
-                <div className="flex-1 min-w-0">
-                    <p className={`text-[12px] font-semibold truncate ${on ? "text-primary" : "text-base-content/85"}`}>{t.label}</p>
-                    {t.description && <p className="text-[10px] text-base-content/60 truncate">{t.description}</p>}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                    {t.colorScheme === "dark" ? <Moon size={9} className="text-base-content/60" /> : <Sun size={9} className="text-base-content/60" />}
-                    {on && <Check size={11} className="text-primary" strokeWidth={3} />}
-                </div>
-            </button>
-        );
-    }
+    const pick = (id) => {
+        onSelect(id);
+        setOpen(false);
+    };
 
-    function Group({ label, items }) {
-        if (!items.length) return null;
-        return (
-            <div>
-                <p className="text-[9px] font-bold text-base-content/60 uppercase tracking-[0.12em] px-2.5 py-1.5">{label}</p>
-                {items.map((t) => <TRow key={t.id} t={t} />)}
-            </div>
-        );
-    }
-
-    const panel =
-        open &&
-        rect &&
-        createPortal(
-            <>
-                {/* Self-contained keyframe — no dependency on Modal being mounted */}
-                <style>{`@keyframes dropIn{from{opacity:0;transform:translateY(-4px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}`}</style>
-                <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
-                <div
-                    style={{
-                        position: "fixed",
-                        top: rect.bottom + 4,
-                        left: rect.left,
-                        width: rect.width,
-                        zIndex: 9999,
-                        background: "var(--color-base-200)",
-                        maxHeight: 280,
-                        overflowY: "auto",
-                        borderRadius: "0.75rem",
-                        border: "1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent)",
-                        boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
-                        animation: "dropIn .12s ease-out both",
-                    }}>
-                    <div className="p-1.5 space-y-0.5">
-                        <Group label="Dark" items={dark} />
-                        {dark.length > 0 && light.length > 0 && <div className="border-t border-base-content/10 my-1" />}
-                        <Group label="Light" items={light} />
-                    </div>
-                </div>
-            </>,
-            document.body,
-        );
+    // Open upward when there is no room below
+    const maxH = 320;
+    const below = rect ? window.innerHeight - rect.bottom : 0;
+    const top = rect ? (below >= Math.min(maxH, 200) ? rect.bottom + 4 : Math.max(8, rect.top - maxH - 4)) : 0;
 
     return (
-        <div ref={trigRef} className="relative">
+        <div ref={trigRef}>
             <button
-                onClick={openMenu}
-                style={{ outline: "none", boxShadow: "none" }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-base-content/10 bg-base-content/5 hover:bg-base-content/10 hover:border-base-content/30 transition-all cursor-pointer">
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                onClick={() => {
+                    measure();
+                    setOpen((v) => !v);
+                }}
+                className={`flex h-10 w-full cursor-pointer items-center gap-2.5 rounded-field border border-base-content/20 bg-base-100 px-3 transition-colors hover:border-base-content/40 ${FOCUS}`}>
                 {active && <ThemeSwatch preview={active.preview} size="sm" />}
-                <span className="flex-1 text-left text-[13px] font-medium text-base-content truncate">{active?.label || "Select"}</span>
-                <ChevronDown size={13} className={`text-base-content/60 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+                <span className="flex-1 truncate text-left text-[13px] font-medium text-base-content">{active?.label || "Select theme"}</span>
+                <ChevronDown size={14} className={`shrink-0 text-base-content/60 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
             </button>
-            {panel}
+
+            {open &&
+                rect &&
+                createPortal(
+                    <>
+                        <style>{`@keyframes dropIn{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){[data-theme-menu]{animation:none!important}}`}</style>
+                        <div className="fixed inset-0 z-[2147483646]" onClick={() => setOpen(false)} />
+                        <div
+                            data-theme-menu
+                            role="listbox"
+                            aria-label="Themes"
+                            className="fixed z-[2147483647] overflow-y-auto rounded-box border border-base-content/15 bg-base-200 p-1.5 shadow-2xl"
+                            style={{ top, left: rect.left, width: rect.width, maxHeight: maxH, animation: "dropIn .12s ease-out both" }}>
+                            {dark.length > 0 && <ThemeGroupLabel>Dark</ThemeGroupLabel>}
+                            {dark.map((t) => (
+                                <ThemeRow key={t.id} t={t} on={t.id === activeId} onPick={pick} />
+                            ))}
+                            {dark.length > 0 && light.length > 0 && <div className="my-1 border-t border-base-content/10" />}
+                            {light.length > 0 && <ThemeGroupLabel>Light</ThemeGroupLabel>}
+                            {light.map((t) => (
+                                <ThemeRow key={t.id} t={t} on={t.id === activeId} onPick={pick} />
+                            ))}
+                        </div>
+                    </>,
+                    document.body,
+                )}
+        </div>
+    );
+}
+
+// ─── Saved custom theme row ───────────────────────────────────────────────────
+function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
+    return (
+        <div className={`flex items-center gap-2 rounded-box border px-3 py-2 transition-colors ${active ? "border-primary/40 bg-primary/5" : "border-base-content/10 hover:border-base-content/30"}`}>
+            <button type="button" onClick={() => onSelect(t.id)} className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-field text-left ${FOCUS}`}>
+                <ThemeSwatch preview={t.preview} size="sm" />
+                <span className="min-w-0 flex-1">
+                    <span className={`block truncate text-[13px] font-medium ${active ? "text-primary" : "text-base-content"}`}>{t.label}</span>
+                    {t.description && <span className="block truncate text-xs text-base-content/55">{t.description}</span>}
+                </span>
+                {active && <Check size={13} className="shrink-0 text-primary" strokeWidth={3} />}
+            </button>
+            <button
+                type="button"
+                onClick={() => onEdit(t)}
+                aria-label={`Edit ${t.label}`}
+                className={`flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-field text-base-content/60 transition-colors hover:bg-base-content/10 hover:text-base-content ${FOCUS}`}>
+                <Pencil size={14} />
+            </button>
+            <button
+                type="button"
+                onClick={() => onDelete(t)}
+                aria-label={`Delete ${t.label}`}
+                className={`flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-field text-base-content/60 transition-colors hover:bg-error/10 hover:text-error ${FOCUS}`}>
+                <Trash2 size={14} />
+            </button>
         </div>
     );
 }
@@ -199,123 +179,140 @@ const DEFAULT_VARS = {
 const VAR_LABELS = {
     "--color-base-100": "Background",
     "--color-base-200": "Surface",
-    "--color-base-300": "Raised Surface",
+    "--color-base-300": "Raised surface",
     "--color-base-content": "Text",
     "--color-primary": "Primary",
-    "--color-primary-content": "Primary Text",
+    "--color-primary-content": "Text on primary",
     "--color-accent": "Accent",
-    "--color-accent-content": "Accent Text",
+    "--color-accent-content": "Text on accent",
 };
 
-function ThemeBuilder({ initial, onSave, onClose }) {
-    const [name, setName] = useState(initial?.label || "My Theme");
-    const [desc, setDesc] = useState(initial?.description || "");
-    const [scheme, setScheme] = useState(initial?.colorScheme || "dark");
-    const [vars, setVars] = useState(initial?.cssVars || { ...DEFAULT_VARS });
-    const sv = (k, v) => setVars((x) => ({ ...x, [k]: v }));
-    const prev = { base: vars["--color-base-100"], primary: vars["--color-primary"], accent: vars["--color-accent"] };
-
+function ColorField({ id, label, value, onChange }) {
+    const ref = useRef(null);
+    const ok = isColor(value);
     return (
-        <div className="space-y-5 max-h-[60vh] overflow-y-auto pr-0.5">
-            <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2 space-y-1.5">
-                    <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Name</label>
-                    <input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        maxLength={30}
-                        placeholder="My Theme"
-                        style={{ outline: "none" }}
-                        className="input input-sm w-full bg-base-content/5 border border-base-content/10 rounded-lg text-[13px] text-base-content"
-                    />
-                </div>
-                <div className="col-span-2 space-y-1.5">
-                    <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Description</label>
-                    <input
-                        value={desc}
-                        onChange={(e) => setDesc(e.target.value)}
-                        maxLength={60}
-                        placeholder="Short description"
-                        style={{ outline: "none" }}
-                        className="input input-sm w-full bg-base-content/5 border border-base-content/10 rounded-lg text-[13px] text-base-content"
-                    />
-                </div>
-            </div>
-
-            <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-base-content/60 uppercase tracking-[0.1em] block">Scheme</label>
-                <Seg opts={[{ id: "dark", label: "Dark" }, { id: "light", label: "Light" }]} value={scheme} onChange={setScheme} />
-            </div>
-
-            <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl bg-base-content/5 border border-base-content/10">
-                <ThemeSwatch preview={prev} />
-                <div>
-                    <p className="text-[12px] font-semibold text-base-content">{name || "Preview"}</p>
-                    <p className="text-[10px] text-base-content/60">{scheme} theme</p>
-                </div>
-            </div>
-
-            <div className="space-y-3">
-                <p className="text-[9px] font-bold text-base-content/60 uppercase tracking-[0.12em]">Colors</p>
-                {Object.entries(VAR_LABELS).map(([k, lbl]) => (
-                    <div key={k}>
-                        <label className="text-[10px] text-base-content/60 block mb-1">{lbl}</label>
-                        <ColorPick value={vars[k] || "#888"} onChange={(v) => sv(k, v)} label={lbl} />
-                    </div>
-                ))}
-            </div>
-
-            <div className="flex gap-2 pt-1 border-t border-base-content/10 sticky bottom-0 pb-0.5" style={{ background: "var(--color-base-200)" }}>
+        <div className="space-y-1.5">
+            <label htmlFor={id} className="block text-[13px] font-medium text-base-content">
+                {label}
+            </label>
+            <div className="flex items-center gap-2">
                 <button
-                    onClick={onClose}
-                    style={{ outline: "none" }}
-                    className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 hover:text-base-content hover:bg-base-content/10 transition-colors border border-base-content/10">
-                    Cancel
-                </button>
-                <button
-                    onClick={() => {
-                        onSave({ label: name.trim() || "Custom", description: desc.trim(), colorScheme: scheme, preview: prev, cssVars: vars });
-                        onClose();
-                    }}
-                    style={{ outline: "none" }}
-                    className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none">
-                    Save Theme
-                </button>
+                    type="button"
+                    onClick={() => ref.current?.click()}
+                    aria-label={`Pick ${label} colour`}
+                    style={{ background: ok ? value : "transparent" }}
+                    className={`size-9 shrink-0 cursor-pointer rounded-field border border-base-content/25 ${FOCUS}`}
+                />
+                <input ref={ref} type="color" value={ok ? toHex(value) : "#000000"} onChange={(e) => onChange(e.target.value)} className="sr-only" tabIndex={-1} aria-hidden="true" />
+                <Input id={id} name={id} value={value} onChange={(e) => onChange(e.target.value)} mono className={ok ? "" : "border-error"} />
             </div>
+            {!ok && <p className="text-xs text-error">Not a valid CSS colour.</p>}
         </div>
     );
 }
 
-function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
+function ThemeBuilder({ initial, onSave, onClose }) {
+    const [name, setName] = useState(initial?.label || "My theme");
+    const [desc, setDesc] = useState(initial?.description || "");
+    const [scheme, setScheme] = useState(initial?.colorScheme || "dark");
+    const [vars, setVars] = useState(() => ({ ...DEFAULT_VARS, ...(initial?.cssVars || {}) }));
+    const sv = (k, v) => setVars((x) => ({ ...x, [k]: v }));
+
+    const valid = Object.values(vars).every(isColor);
+    const canSave = valid && name.trim().length > 0;
+
+    function save() {
+        if (!canSave) return;
+        onSave({
+            label: name.trim(),
+            description: desc.trim(),
+            colorScheme: scheme,
+            preview: { base: vars["--color-base-100"], primary: vars["--color-primary"], accent: vars["--color-accent"] },
+            cssVars: vars,
+        });
+        onClose();
+    }
+
+    const safe = (k) => (isColor(vars[k]) ? vars[k] : DEFAULT_VARS[k]);
+
     return (
-        <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border transition-all ${active ? "border-primary/30 bg-primary/6" : "border-base-content/10 hover:border-base-content/30"}`}>
-            <button onClick={() => onSelect(t.id)} style={{ outline: "none" }} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
-                <ThemeSwatch preview={t.preview} size="sm" />
-                <div className="flex-1 min-w-0">
-                    <p className={`text-[12px] font-semibold truncate ${active ? "text-primary" : "text-base-content/85"}`}>{t.label}</p>
-                    {t.description && <p className="text-[10px] text-base-content/60 truncate">{t.description}</p>}
+        <div className="space-y-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field id="tb-name" label="Name" required>
+                    <Input id="tb-name" name="tb-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={30} placeholder="My theme" autoFocus />
+                </Field>
+                <Field id="tb-desc" label="Description">
+                    <Input id="tb-desc" name="tb-desc" value={desc} onChange={(e) => setDesc(e.target.value)} maxLength={60} placeholder="Short description" />
+                </Field>
+            </div>
+
+            <Field id="tb-scheme" label="Base scheme" hint="Sets native form controls and scrollbars to light or dark.">
+                <Seg
+                    opts={[
+                        { id: "dark", label: "Dark" },
+                        { id: "light", label: "Light" },
+                    ]}
+                    value={scheme}
+                    onChange={setScheme}
+                />
+            </Field>
+
+            {/* Live preview */}
+            <div className="overflow-hidden rounded-box border border-base-content/20" style={{ background: safe("--color-base-100") }} aria-label="Theme preview">
+                <div className="flex items-center gap-2 px-3 py-2" style={{ background: safe("--color-base-300") }}>
+                    <span className="h-2 w-10 rounded-md" style={{ background: safe("--color-primary") }} />
+                    <span className="h-2 w-6 rounded-md" style={{ background: safe("--color-base-content"), opacity: 0.4 }} />
                 </div>
-                {active && <Check size={11} className="text-primary shrink-0" strokeWidth={3} />}
-            </button>
-            <div className="flex items-center gap-0.5 shrink-0">
-                <button
-                    onClick={() => onEdit(t)}
-                    style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/60 hover:text-base-content hover:bg-base-content/10 transition-colors">
-                    <Edit3 size={11} />
-                </button>
-                <button
-                    onClick={() => onDelete(t.id)}
-                    style={{ outline: "none" }}
-                    className="w-6 h-6 rounded flex items-center justify-center text-base-content/60 hover:text-error hover:bg-error/10 transition-colors">
-                    <Trash2 size={11} />
-                </button>
+                <div className="flex items-center justify-between gap-3 p-3">
+                    <div className="min-w-0 flex-1 rounded-field p-3" style={{ background: safe("--color-base-200"), color: safe("--color-base-content") }}>
+                        <p className="truncate text-sm font-semibold">{name.trim() || "Sample title"}</p>
+                        <p className="mt-0.5 text-xs" style={{ opacity: 0.65 }}>
+                            This is how text looks on a surface.
+                        </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-1.5">
+                        <span className="rounded-field px-3 py-1.5 text-center text-xs font-medium" style={{ background: safe("--color-primary"), color: safe("--color-primary-content") }}>
+                            Play
+                        </span>
+                        <span className="rounded-field px-3 py-1.5 text-center text-xs font-medium" style={{ background: safe("--color-accent"), color: safe("--color-accent-content") }}>
+                            Trailer
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                {Object.entries(VAR_LABELS).map(([k, lbl]) => (
+                    <ColorField key={k} id={`tb-${k}`} label={lbl} value={vars[k] ?? ""} onChange={(v) => sv(k, v)} />
+                ))}
+            </div>
+
+            <div className="flex gap-2 border-t border-base-content/10 pt-4">
+                <GhostButton onClick={onClose} className="flex-1">
+                    Cancel
+                </GhostButton>
+                <PrimaryButton onClick={save} disabled={!canSave} className="flex-1">
+                    <Check size={14} /> Save theme
+                </PrimaryButton>
             </div>
         </div>
     );
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
+const APPEARANCE_DEFAULTS = {
+    fontFamily: "inter",
+    fontScale: 1,
+    uiScale: 1,
+    lineHeight: 1.5,
+    density: "comfortable",
+    radius: "moderate",
+    sidebarWidth: 224,
+    reducedMotion: false,
+    highContrast: false,
+    focusVisible: true,
+};
+
 export default function AppearanceSection() {
     const { theme, setTheme, allThemes, customThemes, addCustomTheme, updateCustomTheme, deleteCustomTheme, appearance, setAppearance, fontFamilies, densityPresets, radiusPresets } = useTheme();
 
@@ -324,38 +321,45 @@ export default function AppearanceSection() {
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [resetOpen, setResetOpen] = useState(false);
 
-    const openCreate = () => { setEditTarget(null); setBuilderOpen(true); };
-    const openEdit = (t) => { setEditTarget(t); setBuilderOpen(true); };
+    const openCreate = () => {
+        setEditTarget(null);
+        setBuilderOpen(true);
+    };
+    const openEdit = (t) => {
+        setEditTarget(t);
+        setBuilderOpen(true);
+    };
+    const closeBuilder = () => {
+        setBuilderOpen(false);
+        setEditTarget(null);
+    };
 
     function handleSave(data) {
         if (editTarget) updateCustomTheme(editTarget.id, data);
-        else { const id = addCustomTheme(data); setTheme(id); }
+        else {
+            const id = addCustomTheme(data);
+            if (id) setTheme(id);
+        }
     }
 
     const set = (k) => (v) => setAppearance({ [k]: v });
 
     return (
-        // FIX: removed max-w-2xl — full outlet width on PC
-        <div className="space-y-6 w-full">
+        <div className="w-full space-y-6">
             {/* ── Theme ── */}
-            <div>
-                <SectionLabel>Theme</SectionLabel>
+            <div id="a-theme" className="scroll-mt-28">
+                <SectionLabel hint="Applies instantly and is remembered on this device.">Theme</SectionLabel>
                 <Card>
                     <Row stack label="Theme" desc="Active color scheme">
-                        <div className="w-full">
-                            <ThemeDropdown themes={allThemes} activeId={theme} onSelect={setTheme} />
-                        </div>
+                        <ThemeDropdown themes={allThemes || []} activeId={theme} onSelect={setTheme} />
                     </Row>
                     <Row label="Add custom" desc={customThemes?.length ? `${customThemes.length} custom theme${customThemes.length > 1 ? "s" : ""} saved` : "Create a personalized color scheme"}>
-                        <button
-                            onClick={openCreate}
-                            style={{ outline: "none" }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-base-content/10 text-base-content/60 hover:text-base-content hover:border-base-content/30 hover:bg-base-content/10 transition-all text-[11px] font-medium">
-                            <Plus size={12} /> New Theme
-                        </button>
+                        <GhostButton onClick={openCreate}>
+                            <Plus size={13} /> New theme
+                        </GhostButton>
                     </Row>
                     {customThemes?.length > 0 && (
-                        <div className="px-4 pb-4 pt-2 border-t border-base-content/10 space-y-1.5">
+                        <div className="space-y-1.5 border-t border-base-content/10 px-4 pb-4 pt-3 sm:px-5">
                             {customThemes.map((t) => (
                                 <CustomThemeItem key={t.id} t={t} active={theme === t.id} onSelect={setTheme} onEdit={openEdit} onDelete={setDeleteTarget} />
                             ))}
@@ -366,25 +370,26 @@ export default function AppearanceSection() {
 
             {/* ── Typography ── */}
             <div>
-                <SectionLabel>Typography</SectionLabel>
+                <SectionLabel hint="Applies to the whole app.">Typography</SectionLabel>
                 <Card>
-                    <Row stack label="Font family" desc="UI font used throughout the app">
+                    <Row id="a-font" stack label="Font family" desc="Typeface used across the interface">
                         <Select id="ff" name="fontFamily" value={appearance?.fontFamily || "inter"} onChange={(e) => set("fontFamily")(e.target.value)} className="w-full">
                             {(fontFamilies || []).map((f) => (
-                                <option key={f.id} value={f.id}>{f.label}</option>
+                                <option key={f.id} value={f.id}>
+                                    {f.label}
+                                </option>
                             ))}
                         </Select>
                     </Row>
-                    <StackRow label="Font scale" desc="Scales all text sizes">
-                        <Slider value={appearance?.fontScale ?? 1} onChange={set("fontScale")} min={0.8} max={1.3} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} />
-                    </StackRow>
-                    <StackRow label="Line height" desc="Vertical spacing between lines">
-                        <Slider value={appearance?.lineHeight ?? 1.5} onChange={set("lineHeight")} min={1.1} max={2.0} step={0.1} fmt={(v) => v.toFixed(1)} />
-                    </StackRow>
-                    {/* FIX: StackRow — stacks on mobile so Seg never overflows */}
-                    <StackRow label="Density" desc="Spacing within components">
+                    <Row id="a-scale" stack label="Font scale" desc="Scales all text sizes">
+                        <Slider label="Font scale" value={appearance?.fontScale ?? 1} onChange={set("fontScale")} min={0.8} max={1.3} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} />
+                    </Row>
+                    <Row id="a-line" stack label="Line height" desc="Vertical space between lines of text">
+                        <Slider label="Line height" value={appearance?.lineHeight ?? 1.5} onChange={set("lineHeight")} min={1.1} max={2.0} step={0.1} fmt={(v) => v.toFixed(1)} />
+                    </Row>
+                    <Row id="a-density" stack label="Density" desc="Spacing inside components">
                         <Seg opts={(densityPresets || []).map((d) => ({ id: d.id, label: d.label }))} value={appearance?.density || "comfortable"} onChange={set("density")} />
-                    </StackRow>
+                    </Row>
                 </Card>
             </div>
 
@@ -392,13 +397,12 @@ export default function AppearanceSection() {
             <div>
                 <SectionLabel>Layout</SectionLabel>
                 <Card>
-                    {/* FIX: StackRow — stacks on mobile so Seg never overflows */}
-                    <StackRow label="Border radius" desc="Roundness of UI elements">
+                    <Row id="a-radius" stack label="Border radius" desc="Roundness of cards, buttons and inputs">
                         <Seg opts={(radiusPresets || []).map((r) => ({ id: r.id, label: r.label }))} value={appearance?.radius || "moderate"} onChange={set("radius")} />
-                    </StackRow>
-                    <StackRow label="Sidebar width" desc="Desktop sidebar width">
-                        <Slider value={appearance?.sidebarWidth ?? 224} onChange={set("sidebarWidth")} min={180} max={320} step={10} fmt={(v) => `${v}px`} />
-                    </StackRow>
+                    </Row>
+                    <Row id="a-sidebar" stack label="Sidebar width" desc="Desktop sidebar width">
+                        <Slider label="Sidebar width" value={appearance?.sidebarWidth ?? 224} onChange={set("sidebarWidth")} min={180} max={320} step={10} fmt={(v) => `${v}px`} />
+                    </Row>
                 </Card>
             </div>
 
@@ -406,54 +410,52 @@ export default function AppearanceSection() {
             <div>
                 <SectionLabel>Accessibility</SectionLabel>
                 <Card>
-                    <Row label="Reduced motion" desc="Disable non-essential animations">
-                        <Toggle value={appearance?.reducedMotion ?? false} onChange={set("reducedMotion")} />
+                    <Row id="a-motion" label="Reduced motion" desc="Turn off non-essential animations">
+                        <Toggle label="Reduced motion" value={appearance?.reducedMotion ?? false} onChange={set("reducedMotion")} />
                     </Row>
-                    <Row label="High contrast" desc="Increase text and border contrast">
-                        <Toggle value={appearance?.highContrast ?? false} onChange={set("highContrast")} />
+                    <Row id="a-contrast" label="High contrast" desc="Stronger text and border contrast">
+                        <Toggle label="High contrast" value={appearance?.highContrast ?? false} onChange={set("highContrast")} />
                     </Row>
-                    <Row label="Focus indicators" desc="Always-visible keyboard focus rings">
-                        <Toggle value={appearance?.focusVisible ?? true} onChange={set("focusVisible")} />
+                    <Row id="a-focus" label="Focus indicators" desc="Always show keyboard focus rings">
+                        <Toggle label="Focus indicators" value={appearance?.focusVisible ?? true} onChange={set("focusVisible")} />
                     </Row>
                 </Card>
             </div>
 
-            {/* Reset */}
             <div className="flex justify-end">
-                <button
-                    onClick={() => setResetOpen(true)}
-                    style={{ outline: "none" }}
-                    className="flex items-center gap-1.5 text-[11px] text-base-content/60 hover:text-base-content transition-colors px-2 py-1 rounded-lg hover:bg-base-content/10 border-none">
-                    <RotateCcw size={10} /> Reset appearance
-                </button>
+                <GhostButton onClick={() => setResetOpen(true)}>
+                    <RotateCcw size={13} /> Reset appearance
+                </GhostButton>
             </div>
 
-            {/* Modals */}
-            <Modal open={builderOpen} onClose={() => { setBuilderOpen(false); setEditTarget(null); }} title={editTarget ? `Edit: ${editTarget.label}` : "New Custom Theme"}>
-                <ThemeBuilder initial={editTarget} onSave={handleSave} onClose={() => { setBuilderOpen(false); setEditTarget(null); }} />
+            {/* ── Modals ── */}
+            <Modal open={builderOpen} onClose={closeBuilder} width="max-w-xl" title={editTarget ? `Edit ${editTarget.label}` : "New custom theme"} subtitle="Colours accept any CSS value: hex, rgb, oklch.">
+                <ThemeBuilder key={editTarget?.id || "new"} initial={editTarget} onSave={handleSave} onClose={closeBuilder} />
             </Modal>
 
-            <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete theme?" subtitle="This custom theme will be permanently removed.">
-                <div className="flex gap-2 mt-2">
-                    <button onClick={() => setDeleteTarget(null)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 border border-base-content/10 hover:bg-base-content/10 transition-colors">Cancel</button>
-                    <button onClick={() => { deleteCustomTheme(deleteTarget); setDeleteTarget(null); }} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-error text-error-content hover:opacity-90 transition-opacity border-none">Delete</button>
-                </div>
-            </Modal>
+            <ConfirmModal
+                open={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                title="Delete theme?"
+                subtitle={`"${deleteTarget?.label || ""}" will be removed for good.`}
+                confirmLabel="Delete theme"
+                onConfirm={() => {
+                    if (deleteTarget) deleteCustomTheme(deleteTarget.id);
+                    setDeleteTarget(null);
+                }}
+            />
 
-            <Modal open={resetOpen} onClose={() => setResetOpen(false)} title="Reset appearance?" subtitle="Restores all layout and typography settings to defaults.">
-                <div className="flex gap-2 mt-2">
-                    <button onClick={() => setResetOpen(false)} style={{ outline: "none" }} className="flex-1 py-2 rounded-lg text-[12px] text-base-content/60 border border-base-content/10 hover:bg-base-content/10 transition-colors">Cancel</button>
-                    <button
-                        onClick={() => {
-                            setAppearance({ fontFamily: "inter", fontScale: 1, uiScale: 1, lineHeight: 1.5, density: "comfortable", radius: "moderate", sidebarWidth: 224, reducedMotion: false, highContrast: false, focusVisible: true });
-                            setResetOpen(false);
-                        }}
-                        style={{ outline: "none" }}
-                        className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-error text-error-content hover:opacity-90 transition-opacity border-none">
-                        Reset
-                    </button>
-                </div>
-            </Modal>
+            <ConfirmModal
+                open={resetOpen}
+                onClose={() => setResetOpen(false)}
+                title="Reset appearance?"
+                subtitle="Typography, layout and accessibility return to their defaults. Your themes stay."
+                confirmLabel="Reset"
+                onConfirm={() => {
+                    setAppearance(APPEARANCE_DEFAULTS);
+                    setResetOpen(false);
+                }}
+            />
         </div>
     );
 }
