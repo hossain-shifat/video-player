@@ -1306,7 +1306,7 @@ function _v9FolderParts(filePath) {
 }
 function parseFilenameWithContext(filename, filePath) {
     const own = parseFilenamePatchedV4(filename);
-    if (!filePath) return own;
+    if (!filePath || own.isDeviceFile) return own; // camera/phone clips (VID_…, IMG_…) must not inherit a folder's title
     try {
         const parts = _v9FolderParts(filePath);
         if (!parts.length) return own;

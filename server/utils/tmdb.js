@@ -811,7 +811,8 @@ function _scoreResults(results, query, year, dateField, trust, rejected) {
         // must also agree on the year within 1. Two years apart with a partial title is how "Fight.Club.2004" became the 2006
         // featurette "Fight Club: Members Only". Exact-title matches keep the normal MAX_MOVIE_YEAR_GAP allowance.
         if (dateField === "release_date" && _plausibleYear(year) && delta !== null && delta > 1 && _WEAK_EVIDENCE.has(kind)) {
-            if (rejected) rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: `weak title evidence (${kind}) with year gap ${delta} > 1` });
+            if (rejected)
+                rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: `weak title evidence (${kind}) with year gap ${delta} > 1` });
             continue;
         }
         // Backup candidates (trust < 1) may have DROPPED real words from the title
@@ -883,9 +884,7 @@ async function _cachedCall(budget, key, producer) {
 function _search(budget, kind, query, year) {
     const key = `${kind}|${_normUni(query)}|${year || ""}`;
     return _cachedCall(budget, key, async () => {
-        const d = await (kind === "tv"
-            ? tmdbFetch("/search/tv", { query, first_air_date_year: year || undefined })
-            : tmdbFetch("/search/movie", { query, year: year || undefined, page: 1 }));
+        const d = await (kind === "tv" ? tmdbFetch("/search/tv", { query, first_air_date_year: year || undefined }) : tmdbFetch("/search/movie", { query, year: year || undefined, page: 1 }));
         return Array.isArray(d?.results) ? d.results.slice(0, 10) : [];
     });
 }
@@ -972,7 +971,10 @@ async function _matchAcross({ kind, queries, year, budget, preferAnimated = fals
                 if (!pool.length) console.log(`[TMDB] no results ${kind} "${q}"${y ? ` y${y}` : ""}`);
                 else {
                     const r0 = rejected.sort((a, b) => b.final - a.final)[0];
-                    if (r0) console.log(`[TMDB] rejected ${kind} "${q}"${y ? ` y${y}` : ""}: best was "${r0.name}" (${r0.date || "?"}) sim=${r0.sim.toFixed(2)} score=${r0.final.toFixed(2)}${r0.reason ? ` — ${r0.reason}` : ""}`);
+                    if (r0)
+                        console.log(
+                            `[TMDB] rejected ${kind} "${q}"${y ? ` y${y}` : ""}: best was "${r0.name}" (${r0.date || "?"}) sim=${r0.sim.toFixed(2)} score=${r0.final.toFixed(2)}${r0.reason ? ` — ${r0.reason}` : ""}`,
+                        );
                 }
                 continue; // try the year-less search
             }
@@ -988,7 +990,9 @@ async function _matchAcross({ kind, queries, year, budget, preferAnimated = fals
             const undatedRival = best && year && y === null && m.yearDelta === null && best.yearDelta !== null;
             if (!undatedRival && (!best || m.final > best.final)) best = m;
             if (m.final >= MATCH_HIGH) {
-                console.log(`[TMDB] ${kind} match "${q}" → "${m.result.title || m.result.name}" id=${m.result.id} score=${m.final.toFixed(2)} (sim=${m.sim.toFixed(2)} trust=${m.trust} year=${m.adj >= 0 ? "ok" : m.adj.toFixed(2)} via=${m.kind})`);
+                console.log(
+                    `[TMDB] ${kind} match "${q}" → "${m.result.title || m.result.name}" id=${m.result.id} score=${m.final.toFixed(2)} (sim=${m.sim.toFixed(2)} trust=${m.trust} year=${m.adj >= 0 ? "ok" : m.adj.toFixed(2)} via=${m.kind})`,
+                );
                 return { best, ambiguous: false };
             }
             // Series: a weak (< HIGH) hit from the year-FILTERED search must not stop the year-less search. The file
@@ -1002,7 +1006,10 @@ async function _matchAcross({ kind, queries, year, budget, preferAnimated = fals
 
     // An ambiguity only blocks a weaker/equal plausible match.
     if (best && ambiguousFinal >= 0 && best.final - ambiguousFinal < MATCH_GAP) best = null;
-    if (best) console.log(`[TMDB] ${kind} plausible → "${best.result.title || best.result.name}" id=${best.result.id} score=${best.final.toFixed(2)} (sim=${best.sim.toFixed(2)} trust=${best.trust} year=${best.adj >= 0 ? "ok" : best.adj.toFixed(2)} via=${best.kind})`);
+    if (best)
+        console.log(
+            `[TMDB] ${kind} plausible → "${best.result.title || best.result.name}" id=${best.result.id} score=${best.final.toFixed(2)} (sim=${best.sim.toFixed(2)} trust=${best.trust} year=${best.adj >= 0 ? "ok" : best.adj.toFixed(2)} via=${best.kind})`,
+        );
     return { best, ambiguous: !best && ambiguousFinal >= 0 };
 }
 
@@ -1013,7 +1020,10 @@ async function _matchAcross({ kind, queries, year, budget, preferAnimated = fals
 //   throw = TMDB/network/API failure (callers must NOT cache; unchanged)
 
 async function lookupMetadata(parsed) {
-    const { title, type, year, season } = parsed;
+    const { title, type, season } = parsed;
+    // A title that IS the number ("1923", "1883", "2012") was also read as the release year; that is not a year signal,
+    // and would reject the real show (1923 premiered in 2022). Any other title keeps its parsed year.
+    const year = String(title || "").trim() === String(parsed.year) ? undefined : parsed.year;
 
     if (!title || !title.trim()) {
         console.warn("[TMDB] lookupMetadata: empty title, skipping");
@@ -1083,7 +1093,9 @@ async function lookupMetadata(parsed) {
         if (mv.best.final < MATCH_HIGH) {
             const tvCheck = await _matchAcross({ kind: "tv", queries: tvQueries.slice(0, 1), year, budget, strict: true });
             if (tvCheck.best) {
-                console.log(`[TMDB] type conflict: movie "${mv.best.result.title}" (score ${mv.best.final.toFixed(2)}) vs near-exact TV "${tvCheck.best.result.name}" id=${tvCheck.best.result.id} — resolved as series`);
+                console.log(
+                    `[TMDB] type conflict: movie "${mv.best.result.title}" (score ${mv.best.final.toFixed(2)}) vs near-exact TV "${tvCheck.best.result.name}" id=${tvCheck.best.result.id} — resolved as series`,
+                );
                 return await attachSeason(await getTVDetails(tvCheck.best.result.id), tvCheck.best.result.id);
             }
         }

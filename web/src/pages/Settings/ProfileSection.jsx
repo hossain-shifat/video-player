@@ -1,36 +1,47 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router";
 import {
+    ArrowRight,
+    BadgeCheck,
+    Bookmark,
     Camera,
+    Captions,
     Check,
+    CheckCircle2,
     Copy,
-    ShieldCheck,
-    ShieldAlert,
-    Lock,
-    Unlock,
-    LogOut,
-    LogIn,
-    KeyRound,
-    User,
-    AlertTriangle,
-    Hourglass,
     Eye,
     EyeOff,
-    Search,
+    Hourglass,
+    AlertTriangle,
+    KeyRound,
+    Lock,
+    LogIn,
+    LogOut,
+    Monitor,
     Palette,
     Play,
-    Captions,
     PlayCircle,
-    CheckCircle2,
+    RefreshCw,
+    Search,
+    ShieldAlert,
+    ShieldCheck,
+    Smartphone,
+    Tablet,
     Timer,
-    Bookmark,
-    Monitor,
-    ArrowRight,
+    Unlock,
+    User,
 } from "lucide-react";
 import { Input, Card, Field, Chip, Notice, StatGrid, StatTile, PrimaryButton, GhostButton, DangerButton, ConfirmModal, FOCUS, copyText, loadPrefs, RATING_LIMITS, hasPin } from "./shared";
+import { api } from "../../api";
 import { useAuth } from "../../auth/AuthContext";
 import { useApi } from "../../Context/apiContext";
 import { useTheme } from "../../Context/themeContext";
+
+// Device-session endpoints. Change these if your server uses other paths.
+//   GET    SESSIONS_URL        -> { sessions: [{ id, current, userAgent|browser+os, ip, createdAt, lastActiveAt }] }
+//   DELETE SESSIONS_URL/:id    -> sign one device out
+//   DELETE SESSIONS_URL        -> sign out every device except the current one
+const SESSIONS_URL = "/api/auth/sessions";
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -51,12 +62,39 @@ function fmtDuration(sec) {
     return h ? `${h} h ${m} min` : `${m} min`;
 }
 
-// "Chrome on Windows" from the user agent (no personal data)
-function deviceLabel() {
-    const ua = navigator.userAgent;
+function timeAgo(iso) {
+    if (!iso) return "";
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 2) return "Active now";
+    if (m < 60) return `${m} min ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h} h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d} day${d === 1 ? "" : "s"} ago`;
+    return fmtDate(iso);
+}
+
+// Browser, OS and device kind from a user-agent string (no personal data)
+function parseUA(ua = "") {
     const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
-    const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad|iOS/.test(ua) ? "iOS" : /Mac OS/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "this device";
-    return `${browser} on ${os}`;
+    const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad|iOS/.test(ua) ? "iOS" : /Mac OS/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "Unknown OS";
+    const kind = /iPad|Tablet/.test(ua) ? "tablet" : /Mobi|iPhone|Android/.test(ua) ? "mobile" : "desktop";
+    return { browser, os, kind };
+}
+
+function normSession(s) {
+    const p = parseUA(s.userAgent || s.user_agent || "");
+    return {
+        id: s.id ?? s.sessionId,
+        current: !!(s.current ?? s.isCurrent),
+        browser: s.browser || p.browser,
+        os: s.os || p.os,
+        kind: s.deviceType || s.kind || p.kind,
+        ip: s.ip || s.ipAddress || null,
+        location: s.location || null,
+        createdAt: s.createdAt || null,
+        lastActiveAt: s.lastActiveAt || s.lastSeenAt || s.updatedAt || s.createdAt || null,
+    };
 }
 
 // 0 to 4, advisory only
@@ -81,11 +119,23 @@ const ROLE_TONE = { admin: "primary", moderator: "warning" };
 const STATUS_TONE = { approved: "success", pending: "warning", blocked: "error", rejected: "error" };
 const STATUS_DOT = { approved: "bg-success", pending: "bg-warning animate-pulse", blocked: "bg-error", rejected: "bg-error" };
 
+const NAV = [
+    ["pf-profile", "Profile"],
+    ["pf-account", "Account"],
+    ["pf-password", "Password"],
+    ["pf-activity", "Activity"],
+    ["pf-prefs", "Your setup"],
+    ["pf-permissions", "Permissions"],
+    ["pf-sessions", "Sessions"],
+];
+
+const DEVICE_ICON = { mobile: Smartphone, tablet: Tablet, desktop: Monitor };
+
 // ─── Layout primitives ────────────────────────────────────────────────────────
-// Title + description on the left, the controls on the right (GitHub / Vercel pattern)
+// Title + description on the left, the controls on the right
 function Section({ id, title, desc, children }) {
     return (
-        <section id={id} className="grid scroll-mt-28 gap-4 border-b border-base-content/10 py-7 last:border-b-0 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10">
+        <section id={id} className="grid scroll-mt-32 gap-4 border-b border-base-content/10 py-7 last:border-b-0 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10">
             <div>
                 <h3 className="text-sm font-semibold text-base-content">{title}</h3>
                 {desc && <p className="mt-1 text-[13px] leading-relaxed text-base-content/60">{desc}</p>}
@@ -95,12 +145,12 @@ function Section({ id, title, desc, children }) {
     );
 }
 
-// Footer bar of a form card: hint on the left, action on the right
+// Footer bar of a form card: hint on the left, actions on the right
 function CardFooter({ children, hint }) {
     return (
         <div className="flex flex-col gap-3 border-t border-base-content/10 bg-base-300/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div className="min-w-0 text-xs text-base-content/60">{hint}</div>
-            <div className="flex shrink-0 items-center gap-2">{children}</div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>
         </div>
     );
 }
@@ -115,17 +165,24 @@ function KV({ label, children, action }) {
     );
 }
 
-function Avatar({ src, name, email, size = 72 }) {
+function Avatar({ src, name, email, size = 72, approved }) {
     const [broken, setBroken] = useState(false);
     useEffect(() => setBroken(false), [src]);
     return (
-        <div className="shrink-0 overflow-hidden rounded-md bg-base-300" style={{ width: size, height: size }}>
-            {src && !broken ? (
-                <img src={src} alt={name || email || "Profile photo"} onError={() => setBroken(true)} className="h-full w-full object-cover" />
-            ) : (
-                <div className="flex h-full w-full items-center justify-center bg-primary/15 font-semibold text-primary" style={{ fontSize: size * 0.36 }}>
-                    {initials(name, email)}
-                </div>
+        <div className="relative shrink-0" style={{ width: size, height: size }}>
+            <div className="h-full w-full overflow-hidden rounded-md bg-base-300">
+                {src && !broken ? (
+                    <img src={src} alt={name || email || "Profile photo"} onError={() => setBroken(true)} className="h-full w-full object-cover" />
+                ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-primary/15 font-semibold text-primary" style={{ fontSize: size * 0.36 }}>
+                        {initials(name, email)}
+                    </div>
+                )}
+            </div>
+            {approved && (
+                <span title="Approved account" className="absolute -bottom-1.5 -right-1.5 flex size-5 items-center justify-center rounded-md bg-primary text-primary-content ring-2 ring-base-100">
+                    <BadgeCheck size={13} />
+                </span>
             )}
         </div>
     );
@@ -158,6 +215,15 @@ function TextAction({ onClick, children }) {
     );
 }
 
+function Msg({ m }) {
+    if (!m) return null;
+    return (
+        <span role={m.ok ? "status" : "alert"} className={`inline-flex items-center gap-1.5 font-medium ${m.ok ? "text-success" : "text-error"}`}>
+            {m.ok && <Check size={13} strokeWidth={3} />} {m.text}
+        </span>
+    );
+}
+
 function StatusBanner({ isPending, isBlocked, isExpired }) {
     if (isBlocked)
         return (
@@ -183,13 +249,39 @@ function StatusBanner({ isPending, isBlocked, isExpired }) {
 function PrefRow({ icon: Icon, label, value, tab, onGo }) {
     return (
         <div className="flex items-center gap-3 border-b border-base-content/10 px-4 py-3 last:border-b-0 sm:px-5">
-            <Icon size={15} className="shrink-0 text-base-content/45" />
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-base-300 text-base-content/65">
+                <Icon size={16} />
+            </span>
             <div className="min-w-0 flex-1">
                 <p className="text-xs text-base-content/55">{label}</p>
                 <p className="mt-0.5 truncate text-sm font-medium text-base-content">{value}</p>
             </div>
             <TextAction onClick={() => onGo(tab)}>Change</TextAction>
         </div>
+    );
+}
+
+// One signed-in device
+function SessionRow({ s, onRevoke }) {
+    const Icon = DEVICE_ICON[s.kind] || Monitor;
+    const meta = [s.location, s.ip, s.current ? "Active now" : timeAgo(s.lastActiveAt)].filter(Boolean).join(" · ");
+    return (
+        <li className="flex items-center gap-3 border-b border-base-content/10 px-4 py-3.5 last:border-b-0 sm:px-5">
+            <span className={`flex size-10 shrink-0 items-center justify-center rounded-md ${s.current ? "bg-success/15 text-success" : "bg-base-300 text-base-content/65"}`}>
+                <Icon size={18} />
+            </span>
+            <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-base-content">
+                    <span className="truncate">
+                        {s.browser} on {s.os}
+                    </span>
+                    {s.current && <Chip tone="success">This device</Chip>}
+                </p>
+                <p className="mt-0.5 truncate text-xs text-base-content/55">{meta || "No details"}</p>
+                {s.createdAt && <p className="mt-0.5 hidden text-xs text-base-content/40 sm:block">Signed in {fmtDate(s.createdAt, true)}</p>}
+            </div>
+            {!s.current && <GhostButton onClick={() => onRevoke(s)}>Sign out</GhostButton>}
+        </li>
     );
 }
 
@@ -236,15 +328,15 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
     const { theme, allThemes } = useTheme();
     const [, setSearchParams] = useSearchParams();
 
-    // Profile form (inline)
+    // Profile form
     const [name, setName] = useState("");
     const [avatar, setAvatar] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [profileMsg, setProfileMsg] = useState(null); // { ok, text }
+    const [profileMsg, setProfileMsg] = useState(null);
     const fileRef = useRef(null);
 
-    // Password form (inline)
+    // Password form
     const [pw, setPw] = useState("");
     const [pw2, setPw2] = useState("");
     const [showPw, setShowPw] = useState(false);
@@ -255,8 +347,22 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
     const [permFilter, setPermFilter] = useState("all");
     const [permQuery, setPermQuery] = useState("");
 
+    // Sessions (all devices signed in with this account)
+    const [sessions, setSessions] = useState([]);
+    const [sessState, setSessState] = useState("loading"); // loading | ok | unsupported | error
+    const [sessMsg, setSessMsg] = useState(null);
+    const [revokeTarget, setRevokeTarget] = useState(null);
+    const [revokeAllOpen, setRevokeAllOpen] = useState(false);
+    const [sessBusy, setSessBusy] = useState(false);
+    const unsupportedRef = useRef(false);
+
     const [signOutOpen, setSignOutOpen] = useState(false);
-    const device = useMemo(deviceLabel, []);
+    const [activeSec, setActiveSec] = useState("pf-profile");
+    const device = useMemo(() => parseUA(navigator.userAgent), []);
+
+    const hasUser = !!user;
+    const uid = user?.id ?? user?.email ?? null;
+    const dirty = hasUser && (name.trim() !== (user.name || "") || (avatar || null) !== (user.avatar || null));
 
     // Reset the form whenever the saved user changes
     useEffect(() => {
@@ -269,6 +375,108 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
         const t = setTimeout(() => setProfileMsg(null), 2800);
         return () => clearTimeout(t);
     }, [profileMsg]);
+
+    useEffect(() => {
+        if (!sessMsg?.ok) return;
+        const t = setTimeout(() => setSessMsg(null), 3200);
+        return () => clearTimeout(t);
+    }, [sessMsg]);
+
+    // Warn before leaving with unsaved profile changes. Ctrl/Cmd+S saves.
+    useEffect(() => {
+        if (!dirty) return;
+        const warn = (e) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        const onKey = (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+                e.preventDefault();
+                saveProfile();
+            }
+        };
+        window.addEventListener("beforeunload", warn);
+        window.addEventListener("keydown", onKey);
+        return () => {
+            window.removeEventListener("beforeunload", warn);
+            window.removeEventListener("keydown", onKey);
+        };
+    }); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Highlight the current section in the jump bar
+    useEffect(() => {
+        if (loading || !hasUser) return;
+        const els = NAV.map(([id]) => document.getElementById(id)).filter(Boolean);
+        if (!els.length) return;
+        const io = new IntersectionObserver(
+            (entries) => {
+                const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+                if (vis[0]) setActiveSec(vis[0].target.id);
+            },
+            { rootMargin: "-130px 0px -60% 0px" },
+        );
+        els.forEach((el) => io.observe(el));
+        return () => io.disconnect();
+    }, [loading, hasUser]);
+
+    // ── Sessions ──
+    const loadSessions = useCallback(async (silent = false) => {
+        if (!silent) setSessState("loading");
+        try {
+            const data = await api.get(SESSIONS_URL);
+            const list = (Array.isArray(data) ? data : data?.sessions) || [];
+            unsupportedRef.current = false;
+            setSessions(list.map(normSession).sort((a, b) => Number(b.current) - Number(a.current) || new Date(b.lastActiveAt || 0) - new Date(a.lastActiveAt || 0)));
+            setSessState("ok");
+        } catch (err) {
+            if ([404, 405, 501].includes(err?.status)) {
+                unsupportedRef.current = true;
+                setSessState("unsupported");
+            } else if (!silent) setSessState("error");
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!uid) return;
+        loadSessions();
+        const poll = setInterval(() => !unsupportedRef.current && !document.hidden && loadSessions(true), 60000);
+        const onFocus = () => !unsupportedRef.current && loadSessions(true);
+        window.addEventListener("focus", onFocus);
+        return () => {
+            clearInterval(poll);
+            window.removeEventListener("focus", onFocus);
+        };
+    }, [uid, loadSessions]);
+
+    async function revokeOne() {
+        const target = revokeTarget;
+        if (!target) return;
+        setSessBusy(true);
+        try {
+            await api.delete(`${SESSIONS_URL}/${encodeURIComponent(target.id)}`);
+            setSessMsg({ ok: true, text: `Signed out ${target.browser} on ${target.os}.` });
+            await loadSessions(true);
+        } catch (err) {
+            setSessMsg({ ok: false, text: err?.message || "Could not sign that device out." });
+        } finally {
+            setSessBusy(false);
+            setRevokeTarget(null);
+        }
+    }
+
+    async function revokeOthers() {
+        setSessBusy(true);
+        try {
+            await api.delete(SESSIONS_URL);
+            setSessMsg({ ok: true, text: "Signed out all other devices." });
+            await loadSessions(true);
+        } catch (err) {
+            setSessMsg({ ok: false, text: err?.message || "Could not sign out other devices." });
+        } finally {
+            setSessBusy(false);
+            setRevokeAllOpen(false);
+        }
+    }
 
     // Watch activity (approximate: finished = full length, otherwise last position)
     const stats = useMemo(() => {
@@ -311,7 +519,6 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
         if (total > 0) accessPct = Math.max(0, Math.min(100, Math.round((left / total) * 100)));
     }
     const accessBar = isExpired || (expiryDays != null && expiryDays <= 0) ? "bg-error" : expiryDays != null && expiryDays <= 3 ? "bg-warning" : "bg-primary";
-
     const grantedCount = permEntries.filter(([, v]) => v).length;
 
     // Quick view of the settings that matter most
@@ -322,6 +529,10 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
     const goTab = (t) => {
         setSearchParams({ tab: t });
         window.scrollTo({ top: 0 });
+    };
+    const jump = (id) => {
+        setActiveSec(id);
+        document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
     };
 
     // Setup progress
@@ -337,8 +548,6 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
     const next = steps.find((s) => !s.done && s.run);
 
     // ── Profile form ──
-    const dirty = name.trim() !== (user.name || "") || (avatar || null) !== (user.avatar || null);
-
     async function onAvatarUpload(file) {
         const key = import.meta.env.VITE_IMGBB_API_KEY;
         if (!key) throw new Error("Photo upload isn't configured on this server.");
@@ -357,23 +566,23 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
         if (file.size > 5 * 1024 * 1024) return setProfileMsg({ ok: false, text: "Image must be under 5 MB." });
         setProfileMsg(null);
         const before = avatar;
-        const reader = new FileReader();
-        reader.onload = (ev) => setAvatar(ev.target.result);
-        reader.readAsDataURL(file);
+        const previewUrl = URL.createObjectURL(file); // sync, so it can't land after a failure restore
+        setAvatar(previewUrl);
         setUploading(true);
         try {
             const url = await onAvatarUpload(file);
-            if (url) setAvatar(url);
+            setAvatar(url || before);
         } catch (err) {
             setAvatar(before);
             setProfileMsg({ ok: false, text: err.message || "Upload failed" });
         } finally {
+            URL.revokeObjectURL(previewUrl);
             setUploading(false);
         }
     }
 
     async function saveProfile() {
-        if (!name.trim()) return setProfileMsg({ ok: false, text: "Display name is required." });
+        if (!user || !name.trim()) return setProfileMsg({ ok: false, text: "Display name is required." });
         setSaving(true);
         setProfileMsg(null);
         try {
@@ -414,17 +623,24 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
         }
     }
 
+    // Sessions to show. When the server can't list devices, fall back to this one.
+    const shownSessions =
+        sessState === "unsupported"
+            ? [{ id: "local", current: true, browser: device.browser, os: device.os, kind: device.kind, ip: null, location: null, createdAt: null, lastActiveAt: null }]
+            : sessions;
+    const others = sessions.filter((s) => !s.current).length;
+
     return (
         <div className="w-full">
             <StatusBanner isPending={isPending} isBlocked={isBlocked} isExpired={isExpired} />
 
             {/* ── Summary ── */}
-            <div className="flex flex-wrap items-center gap-4 border-b border-base-content/10 pb-6 pt-1">
-                <Avatar src={user.avatar} name={user.name} email={user.email} size={64} />
+            <div className="flex flex-wrap items-center gap-4 pb-6 pt-1">
+                <Avatar src={user.avatar} name={user.name} email={user.email} size={68} approved={isApproved} />
                 <div className="min-w-0 flex-1">
                     <h2 className="truncate text-2xl font-bold leading-tight tracking-tight text-base-content">{displayName}</h2>
                     {user.email && <p className="mt-0.5 truncate text-[13px] text-base-content/65">{user.email}</p>}
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                         <Chip tone={ROLE_TONE[role] || "neutral"}>
                             {isAdmin && <ShieldCheck size={12} />}
                             {cap(role)}
@@ -435,6 +651,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                                 {cap(status)}
                             </Chip>
                         )}
+                        {memberSince && <span className="text-xs text-base-content/55">Member since {memberSince}</span>}
                     </div>
                 </div>
                 <GhostButton onClick={() => setSignOutOpen(true)} className="border-error/40 text-error hover:bg-error/10 hover:text-error">
@@ -442,9 +659,27 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                 </GhostButton>
             </div>
 
+            {/* ── Jump bar ── */}
+            <nav aria-label="On this page" className="border-y border-base-content/10 bg-base-100/90 backdrop-blur md:sticky md:top-14 md:z-20">
+                <div className="flex gap-1 overflow-x-auto py-1.5" style={{ scrollbarWidth: "none" }}>
+                    {NAV.map(([id, label]) => (
+                        <button
+                            key={id}
+                            type="button"
+                            onClick={() => jump(id)}
+                            aria-current={activeSec === id ? "true" : undefined}
+                            className={`shrink-0 cursor-pointer whitespace-nowrap rounded-md px-3 py-2 text-[13px] font-medium transition-colors ${FOCUS} ${
+                                activeSec === id ? "bg-primary/12 text-primary" : "text-base-content/65 hover:bg-base-content/8 hover:text-base-content"
+                            }`}>
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            </nav>
+
             {/* ── Setup progress ── */}
             {doneCount < steps.length && (
-                <div id="pf-checklist" className="mt-6 scroll-mt-28 rounded-md border border-primary/30 bg-primary/5 p-4 sm:p-5">
+                <div id="pf-checklist" className="mt-6 scroll-mt-32 rounded-md border border-primary/30 bg-primary/5 p-4 sm:p-5">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                             <p className="text-sm font-semibold text-base-content">Finish setting up your account</p>
@@ -468,7 +703,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
             )}
 
             {/* ── Profile ── */}
-            <Section title="Profile" desc="Your photo and name are visible to other people on this server.">
+            <Section id="pf-profile" title="Profile" desc="Your photo and name are visible to other people on this server.">
                 <Card>
                     <div className="space-y-5 p-4 sm:p-5">
                         <div className="flex items-center gap-4">
@@ -512,18 +747,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                             />
                         </Field>
                     </div>
-                    <CardFooter
-                        hint={
-                            profileMsg ? (
-                                <span role={profileMsg.ok ? "status" : "alert"} className={`inline-flex items-center gap-1.5 font-medium ${profileMsg.ok ? "text-success" : "text-error"}`}>
-                                    {profileMsg.ok && <Check size={13} strokeWidth={3} />} {profileMsg.text}
-                                </span>
-                            ) : dirty ? (
-                                "You have unsaved changes."
-                            ) : (
-                                "Up to date."
-                            )
-                        }>
+                    <CardFooter hint={profileMsg ? <Msg m={profileMsg} /> : dirty ? "You have unsaved changes. Press Ctrl+S to save." : "Up to date."}>
                         {dirty && <GhostButton onClick={resetProfile}>Discard</GhostButton>}
                         <PrimaryButton onClick={saveProfile} disabled={!dirty || !name.trim() || uploading} loading={saving}>
                             {saving ? "Saving…" : "Save changes"}
@@ -533,7 +757,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
             </Section>
 
             {/* ── Account ── */}
-            <Section title="Account" desc="Details managed by your administrator.">
+            <Section id="pf-account" title="Account" desc="Details managed by your administrator.">
                 <Card>
                     <dl>
                         <KV label="Email" action={user.email ? <CopyButton text={user.email} label="Copy email" /> : null}>
@@ -586,7 +810,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
             </Section>
 
             {/* ── Password ── */}
-            <Section title="Password" desc="Use a long, unique password. You stay signed in on this device after changing it.">
+            <Section id="pf-password" title="Password" desc="Use a long, unique password. You stay signed in on this device after changing it.">
                 <Card>
                     <div className="space-y-4 p-4 sm:p-5">
                         <Field id="pf-pw" label="New password">
@@ -635,16 +859,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                             {mismatch && <p className="text-xs text-error">Passwords don't match.</p>}
                         </Field>
                     </div>
-                    <CardFooter
-                        hint={
-                            pwMsg ? (
-                                <span role={pwMsg.ok ? "status" : "alert"} className={`inline-flex items-center gap-1.5 font-medium ${pwMsg.ok ? "text-success" : "text-error"}`}>
-                                    {pwMsg.ok && <Check size={13} strokeWidth={3} />} {pwMsg.text}
-                                </span>
-                            ) : (
-                                "At least 6 characters."
-                            )
-                        }>
+                    <CardFooter hint={pwMsg ? <Msg m={pwMsg} /> : "At least 6 characters."}>
                         <PrimaryButton onClick={savePassword} disabled={!canUpdatePw} loading={pwSaving}>
                             <KeyRound size={14} /> Update password
                         </PrimaryButton>
@@ -679,7 +894,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
             </Section>
 
             {/* ── Permissions ── */}
-            <Section title="Permissions" desc="What your account is allowed to do.">
+            <Section id="pf-permissions" title="Permissions" desc="What your account is allowed to do.">
                 {isAdmin ? (
                     <Notice tone="info" icon={ShieldCheck} title="Administrator">
                         You skip individual permission checks and can use every part of Flux.
@@ -739,23 +954,75 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                 )}
             </Section>
 
-            {/* ── Session ── */}
-            <Section title="Session" desc="Where you're signed in right now.">
-                <Card className="border-error/30">
-                    <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-                        <div className="flex min-w-0 items-center gap-3">
-                            <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-base-300">
-                                <Monitor size={18} className="text-base-content/65" />
-                            </span>
-                            <div className="min-w-0">
-                                <p className="text-sm font-medium text-base-content">{device}</p>
-                                <p className="mt-0.5 text-xs text-success">This device, signed in</p>
-                            </div>
-                        </div>
-                        <DangerButton onClick={() => setSignOutOpen(true)}>
-                            <LogOut size={13} /> Sign out
-                        </DangerButton>
+            {/* ── Sessions ── */}
+            <Section id="pf-sessions" title="Sessions" desc="Every device signed in to this account. Sign out any you don't recognise.">
+                <Card>
+                    <div className="flex items-center justify-between gap-3 border-b border-base-content/10 px-4 py-3 sm:px-5">
+                        <p className="text-sm font-semibold text-base-content">
+                            Signed-in devices
+                            {sessState === "ok" && <span className="ml-2 rounded-md bg-base-content/10 px-1.5 py-0.5 text-[11px] font-medium text-base-content/70">{sessions.length}</span>}
+                        </p>
+                        <button
+                            type="button"
+                            onClick={() => loadSessions()}
+                            disabled={sessState === "loading" || sessState === "unsupported"}
+                            aria-label="Refresh devices"
+                            title="Refresh"
+                            className={`flex size-8 cursor-pointer items-center justify-center rounded-md text-base-content/55 transition-colors hover:bg-base-content/10 hover:text-base-content disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS}`}>
+                            <RefreshCw size={14} className={sessState === "loading" ? "animate-spin" : ""} />
+                        </button>
                     </div>
+
+                    {sessState === "loading" && (
+                        <ul aria-busy="true" className="animate-pulse">
+                            {[0, 1].map((i) => (
+                                <li key={i} className="flex items-center gap-3 border-b border-base-content/10 px-4 py-3.5 last:border-b-0 sm:px-5">
+                                    <span className="size-10 rounded-md bg-base-300" />
+                                    <span className="flex-1 space-y-2">
+                                        <span className="block h-3.5 w-40 rounded-md bg-base-300" />
+                                        <span className="block h-3 w-28 rounded-md bg-base-300/70" />
+                                    </span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+
+                    {sessState === "error" && (
+                        <div className="flex flex-col items-start gap-3 px-4 py-5 sm:px-5">
+                            <p role="alert" className="text-[13px] text-error">
+                                Could not load your devices.
+                            </p>
+                            <GhostButton onClick={() => loadSessions()}>
+                                <RefreshCw size={13} /> Try again
+                            </GhostButton>
+                        </div>
+                    )}
+
+                    {(sessState === "ok" || sessState === "unsupported") && (
+                        <>
+                            {sessState === "unsupported" && (
+                                <p className="border-b border-base-content/10 bg-base-300/40 px-4 py-2.5 text-xs text-base-content/60 sm:px-5">
+                                    The server doesn't report other devices yet, so only this one is shown.
+                                </p>
+                            )}
+                            <ul>
+                                {shownSessions.map((s) => (
+                                    <SessionRow key={s.id} s={s} onRevoke={setRevokeTarget} />
+                                ))}
+                            </ul>
+                        </>
+                    )}
+
+                    <CardFooter hint={sessMsg ? <Msg m={sessMsg} /> : sessState === "ok" && others === 0 ? "No other devices are signed in." : "Signing a device out ends its session immediately."}>
+                        <GhostButton onClick={() => setSignOutOpen(true)}>
+                            <LogOut size={13} /> Sign out here
+                        </GhostButton>
+                        {sessState === "ok" && (
+                            <DangerButton onClick={() => setRevokeAllOpen(true)} disabled={others === 0}>
+                                Sign out other devices{others > 0 ? ` (${others})` : ""}
+                            </DangerButton>
+                        )}
+                    </CardFooter>
                 </Card>
             </Section>
 
@@ -769,6 +1036,24 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                     setSignOutOpen(false);
                     handleLogout?.();
                 }}
+            />
+            <ConfirmModal
+                open={!!revokeTarget}
+                onClose={() => setRevokeTarget(null)}
+                title="Sign this device out?"
+                subtitle={revokeTarget ? `${revokeTarget.browser} on ${revokeTarget.os} will be signed out right away.` : ""}
+                confirmLabel="Sign out device"
+                loading={sessBusy}
+                onConfirm={revokeOne}
+            />
+            <ConfirmModal
+                open={revokeAllOpen}
+                onClose={() => setRevokeAllOpen(false)}
+                title="Sign out all other devices?"
+                subtitle={`${others} other device${others === 1 ? "" : "s"} will be signed out. This device stays signed in.`}
+                confirmLabel="Sign out others"
+                loading={sessBusy}
+                onConfirm={revokeOthers}
             />
         </div>
     );

@@ -54,8 +54,10 @@ export default function PrivacySection({ prefs, setPref, setPrefs }) {
     async function clearList(items, remove, label) {
         setBusy(true);
         try {
-            await Promise.allSettled(items.map((i) => remove(i.id)));
-            say(true, `${label} cleared.`);
+            const results = await Promise.allSettled(items.map((i) => remove(i.id)));
+            const failed = results.filter((r) => r.status === "rejected").length;
+            if (failed === 0) say(true, `${label} cleared.`);
+            else say(false, `${failed} of ${items.length} item${items.length === 1 ? "" : "s"} could not be removed from ${label.toLowerCase()}. Try again.`);
         } finally {
             setBusy(false);
             setConfirm(null);
