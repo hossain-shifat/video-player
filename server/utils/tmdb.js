@@ -632,85 +632,482 @@ function _seasonDetailsWithoutNumber(seasonDetails) {
     return rest;
 }
 
+// ─── Candidate matching (v20) ─────────────────────────────────────────────────
+// Replaces "take the best-scoring result no matter how bad" with a validated
+// match. Everything here is search-side only; detail retrieval is untouched.
+//
+// CONSERVATIVE DEFAULTS — not calibrated on real mismatches yet. All can be
+// overridden by env without a code change; tune once real examples exist.
+//   TMDB_MATCH_ACCEPT     min final score to accept a result        (0.60)
+//   TMDB_MATCH_HIGH       final score that stops further searching  (0.85)
+//   TMDB_MATCH_GAP        top-2 gap below which a tie is "ambiguous"(0.05)
+//   TMDB_MATCH_POP_RATIO  popularity ratio that breaks an exact tie (2)
+//   TMDB_MAX_SEARCHES     max NEW search requests per lookupMetadata (8)
+//
+// final = similarity * sourceTrust + yearAdjustment
+//   similarity : 1 = same normalised title (title OR original_title);
+//                word overlap otherwise; "query is a subset of result"
+//                (or vice versa) scores 0.6..0.84, never "high".
+//   year       : same 0, ±1 -0.05, ±2-3 -0.15, further -0.35, unknown -0.05.
+//                Never an automatic reject (remakes, regional dates, files
+//                whose year is the episode year, not the first-air year).
+function _envNum(name, def, min, max) {
+    const v = parseFloat(process.env[name]);
+    return Number.isFinite(v) && v >= min && v <= max ? v : def;
+}
+const MATCH_ACCEPT = _envNum("TMDB_MATCH_ACCEPT", 0.6, 0.3, 1);
+const MATCH_HIGH = _envNum("TMDB_MATCH_HIGH", 0.85, 0.5, 1);
+const MATCH_GAP = _envNum("TMDB_MATCH_GAP", 0.05, 0, 0.5);
+const MATCH_POP_RATIO = _envNum("TMDB_MATCH_POP_RATIO", 2, 1, 100);
+const MAX_SEARCHES = Math.floor(_envNum("TMDB_MAX_SEARCHES", 8, 1, 30));
+const MIN_SIMILARITY = 0.5; // below this a result is never accepted
+// Word-overlap ALONE (no exact / subtitle-prefix / possessive / alternate-title evidence) must
+// cover this share of the longer title. Evidence: every overlap-only
+// match at 2/3 ("Movie Title" → "Test Movie Title", 7 rows) was wrong, while the only legitimate
+// overlap-only match ("…Sorcerers Stone" → "…Philosopher's Stone") scored 0.80. Very small
+// evidence base (1 legitimate case) — tunable via env and to be re-checked on verified data.
+const MIN_OVERLAP_ONLY = _envNum("TMDB_MIN_OVERLAP_ONLY", 0.75, 0.5, 1);
+const CROSS_TYPE_MIN_SIMILARITY = 0.9; // series↔movie fallback must be near-exact
+const MAX_QUERIES = 5; // distinct query strings per lookup
+// A MOVIE file name with an explicit, plausible year must not be auto-matched to a
+// release whose year differs by more than this many years (TMDB release dates vary
+// by region/festival by 1-2 years; >3 is a different production). Series are exempt:
+// the year in an episode file is often not the first-air year.
+const _WEAK_EVIDENCE = new Set(["subtitle-prefix", "overlap", "suffix-variant", "possessive"]);
+const MAX_MOVIE_YEAR_GAP = Math.floor(_envNum("TMDB_MAX_MOVIE_YEAR_GAP", 3, 0, 10));
+const _plausibleYear = (y) => Number.isInteger(y) && y >= 1888 && y <= new Date().getFullYear() + 2;
+
+// How much to trust a title produced by each parser strategy (see
+// nameParser.buildTitleCandidates). Unknown sources get 0.8.
+const SOURCE_TRUST = { primary: 1, "no-brackets": 1, "base-parser": 0.8, "no-trailing-year": 0.85, "full-title": 0.9 };
+
+// Roman numerals treated as sequel numbers ONLY as the LAST word of a multi-word
+// title ("Mission: Impossible II" == "Mission Impossible 2", "Rocky II" == "Rocky 2").
+// "i", "v" and "x" are deliberately excluded (pronoun / "V" / "Malcolm X", "Planet X").
+const _ROMAN = { ii: "2", iii: "3", iv: "4", vi: "6", vii: "7", viii: "8", ix: "9" };
+
+function _normUni(str) {
+    const out = String(str || "")
+        .toLowerCase()
+        .replace(/['\u2018\u2019`]/g, "") // Marvel's == Marvels (no space inserted)
+        .replace(/&/g, " and ") // Law & Order == Law and Order
+        .normalize("NFD")
+        .replace(/\p{M}/gu, "") // accents: Amélie == Amelie
+        .replace(/[^\p{L}\p{N}]+/gu, " ") // keeps non-Latin scripts
+        .replace(/\b(the|a|an)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const t = out.split(" ");
+    const last = t.length - 1;
+    if (last >= 1 && _ROMAN[t[last]]) t[last] = _ROMAN[t[last]];
+    return t.join(" ");
+}
+
+// Extra query words allowed after a result title that is a PREFIX of the query
+// ("Iron Man 1" → "Iron Man", "The Office US" → "The Office"): sequel numbers (roman
+// numerals are already digits after _normUni), a year, or a region code. Anything
+// else ("9999", "Foo") means a different title.
+const _REGION_SUFFIX = new Set(["us", "uk", "au", "ca", "nz", "jp", "kr", "de", "fr"]);
+const _isAllowedSuffix = (t) => /^\d{1,2}$/.test(t) || /^(?:19|20)\d{2}$/.test(t) || _REGION_SUFFIX.has(t);
+
+// Returns { sim, kind }. `kind` says WHAT the similarity rests on, so diagnostics can show the evidence
+// behind a score instead of just a number: exact | subtitle-prefix | suffix-variant | possessive | overlap | none.
+function _similarityDetail(query, candidate) {
+    const q = _normUni(query);
+    const r = _normUni(candidate);
+    if (!q || !r) return { sim: 0, kind: "none" };
+    if (q === r) return { sim: 1, kind: "exact" };
+    const qa = q.split(" ");
+    const ra = r.split(" ");
+    // Different sequel numbers = different titles ("Mission Impossible 3" must not match
+    // "Mission: Impossible II"). Years are ignored; only compared when BOTH titles carry a number.
+    const nums = (a) => a.filter((t) => /^\d+$/.test(t) && !/^(?:19|20)\d{2}$/.test(t)).join(",");
+    const qn = nums(qa);
+    const rn = nums(ra);
+    if (qn && rn && qn !== rn) return { sim: 0, kind: "none" };
+    const qs = new Set(qa);
+    const rs = new Set(ra);
+    let shared = 0;
+    for (const w of qs) if (rs.has(w)) shared++;
+    const overlap = shared / Math.max(qs.size, rs.size);
+
+    // Containment: one title is the START of the other ("Demon Slayer" vs
+    // "Demon Slayer: Kimetsu no Yaiba", "Iron Man 1" vs "Iron Man"), or the
+    // result has a possessive brand in front ("Marvel's The Punisher").
+    // Infix/suffix hits ("Movie Title" in "Test Movie Title", "Sub Zero" in
+    // "Mortal Kombat: Scorpion vs. Sub-Zero") are NOT containment.
+    const startsWith = (long, short) => short.length < long.length && short.every((t, i) => long[i] === t);
+    const endsWith = (long, short) => short.length < long.length && short.every((t, i) => long[long.length - short.length + i] === t);
+    const possessive = /['\u2019]s\b/i.test(String(candidate));
+    // A result that merely STARTS with the query counts as "title + subtitle" only when TMDB
+    // writes a subtitle delimiter (":", " - ", dash). "Borat: Cultural Learnings…", "Demon
+    // Slayer: Kimetsu no Yaiba" qualify; "Mr. Robot_dec0d3d.doc" and "The Equalizer 2" (for a
+    // file named "The Equalizer") do not — extra words without a delimiter are a different title.
+    const hasSubtitleDelimiter = /[:\u2013\u2014]|\s[-\u2013\u2014]\s/.test(String(candidate));
+    const extras = qa.slice(ra.length); // query words beyond a result-title prefix
+    const reversePrefix = startsWith(qa, ra) && extras.length <= 2 && extras.every(_isAllowedSuffix);
+    // Result title ⊂ query with leftover query words that are NOT an allowed suffix
+    // ("Unknown Title 9999" vs "Unknown Title"): the extra words are unexplained → not a
+    // match. (Narrow: the opposite direction, query ⊂ result, keeps its overlap rules.)
+    if (rs.size < qs.size && ra.every((w) => qs.has(w)) && !reversePrefix) return { sim: 0, kind: "none" };
+    const subtitlePrefix = startsWith(ra, qa) && hasSubtitleDelimiter;
+    const contained = subtitlePrefix || reversePrefix || (possessive && endsWith(ra, qa));
+    const containKind = subtitlePrefix ? "subtitle-prefix" : reversePrefix ? "suffix-variant" : "possessive";
+    const small = Math.min(qa.length, ra.length);
+    const big = Math.max(qa.length, ra.length);
+    const containment = contained ? Math.min(0.6 + 0.3 * (small / big), 0.84) : 0;
+    const ov = overlap >= MIN_OVERLAP_ONLY ? overlap : 0;
+    if (containment >= ov && containment > 0) return { sim: containment, kind: containKind };
+    return ov > 0 ? { sim: ov, kind: "overlap" } : { sim: 0, kind: "none" };
+}
+
+function _similarity(query, candidate) {
+    return _similarityDetail(query, candidate).sim;
+}
+
+// Movies: the year in a file name is the release year → strict table.
+// Series: the year in a file name is often the EPISODE/SEASON year, not the premiere
+// ("Only.Murders…S04E01.2024" vs first aired 2021), so drift AFTER the premiere is penalised
+// only lightly; a file year BEFORE the premiere is logically impossible (flagged by `impossible`).
+function _yearAdjustment(year, resultDate, isSeries = false) {
+    if (!year) return { adj: 0, delta: null, impossible: false };
+    const ry = parseInt(String(resultDate || "").slice(0, 4), 10);
+    if (Number.isNaN(ry)) return { adj: -0.05, delta: null, impossible: false };
+    const d = Math.abs(ry - year);
+    if (isSeries) {
+        if (year < ry - 1) return { adj: -0.35, delta: d, impossible: true };
+        return { adj: d === 0 ? 0 : d <= 3 ? -0.02 : d <= 10 ? -0.05 : -0.15, delta: d, impossible: false };
+    }
+    return { adj: d === 0 ? 0 : d === 1 ? -0.05 : d <= 3 ? -0.15 : -0.35, delta: d, impossible: false };
+}
+
+// Scores every result; returns only acceptable ones, best first.
+function _scoreResults(results, query, year, dateField, trust, rejected) {
+    const out = [];
+    for (const r of results || []) {
+        if (!r || r.id == null) continue;
+        let sim = 0;
+        let kind = "none";
+        for (const name of [r.title || r.name, r.original_title || r.original_name]) {
+            if (!name) continue;
+            const d = _similarityDetail(query, name);
+            if (d.sim > sim) {
+                sim = d.sim;
+                kind = d.kind;
+            }
+        }
+        const { adj, delta, impossible } = _yearAdjustment(year, r[dateField], dateField === "first_air_date");
+        const final = Math.max(0, sim * trust + adj);
+        if (impossible && _plausibleYear(year)) {
+            if (rejected) rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: "file year precedes the first air date" });
+            continue;
+        }
+        if (dateField === "release_date" && _plausibleYear(year) && delta !== null && delta > MAX_MOVIE_YEAR_GAP) {
+            // Never auto-attach a movie whose release year is far from the year in the file name.
+            if (rejected) rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: `year gap ${delta} > ${MAX_MOVIE_YEAR_GAP}` });
+            continue;
+        }
+        // A movie matched only by WEAK title evidence (the file title is merely a prefix/overlap/variant of the TMDB title)
+        // must also agree on the year within 1. Two years apart with a partial title is how "Fight.Club.2004" became the 2006
+        // featurette "Fight Club: Members Only". Exact-title matches keep the normal MAX_MOVIE_YEAR_GAP allowance.
+        if (dateField === "release_date" && _plausibleYear(year) && delta !== null && delta > 1 && _WEAK_EVIDENCE.has(kind)) {
+            if (rejected)
+                rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: `weak title evidence (${kind}) with year gap ${delta} > 1` });
+            continue;
+        }
+        // Backup candidates (trust < 1) may have DROPPED real words from the title
+        // ("Sub Zero" → "Zero"), so they may only match near-exactly, never by prefix/overlap.
+        const allowed = trust >= 1 || sim >= CROSS_TYPE_MIN_SIMILARITY;
+        if (allowed && sim >= MIN_SIMILARITY && final >= MATCH_ACCEPT) out.push({ result: r, sim, final, yearDelta: delta, trust, adj, kind });
+        else if (rejected) rejected.push({ name: r.title || r.name || "?", date: String(r[dateField] || "").slice(0, 4), sim, final, reason: "" });
+    }
+    // Array.prototype.sort is stable → equal scores keep TMDB's own order.
+    return out.sort((a, b) => b.final - a.final);
+}
+
+// match | ambiguous | none. A near-tie between DIFFERENT titles is only
+// resolved when one is clearly more popular; otherwise nothing is attached.
+function _decide(scored, fileLang = null) {
+    if (!scored.length) return { status: "none" };
+    const a = scored[0];
+    // Every DIFFERENT result within MATCH_GAP of the top one is a rival.
+    const tied = scored.filter((x) => x.result.id !== a.result.id && a.final - x.final < MATCH_GAP);
+    if (!tied.length) return { status: "match", best: a };
+    const pool = [a, ...tied].sort((x, y) => (y.result.popularity || 0) - (x.result.popularity || 0));
+    const [top, next] = pool;
+    const pt = top.result.popularity || 0;
+    if (pt > 0 && pt >= MATCH_POP_RATIO * (next.result.popularity || 0)) return { status: "match", best: top };
+    // Language evidence (tie-break ONLY, never overrides a clear score/popularity winner): a file that declares exactly
+    // ONE language ("Hawa.2022.BENGALI") resolves a tie between same-title, same-year works when exactly one rival
+    // has that original_language and every other rival is known to have a DIFFERENT one. Not used for dual/multi-audio
+    // files or when any rival's language is unknown. Caveat: the tag can be a DUB language; hence tie-break only.
+    if (fileLang && fileLang !== "en") {
+        const langOf = (x) => x.result.original_language || null;
+        const same = pool.filter((x) => langOf(x) === fileLang);
+        if (same.length === 1 && pool.every((x) => langOf(x))) {
+            console.log(`[TMDB] tie resolved by file language "${fileLang}": "${same[0].result.title || same[0].result.name}" id=${same[0].result.id}`);
+            return { status: "match", best: same[0], via: "language" };
+        }
+    }
+    return { status: "ambiguous", final: a.final, a: top, b: next };
+}
+
+// ── Search with per-lookup budget + small shared cache ──────────────────────
+// Identical (kind, normalised query, year) searches within 10 minutes reuse
+// the earlier response; only successful responses are cached. Cache hits do
+// not count against the per-lookup request budget.
+const _SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const _SEARCH_CACHE_MAX = 500;
+const _searchCache = new Map(); // key -> { at, promise }
+
+function _newBudget() {
+    return { used: 0, max: MAX_SEARCHES };
+}
+
+// One cached, budgeted TMDB request. Failures propagate (and are not cached).
+async function _cachedCall(budget, key, producer) {
+    const hit = _searchCache.get(key);
+    if (hit && Date.now() - hit.at < _SEARCH_CACHE_TTL_MS) return hit.promise;
+    if (budget.used >= budget.max) return null; // budget exhausted → stop searching
+    budget.used++;
+    const promise = Promise.resolve().then(producer);
+    _searchCache.set(key, { at: Date.now(), promise });
+    if (_searchCache.size > _SEARCH_CACHE_MAX) _searchCache.delete(_searchCache.keys().next().value);
+    // A failed request (network/API error) must stay retryable AND distinguishable
+    // from "no match": drop it from the cache and let the error propagate.
+    promise.catch(() => {
+        if (_searchCache.get(key)?.promise === promise) _searchCache.delete(key);
+    });
+    return promise;
+}
+
+function _search(budget, kind, query, year) {
+    const key = `${kind}|${_normUni(query)}|${year || ""}`;
+    return _cachedCall(budget, key, async () => {
+        const d = await (kind === "tv" ? tmdbFetch("/search/tv", { query, first_air_date_year: year || undefined }) : tmdbFetch("/search/movie", { query, year: year || undefined, page: 1 }));
+        return Array.isArray(d?.results) ? d.results.slice(0, 10) : [];
+    });
+}
+
+// TMDB's own search also matches ALTERNATE titles (romaji, regional names)
+// that are not in the search result fields. When nothing passes title
+// validation we ask TMDB for the alternate titles of the TOP 2 results only
+// (bounded, cached, counted in the request budget) and accept an exact one.
+function _altTitles(budget, kind, id) {
+    return _cachedCall(budget, `alt|${kind}|${id}`, async () => {
+        const d = await tmdbFetch(`/${kind}/${id}/alternative_titles`);
+        const list = kind === "tv" ? d?.results : d?.titles;
+        return Array.isArray(list) ? list.map((x) => x && x.title).filter(Boolean) : [];
+    });
+}
+
+async function _rescueByAltTitles(budget, kind, pool, query, year, dateField, trust) {
+    const out = [];
+    for (const r of pool.slice(0, 2)) {
+        if (!r || r.id == null) continue;
+        const { adj, delta, impossible } = _yearAdjustment(year, r[dateField], dateField === "first_air_date");
+        if (impossible || (delta !== null && delta > 3 && dateField === "release_date")) continue; // clearly another production — don't spend a request
+        const titles = await _altTitles(budget, kind, r.id);
+        if (titles === null) break; // budget exhausted
+        let sim = 0;
+        for (const t of titles) sim = Math.max(sim, _similarity(query, t));
+        const final = Math.max(0, sim * trust + adj);
+        if (sim >= CROSS_TYPE_MIN_SIMILARITY && final >= MATCH_ACCEPT) {
+            console.log(`[TMDB] alternate title matched ${kind} "${query}" → "${r.title || r.name}" id=${r.id}`);
+            out.push({ result: r, sim, final, yearDelta: delta, trust, adj, kind: "alt-title" });
+        }
+    }
+    return out.sort((a, b) => b.final - a.final);
+}
+
+// Ordered, deduplicated, bounded query list: [{ q, trust }]
+function _buildQueries(parsed, withPart) {
+    const out = [];
+    const seen = new Set();
+    const add = (q, trust) => {
+        const key = _normUni(q);
+        if (!q || !key || seen.has(key) || out.length >= MAX_QUERIES) return;
+        seen.add(key);
+        out.push({ q: q.trim(), trust });
+    };
+    const base = String(parsed.title || "").trim();
+    const cands = Array.isArray(parsed.titleCandidates) ? parsed.titleCandidates : [];
+    // The phrase exactly as written in the file ("John Wick Chapter 3 Parabellum") is searched
+    // first: when TMDB has that exact title it settles the lookup in one request.
+    if (withPart) for (const c of cands) if (c && c.source === "full-title" && c.title) add(c.title, SOURCE_TRUST["full-title"]);
+    if (withPart) for (const v of buildMovieTitleCandidates(base, parsed.part)) add(v, 1);
+    else add(base, 1);
+    for (const c of cands) {
+        const t = typeof c === "string" ? c : c && c.title;
+        if (t) add(t, (c && SOURCE_TRUST[c.source]) || (typeof c === "string" ? 1 : 0.8));
+    }
+    const noYear = base.replace(/\s+(?:19|20)\d{2}$/, "").trim(); // legacy cleanT fallback (real years only: "9999" is not a year)
+    if (noYear !== base) add(noYear, SOURCE_TRUST["no-trailing-year"]);
+    return out;
+}
+
+// Runs queries (year search first, then year-less) until a high-confidence
+// unambiguous match is found or the budget runs out.
+// → { best: scoredEntry|null, ambiguous: bool }
+async function _matchAcross({ kind, queries, year, budget, preferAnimated = false, strict = false, exactYear = false }) {
+    const dateField = kind === "tv" ? "first_air_date" : "release_date";
+    let best = null;
+    let ambiguousFinal = -1;
+
+    for (const { q, trust } of queries) {
+        for (const y of year ? [year, null] : [null]) {
+            const raw = await _search(budget, kind, q, y);
+            if (raw === null) break; // budget exhausted
+            let pool = raw;
+            if (preferAnimated) {
+                const anim = raw.filter((r) => r.genre_ids?.includes(16));
+                if (anim.length) pool = anim;
+            }
+            const rejected = [];
+            let scored = _scoreResults(pool, q, year, dateField, trust, rejected);
+            if (!scored.length && pool.length) scored = await _rescueByAltTitles(budget, kind, pool, q, year, dateField, trust);
+            const d = _decide(scored, budget && budget.languages);
+            if (d.status === "none") {
+                if (!pool.length) console.log(`[TMDB] no results ${kind} "${q}"${y ? ` y${y}` : ""}`);
+                else {
+                    const r0 = rejected.sort((a, b) => b.final - a.final)[0];
+                    if (r0)
+                        console.log(
+                            `[TMDB] rejected ${kind} "${q}"${y ? ` y${y}` : ""}: best was "${r0.name}" (${r0.date || "?"}) sim=${r0.sim.toFixed(2)} score=${r0.final.toFixed(2)}${r0.reason ? ` — ${r0.reason}` : ""}`,
+                        );
+                }
+                continue; // try the year-less search
+            }
+            if (d.status === "ambiguous") {
+                console.log(`[TMDB] ambiguous ${kind} "${q}": "${d.a.result.title || d.a.result.name}" vs "${d.b.result.title || d.b.result.name}"`);
+                ambiguousFinal = Math.max(ambiguousFinal, d.final);
+                break;
+            }
+            const m = d.best;
+            if (strict && (m.sim < CROSS_TYPE_MIN_SIMILARITY || (year && m.yearDelta !== null && m.yearDelta > (exactYear ? 0 : 1)))) break;
+            // An undated result must not displace a dated plausible one found by the year-filtered search
+            // (TMDB has undated junk entries: "The Punisher" #278177 would beat "Marvel's The Punisher" 2017).
+            const undatedRival = best && year && y === null && m.yearDelta === null && best.yearDelta !== null;
+            if (!undatedRival && (!best || m.final > best.final)) best = m;
+            if (m.final >= MATCH_HIGH) {
+                console.log(
+                    `[TMDB] ${kind} match "${q}" → "${m.result.title || m.result.name}" id=${m.result.id} score=${m.final.toFixed(2)} (sim=${m.sim.toFixed(2)} trust=${m.trust} year=${m.adj >= 0 ? "ok" : m.adj.toFixed(2)} via=${m.kind})`,
+                );
+                return { best, ambiguous: false };
+            }
+            // Series: a weak (< HIGH) hit from the year-FILTERED search must not stop the year-less search. The file
+            // year is often an episode year, so first_air_date_year can hide the real show ("House.of.the.Dragon.S02E08.2024"
+            // → only the 2024 special survives the filter). Best-of-both is kept via `best`; budget still applies.
+            if (kind === "tv" && y !== null) continue;
+            break; // plausible at this query: move to the next candidate
+        }
+        if (budget.used >= budget.max) break;
+    }
+
+    // An ambiguity only blocks a weaker/equal plausible match.
+    if (best && ambiguousFinal >= 0 && best.final - ambiguousFinal < MATCH_GAP) best = null;
+    if (best)
+        console.log(
+            `[TMDB] ${kind} plausible → "${best.result.title || best.result.name}" id=${best.result.id} score=${best.final.toFixed(2)} (sim=${best.sim.toFixed(2)} trust=${best.trust} year=${best.adj >= 0 ? "ok" : best.adj.toFixed(2)} via=${best.kind})`,
+        );
+    return { best, ambiguous: !best && ambiguousFinal >= 0 };
+}
+
 // ─── Main lookup ──────────────────────────────────────────────────────────────
+// Contract unchanged: lookupMetadata(parsed) → details object | null.
+//   null  = no acceptable match (genuine miss OR ambiguous — logged; callers
+//           cache both as _notFound, see metadataStore.getMetadata)
+//   throw = TMDB/network/API failure (callers must NOT cache; unchanged)
 
 async function lookupMetadata(parsed) {
-    const { title, type, year, season, part } = parsed;
+    const { title, type, season } = parsed;
+    // A title that IS the number ("1923", "1883", "2012") was also read as the release year; that is not a year signal,
+    // and would reject the real show (1923 premiered in 2022). Any other title keeps its parsed year.
+    const year = String(title || "").trim() === String(parsed.year) ? undefined : parsed.year;
 
     if (!title || !title.trim()) {
         console.warn("[TMDB] lookupMetadata: empty title, skipping");
         return null;
     }
 
-    const cleanT = title.replace(/\s+\d{4}$/, "").trim();
-    const movieCandidates = buildMovieTitleCandidates(title, part);
-    if (cleanT !== title) movieCandidates.push(cleanT);
+    const budget = _newBudget();
+    budget.languages = !parsed.dualAudio && !parsed.multiAudio && Array.isArray(parsed.languages) && parsed.languages.length === 1 ? parsed.languages[0] : null;
+    const attachSeason = async (details, tmdbId) => {
+        if (Number.isInteger(season) && season > 0) {
+            details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(tmdbId, season));
+        }
+        return details;
+    };
+    const tvQueries = _buildQueries(parsed, false);
+    const movieQueries = _buildQueries(parsed, true);
 
     // ── Anime ─────────────────────────────────────────────────────────────────
     if (type === "anime") {
-        let hit = await searchAnime(title, year);
-        if (!hit && year) hit = await searchAnime(title, null);
-        if (!hit && cleanT !== title) hit = await searchAnime(cleanT, null);
-        if (!hit) return null;
-
-        if (hit._searchType === "movie") {
-            return { ...(await getMovieDetails(hit.id)), type: "anime" };
+        const tv = await _matchAcross({ kind: "tv", queries: tvQueries, year, budget, preferAnimated: true });
+        if (tv.best) {
+            const details = await getTVDetails(tv.best.result.id);
+            details.type = "anime";
+            return await attachSeason(details, tv.best.result.id);
         }
-        const details = await getTVDetails(hit.id);
-        details.type = "anime";
-        if (Number.isInteger(season) && season > 0) {
-            details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(hit.id, season));
-        }
-        return details;
+        if (tv.ambiguous) return null;
+        const mv = await _matchAcross({ kind: "movie", queries: tvQueries, year, budget, preferAnimated: true });
+        if (mv.best) return { ...(await getMovieDetails(mv.best.result.id)), type: "anime" };
+        console.log(`[TMDB] no match: "${title}" (anime)`);
+        return null;
     }
 
     // ── Series ────────────────────────────────────────────────────────────────
     if (type === "series") {
-        const tryTV = async (q, y) => {
-            const hit = await searchTV(q, y);
-            if (!hit) return null;
-            const details = await getTVDetails(hit.id);
-            if (Number.isInteger(season) && season > 0) {
-                details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(hit.id, season));
-            }
-            return details;
-        };
+        const tv = await _matchAcross({ kind: "tv", queries: tvQueries, year, budget });
+        if (tv.best) return await attachSeason(await getTVDetails(tv.best.result.id), tv.best.result.id);
+        if (tv.ambiguous) return null;
 
-        let result = await tryTV(title, year);
-        if (!result && year) result = await tryTV(title, null);
-        if (!result && cleanT !== title) result = await tryTV(cleanT, null);
-        if (result) return result;
-
-        // Cross-type fallback
-        for (const c of movieCandidates) {
-            const hit = await searchMovie(c, year);
-            if (hit) {
-                console.log(`[TMDB] cross-type: series → movie for "${title}"`);
-                return await getMovieDetails(hit.id);
+        // The year can be PART OF THE SHOW'S TITLE ("Scam 1992", "Reply 1988"): try "Title YYYY" as a TV title before
+        // falling back to a movie. Near-exact only (strict), one extra search, and only when the TV lookup found nothing.
+        if (_plausibleYear(year) && !new RegExp(`\\b${year}$`).test(String(title).trim())) {
+            const ty = await _matchAcross({ kind: "tv", queries: [{ q: `${String(title).trim()} ${year}`, trust: 1 }], year: null, budget, strict: true });
+            if (ty.best) {
+                console.log(`[TMDB] series title includes the year: "${title} ${year}"`);
+                return await attachSeason(await getTVDetails(ty.best.result.id), ty.best.result.id);
             }
+            if (ty.ambiguous) return null;
         }
+
+        // Cross-type fallback — near-exact title (and year, if known) required
+        const mv = await _matchAcross({ kind: "movie", queries: movieQueries.slice(0, 3), year, budget, strict: true, exactYear: true });
+        // exactYear: an EPISODE file matched to a movie needs the SAME year ("Scam.1992.S01E11" must not become the 1993 film "Scam").
+        if (mv.best) {
+            console.log(`[TMDB] cross-type: series → movie for "${title}"`);
+            return await getMovieDetails(mv.best.result.id);
+        }
+        console.log(`[TMDB] no match: "${title}" (series)`);
         return null;
     }
 
     // ── Movie ─────────────────────────────────────────────────────────────────
-    for (const candidate of movieCandidates) {
-        if (year) {
-            const hit = await searchMovie(candidate, year);
-            if (hit) return await getMovieDetails(hit.id);
+    const mv = await _matchAcross({ kind: "movie", queries: movieQueries, year, budget });
+    if (mv.best) {
+        // Media-type validation: a file with no episode marker defaults to "movie". If the movie
+        // match is NOT exact (score below the high threshold) and TMDB has a near-exact TV series
+        // of the same name/year, the type is in doubt → do not auto-attach (one extra TV search).
+        if (mv.best.final < MATCH_HIGH) {
+            const tvCheck = await _matchAcross({ kind: "tv", queries: tvQueries.slice(0, 1), year, budget, strict: true });
+            if (tvCheck.best) {
+                console.log(
+                    `[TMDB] type conflict: movie "${mv.best.result.title}" (score ${mv.best.final.toFixed(2)}) vs near-exact TV "${tvCheck.best.result.name}" id=${tvCheck.best.result.id} — resolved as series`,
+                );
+                return await attachSeason(await getTVDetails(tvCheck.best.result.id), tvCheck.best.result.id);
+            }
         }
-        const hit = await searchMovie(candidate, null);
-        if (hit) return await getMovieDetails(hit.id);
+        return await getMovieDetails(mv.best.result.id);
     }
+    if (mv.ambiguous) return null;
 
-    // Cross-type fallback
-    const tvHit = await searchTV(title, year);
-    if (tvHit) {
+    // Cross-type fallback — near-exact title (and year, if known) required
+    const tv = await _matchAcross({ kind: "tv", queries: tvQueries.slice(0, 2), year, budget, strict: true });
+    if (tv.best) {
         console.log(`[TMDB] cross-type: movie → series for "${title}"`);
-        const details = await getTVDetails(tvHit.id);
-        if (Number.isInteger(season) && season > 0) {
-            details.seasonDetails = _seasonDetailsWithoutNumber(await getSeasonDetails(tvHit.id, season));
-        }
-        return details;
+        return await attachSeason(await getTVDetails(tv.best.result.id), tv.best.result.id);
     }
 
     console.log(`[TMDB] no match: "${title}" (${type})`);

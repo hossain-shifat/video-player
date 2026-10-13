@@ -81,6 +81,17 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //          on TV/anime — TMDB's /tv endpoint has no budget/revenue data at
 //          all, this is schema parity only, never fabricated.
 //
+//   21  — nameParser.js: "Show 2nd Season - 05" / "Show - Season 2 - Episode 05" → season field (one library group per
+//          show, not per season); "Show - OVA 02" → episode 2; duplicate "(YYYY)" no longer left in the title; folder
+//          context for title-less names ("Show/Season 2/S02E05.mkv"). tmdb.js: weak title evidence needs year within 1.
+//
+//   20  — matcher + parser accuracy round (no cached field changed; cached MATCHES may now differ):
+//          tmdb.js: weak year-filtered TV hit no longer blocks the year-less search (House of the Dragon S02E08.2024);
+//          undated entries can't displace dated ones; "Title YYYY" TV lookup (Reply 1988); series→movie cross-type
+//          needs the SAME year; file language breaks same-title ties. nameParser.js: extension-less names no longer lose
+//          the year/episode ("Breaking.Bad.S01E02" was a MOVIE), absolute episodes ("Title - 220" ≠ S2E20), more site
+//          prefixes. hasTitleDrifted() only catches TITLE changes, so matcher-only fixes need this bump to re-fetch.
+//
 //   ⚠ IMPORTANT (read this before shipping ANY tmdb.js change): this version
 //   number is the ONLY thing that saves you from manually deleting
 //   metadata.json + restarting every time tmdb.js's returned object shape
@@ -96,7 +107,7 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //   of waiting for each page to be visited. Either way: restart the server
 //   (Node has to load the new code), then either browse normally or hit
 //   refresh-all — metadata.json itself never needs to be touched by hand.
-const PARSER_VERSION = 19;
+const PARSER_VERSION = 21;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
 // from a bad API key or transient network failure blocking real lookups.
@@ -329,7 +340,8 @@ async function getMetadata(file) {
     await loadStore();
 
     // Parse up-front — needed both for the TMDB lookup AND the drift check.
-    const parsed = parseFilename(file.name);
+    // Prefer the grouper's already-parsed object (it was parsed WITH the folder path); otherwise parse here with the path.
+    const parsed = file.parsed && typeof file.parsed.title === "string" ? file.parsed : parseFilename(file.name, file.path);
 
     const cached = store.get(file.id);
     const driftedStale = hasTitleDrifted(cached, parsed.title);

@@ -50,7 +50,7 @@ async function groupMedia(flatFiles) {
 
     // ── Pass 1: classify and bucket every file ────────────────────────────────
     for (const file of flatFiles) {
-        const parsed = parseFilename(file.name);
+        const parsed = parseFilename(file.name, file.path); // path → folder context for title-less names
 
         if (parsed.type === "movie") {
             movieFiles.push({ ...file, parsed });
