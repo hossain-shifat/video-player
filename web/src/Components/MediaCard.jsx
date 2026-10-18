@@ -56,7 +56,7 @@ export function Countdown({ releaseDate, t: tProp }) {
     if (!t || t.done) return null;
 
     // one accent colour (theme primary — red = urgency, the same ring as the Upcoming badge), everything else white
-    const panel = "rounded-md bg-black/60 backdrop-blur-md ring-1 ring-primary shadow-lg";
+    const panel = "rounded-md bg-black/75 ring-1 ring-primary shadow-lg";
 
     const cells = [
         [t.d, "Days"],
@@ -168,7 +168,7 @@ export default function MediaCard({ item, onPlay, onWatchTrailer, isLoading, bad
                 )}
 
                 {/* Bottom gradient */}
-                <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent" />
+                <div className="absolute inset-0 bg-linear-to-t from-black/25 via-transparent to-transparent" />
 
                 {/* Type badge */}
                 <div className="absolute top-2 right-2">
