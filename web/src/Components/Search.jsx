@@ -353,7 +353,14 @@ function ResultsList({ results, query, onSelect, limit = 12 }) {
 }
 
 // ─── Search component ─────────────────────────────────────────────────────────
-export default function Search({ className = "", hideMobileBtn = false, openMobileRef = null }) {
+// Props:
+//   className            — classes for the desktop (sm+) search field wrapper
+//   hideMobileBtn        — hide the built-in mobile icon trigger
+//   openMobileRef        — ref that receives an "open mobile search" function
+//   inlineMobile         — phones: instead of the full-screen overlay, render an inline pill that
+//                          expands inside the navbar (results drop down under the navbar)
+//   onMobileOpenChange   — (open: boolean) => void, fired whenever the mobile search opens/closes
+export default function Search({ className = "", hideMobileBtn = false, openMobileRef = null, closeMobileRef = null, inlineMobile = false, onMobileOpenChange = null }) {
     const { movies, series, anime, search, searchResults, loading } = useApi();
     const navigate = useNavigate();
 
@@ -365,20 +372,36 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
     const inputRef = useRef(null);
     const mobileInputRef = useRef(null);
     const containerRef = useRef(null);
+    const inlineRef = useRef(null); // inline pill wrapper
+    const panelRef = useRef(null); // inline results panel
     const debounceRef = useRef(null);
     const mountedRef = useRef(true);
+
+    // Single place that opens/closes mobile search and tells the parent
+    function setMobile(next) {
+        setMobileOpen(next);
+        if (onMobileOpenChange) onMobileOpenChange(next);
+    }
 
     // Mount/unmount: wire openMobileRef, mark mounted, clear debounce on cleanup
     useEffect(() => {
         mountedRef.current = true;
-        if (openMobileRef) openMobileRef.current = () => setMobileOpen(true);
+        if (openMobileRef) openMobileRef.current = () => setMobile(true);
         return () => {
             mountedRef.current = false;
             clearTimeout(debounceRef.current);
             if (openMobileRef) openMobileRef.current = null;
         };
-        // openMobileRef is a stable ref object; setMobileOpen is stable — no extra deps needed
+        // openMobileRef is a stable ref object; setMobile only uses stable setters — no extra deps needed
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Expose close() so the navbar's morphing menu/close icon can collapse the search
+    useEffect(() => {
+        if (closeMobileRef) closeMobileRef.current = closeMobile;
+        return () => {
+            if (closeMobileRef) closeMobileRef.current = null;
+        };
+    });
 
     const runSearch = useCallback(
         (val) => {
@@ -428,20 +451,40 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
 
     // Auto-focus mobile input
     useEffect(() => {
-        if (mobileOpen) setTimeout(() => mobileInputRef.current?.focus(), 80);
-    }, [mobileOpen]);
+        if (mobileOpen) setTimeout(() => mobileInputRef.current?.focus(), inlineMobile ? 0 : 80);
+    }, [mobileOpen, inlineMobile]);
 
-    // Lock body scroll
+    // Lock body scroll — full-screen overlay only (inline mode scrolls inside its own panel)
     useEffect(() => {
-        document.body.style.overflow = mobileOpen ? "hidden" : "";
+        if (!mobileOpen || inlineMobile) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
         return () => {
-            document.body.style.overflow = "";
+            document.body.style.overflow = prev;
         };
-    }, [mobileOpen]);
+    }, [mobileOpen, inlineMobile]);
+
+    // Inline mode: click outside the pill + results panel collapses the search
+    useEffect(() => {
+        if (!inlineMobile || !mobileOpen) return;
+        function handler(e) {
+            const t = e.target;
+            if (inlineRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+            if (t.closest?.("[data-search-toggle]")) return; // navbar morph icon handles its own close
+            clearTimeout(debounceRef.current);
+            setQuery("");
+            setResults([]);
+            setOpen(false);
+            setMobileOpen(false);
+            if (onMobileOpenChange) onMobileOpenChange(false);
+        }
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, [inlineMobile, mobileOpen, onMobileOpenChange]);
 
     function navigateToResult(item) {
         setOpen(false);
-        setMobileOpen(false);
+        setMobile(false);
         setQuery("");
         setResults([]);
         const id = item.id ?? item.seriesKey ?? encodeURIComponent(item._displayTitle);
@@ -455,6 +498,15 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
         setOpen(false);
     }
 
+    // Collapse mobile search and reset it
+    function closeMobile() {
+        setMobile(false);
+        clear();
+        // drop focus so caret + keyboard go away
+        mobileInputRef.current?.blur();
+        if (document.activeElement instanceof HTMLElement && inlineRef.current?.contains(document.activeElement)) document.activeElement.blur();
+    }
+
     function handleKeyDown(e) {
         if (e.key === "Escape") {
             setOpen(false);
@@ -464,11 +516,14 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
     }
 
     function handleMobileKeyDown(e) {
-        if (e.key === "Escape") {
-            setMobileOpen(false);
-            clear();
-        }
+        if (e.key === "Escape") closeMobile();
         if (e.key === "Enter" && results.length > 0) navigateToResult(results[0]);
+    }
+
+    // Inline mode: tabbing away with an empty query collapses the pill
+    function handleInlineBlur(e) {
+        if (e.relatedTarget?.closest?.("[data-search-toggle]")) return;
+        if (!query.trim() && e.relatedTarget && inlineRef.current && !inlineRef.current.contains(e.relatedTarget)) closeMobile();
     }
 
     const isSearching = loading.search;
@@ -520,10 +575,87 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
                 )}
             </div>
 
+            {/* ── Mobile inline pill (phones) — expands inside the navbar ── */}
+            {inlineMobile && (
+                <>
+                    <div ref={inlineRef} className="sm:hidden flex-1 min-w-0" onBlur={handleInlineBlur}>
+                        <style>{`
+                            @keyframes pillPulse{
+                                0%{box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+                                100%{box-shadow:inset 0 0 0 1px rgba(255,255,255,0)}
+                            }
+                            .pill-pulse{animation:pillPulse 700ms cubic-bezier(.22,1,.36,1) backwards}
+                            @media (prefers-reduced-motion: reduce){.pill-pulse{animation:none !important}}
+                        `}</style>
+                        <div
+                            role={mobileOpen ? undefined : "button"}
+                            tabIndex={mobileOpen ? -1 : 0}
+                            aria-label={mobileOpen ? undefined : "Search"}
+                            onClick={() => {
+                                if (mobileOpen) return;
+                                setMobile(true);
+                                mobileInputRef.current?.focus(); // inside the tap gesture so iOS keyboard opens
+                            }}
+                            onKeyDown={(e) => {
+                                if (!mobileOpen && (e.key === "Enter" || e.key === " ")) {
+                                    e.preventDefault();
+                                    setMobile(true);
+                                    mobileInputRef.current?.focus();
+                                }
+                            }}
+                            className={`group relative flex items-center gap-2 h-9 px-3.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
+                                mobileOpen ? "" : "cursor-pointer"
+                            }`}>
+                            {/* Background layer — colour + ring fade; width spring comes from the navbar (x axis only) */}
+                            <span
+                                aria-hidden="true"
+                                className={`pointer-events-none absolute inset-0 rounded-full bg-white/[0.07] ${mobileOpen ? "pill-pulse" : "transition-colors duration-200 group-hover:bg-white/12"}`}
+                            />
+                            {isSearching ? (
+                                <Loader2 size={16} className="relative text-white/60 shrink-0 animate-spin" />
+                            ) : (
+                                <SearchIcon size={16} strokeWidth={2} className={`relative shrink-0 transition-colors duration-500 ${mobileOpen ? "text-white" : "text-white/60"}`} />
+                            )}
+                            <label htmlFor="mobile-search-inline" className="sr-only">
+                                Search
+                            </label>
+                            <input
+                                id="mobile-search-inline"
+                                name="q"
+                                ref={mobileInputRef}
+                                type="text"
+                                enterKeyHint="search"
+                                autoComplete="off"
+                                placeholder="Search"
+                                value={query}
+                                tabIndex={mobileOpen ? 0 : -1}
+                                onChange={(e) => runSearch(e.target.value)}
+                                onKeyDown={handleMobileKeyDown}
+                                // 16px typed text stops iOS zoom; placeholder is smaller
+                                className={`relative bg-transparent outline-none text-[16px] text-white w-full min-w-0 truncate placeholder:text-[13px] placeholder:font-medium placeholder:transition-colors placeholder:duration-500 ${
+                                    mobileOpen ? "placeholder:text-white/55" : "placeholder:text-white/50 pointer-events-none"
+                                }`}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Results drop down right under the navbar row (positioned against the navbar row) */}
+                    {mobileOpen && query.trim() && (
+                        <div
+                            ref={panelRef}
+                            className="nav-anim-search sm:hidden absolute left-0 right-0 top-full z-[99999] bg-base-100 border-b border-base-300 shadow-2xl overflow-hidden"
+                            style={{ animation: "mIn .42s cubic-bezier(0.22,1,0.36,1) both", maxHeight: "calc(100dvh - 4rem)" }}>
+                            <style>{`@keyframes mIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}} @media (prefers-reduced-motion: reduce){.nav-anim-search{animation:none !important}}`}</style>
+                            {results.length > 0 ? <ResultsList results={results} query={query} onSelect={navigateToResult} limit={20} /> : <EmptyState query={query} />}
+                        </div>
+                    )}
+                </>
+            )}
+
             {/* ── Mobile icon trigger ── */}
-            {!hideMobileBtn && (
+            {!hideMobileBtn && !inlineMobile && (
                 <button
-                    onClick={() => setMobileOpen(true)}
+                    onClick={() => setMobile(true)}
                     className="sm:hidden inline-flex items-center justify-center w-9 h-9
                            rounded-md hover:bg-white/15 transition-colors text-base-content"
                     aria-label="Search">
@@ -531,18 +663,13 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
                 </button>
             )}
 
-            {/* ── Mobile overlay ── */}
-            {mobileOpen && (
+            {/* ── Mobile overlay (full screen) — used when not inline ── */}
+            {!inlineMobile && mobileOpen && (
                 <div className="sm:hidden fixed inset-0 z-[999999] bg-base-100 flex flex-col" style={{ animation: "mIn .15s ease-out both" }}>
                     <style>{`@keyframes mIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}`}</style>
 
                     <div className="flex items-center gap-3 px-3 h-14 border-b border-base-300 shrink-0 bg-base-200">
-                        <button
-                            onClick={() => {
-                                setMobileOpen(false);
-                                clear();
-                            }}
-                            className="text-base-content/60 hover:text-base-content transition-colors p-1">
+                        <button onClick={closeMobile} className="text-base-content/60 hover:text-base-content transition-colors p-1" aria-label="Close search">
                             <ArrowLeft size={20} />
                         </button>
                         <div className={`flex-1 flex items-center gap-2 bg-base-300 rounded-md px-3 h-9`}>

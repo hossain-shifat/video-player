@@ -1,7 +1,8 @@
+import { useId } from "react";
 import { Link } from "react-router";
 import Logo from "./Logo";
 import tmdbLogo from "../assets/tmdb.svg";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Scale } from "lucide-react";
 import { FaGithub } from "react-icons/fa";
 
 const navLinks = [
@@ -13,7 +14,10 @@ const navLinks = [
     { label: "Settings", to: "/settings" },
 ];
 
-const serverLinks = [
+// Shown only when parent passes canManage. No auth exists in app yet,
+// so default is false (links hidden). Wire to real auth state later.
+// Hiding links is NOT security: backend must still enforce access.
+const manageLinks = [
     { label: "Libraries", to: "/folders" },
     { label: "Dashboard", to: "/dashboard" },
     { label: "System Status", to: "/status" },
@@ -25,88 +29,100 @@ const legalLinks = [
     { label: "Licenses", to: "/licenses" },
 ];
 
-function FooterLinkList({ links }) {
+const focusRing = "rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary";
+
+function FooterSection({ title, links }) {
+    // useId keeps heading id unique even if footer renders twice
+    const headingId = useId();
+
     return (
-        <ul className="flex flex-col gap-2.5">
-            {links.map(({ label, to }) => (
-                <li key={to}>
-                    <Link to={to} className="text-sm text-base-content hover:text-primary transition-colors duration-150">
-                        {label}
-                    </Link>
-                </li>
-            ))}
-        </ul>
+        <nav aria-labelledby={headingId} className="min-w-0">
+            <h2 id={headingId} className="text-sm font-semibold text-base-content mb-4 pb-3 border-b border-base-content/10 relative">
+                {title}
+                {/* short accent segment on the divider */}
+                <span aria-hidden="true" className="absolute -bottom-px left-0 h-px w-6 bg-primary" />
+            </h2>
+            <ul className="flex flex-col gap-0.5">
+                {links.map(({ label, to }) => (
+                    <li key={to}>
+                        <Link
+                            to={to}
+                            className={`inline-block py-1.5 text-sm text-base-content/70 hover:text-primary hover:translate-x-0.5 transition-[color,transform] duration-150 motion-reduce:transition-none motion-reduce:hover:translate-x-0 ${focusRing}`}>
+                            {label}
+                        </Link>
+                    </li>
+                ))}
+            </ul>
+        </nav>
     );
 }
 
-const Footer = () => {
+const Footer = ({ canManage = false }) => {
     return (
-        <footer className="bg-base-200 mt-auto border-t border-base-content/8">
-            {/* Main content */}
-            <div className="max-w-7xl mx-auto px-6 py-12">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
-                    {/* ── Brand column ── */}
-                    <div className="flex flex-col gap-4">
+        <footer className="relative bg-base-200 mt-auto overflow-hidden border-t border-base-300">
+            {/* ── Main ── */}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-14 pb-10">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-x-12 gap-y-12">
+                    {/* Brand */}
+                    <div className="lg:col-span-4 flex flex-col gap-5 min-w-0">
                         <Logo />
-                        <p className="text-sm text-base-content leading-relaxed max-w-220px">
+                        <p className="text-sm text-base-content/80 leading-relaxed max-w-[260px]">
                             Self-hosted media server.
                             <br />
                             Your content, your network, your control.
                         </p>
 
-                        {/* Version badge */}
-                        <span className="inline-flex w-fit items-center border border-primary/30 text-primary/60 text-[10px] font-mono tracking-widest px-3 py-1 rounded-sm uppercase">v0.1 Beta</span>
-
-                        {/* Open source section */}
-                        <div className="flex flex-col gap-2 pt-1">
-                            <a
-                                href="https://github.com/hossain-shifat/video-player"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-2 text-xs text-base-content hover:text-primary transition-colors duration-150 group">
-                                <FaGithub size={13} />
-                                <span>GitHub</span>
-                                <ExternalLink size={10} className="opacity-0 group-hover:opacity-60 transition-opacity" />
-                            </a>
-                            <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-success/70" />
-                                <span className="text-xs text-base-content font-mono">Open Source · MIT</span>
-                            </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                            {/* TODO: pick one real version source (web 0.0.0, server 1.0.0) */}
+                            <span className="inline-flex items-center rounded-full border border-primary/40 text-primary text-xs font-medium px-3 py-1">v0.1 Beta</span>
+                            <span className="inline-flex items-center gap-1.5 text-xs text-base-content/80">
+                                <Scale size={13} aria-hidden="true" />
+                                Open Source, MIT
+                            </span>
                         </div>
                     </div>
 
-                    {/* ── Navigate ── */}
-                    <div>
-                        <p className="text-[11px] font-semibold text-primary/70 uppercase tracking-[0.18em] mb-4 font-mono">Navigate</p>
-                        <FooterLinkList links={navLinks} />
+                    {/* Link columns */}
+                    <div className={`lg:col-span-8 grid grid-cols-2 gap-x-6 gap-y-10 sm:gap-x-10 ${canManage ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+                        <FooterSection title="Navigate" links={navLinks} />
+                        {canManage && <FooterSection title="Manage" links={manageLinks} />}
+                        <FooterSection title="Legal" links={legalLinks} />
+                    </div>
+                </div>
+
+                {/* ── Attribution strip ── */}
+                <div className="mt-12 pt-6 border-t border-base-content/10 flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+                    <div className="flex items-center gap-4 min-w-0">
+                        <img src={tmdbLogo} alt="TMDB" className="h-3 w-auto shrink-0 opacity-90" />
+                        <p className="text-xs text-base-content/70 leading-relaxed max-w-md">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
                     </div>
 
-                    {/* ── Server ── */}
-                    <div>
-                        <p className="text-[11px] font-semibold text-primary/70 uppercase tracking-[0.18em] mb-4 font-mono">Server</p>
-                        <FooterLinkList links={serverLinks} />
-                    </div>
-
-                    {/* ── Legal + TMDB ── */}
-                    <div className="flex flex-col gap-6">
-                        <div>
-                            <p className="text-[11px] font-semibold text-primary/70 uppercase tracking-[0.18em] mb-4 font-mono">Legal</p>
-                            <FooterLinkList links={legalLinks} />
-                        </div>
-
-                        {/* TMDB attribution */}
-                        <div className="border border-base-content/8 rounded-lg p-4 bg-base-300/30 max-w-220px">
-                            <img src={tmdbLogo} alt="TMDB Logo" className="h-3 mb-2.5 w-auto opacity-80" />
-                            <p className="text-xs text-base-content leading-relaxed">Uses the TMDB API. Not endorsed or certified by TMDB.</p>
-                        </div>
-                    </div>
+                    <a
+                        href="https://github.com/hossain-shifat/video-player"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group inline-flex w-fit items-center gap-2 rounded-full border border-base-content/15 hover:border-primary/60 px-4 py-2 text-sm text-base-content hover:text-primary transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                        <FaGithub size={15} aria-hidden="true" />
+                        <span>View on GitHub</span>
+                        <ExternalLink size={12} aria-hidden="true" className="opacity-60 group-hover:opacity-100 transition-opacity" />
+                        <span className="sr-only">(opens in new tab)</span>
+                    </a>
                 </div>
             </div>
 
+            {/* ── Wordmark (decorative) ── */}
+            {/* leading-[0.9] + small px: gradient box fully covers glyphs, so bg-clip-text never cuts letter tops */}
+            <div aria-hidden="true" className="select-none pointer-events-none overflow-hidden text-center px-2">
+                <span className="block font-ibm-plex-sans font-black tracking-tighter text-[clamp(5rem,26vw,18rem)] leading-[0.9] -mb-[0.1em] bg-linear-to-b from-base-content/15 to-transparent bg-clip-text text-transparent">
+                    FLUX
+                </span>
+            </div>
+
             {/* ── Bottom bar ── */}
-            <div className="border-t border-base-content/8">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row items-center justify-center gap-2">
-                    <p className="text-xs text-base-content font-mono tracking-wide text-center">© 2026 FLUX Media Server · MIT Licensed · Self-hosted Streaming Platform</p>
+            <div className="relative border-t border-base-content/10 bg-base-200">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-x-6 gap-y-1 text-xs text-base-content/70 text-center sm:text-left">
+                    <p>© 2026 FLUX Media Server</p>
+                    <p>MIT licensed. Self-hosted by design.</p>
                 </div>
             </div>
         </footer>
