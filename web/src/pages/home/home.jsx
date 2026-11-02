@@ -8,6 +8,7 @@ import ContinueWatchingRow from "../../Components/ContinueWatchingRow";
 import Recommendations from "../../Components/Recommendations";
 import TrailerRow from "../../Components/TrailerRow";
 import { useTrailers } from "../../Hooks/useTrailers";
+import { HomeHeroBanner } from "../../Components/Banner";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -41,6 +42,8 @@ const Home = () => {
 
     return (
         <div className="flex flex-col gap-5">
+            <HomeHeroBanner />
+
             <ContinueWatchingRow />
 
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />

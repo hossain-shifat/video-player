@@ -9,6 +9,8 @@ const FOLDERS_FILE = path.join(__dirname, "..", "data", "folders.json");
 const { invalidateFolder, invalidateAll, fileIndex, getAllCached, getCachedStats } = require("../utils/mediaCache");
 const { reconcile, getMetadata } = require("../utils/metadataStore");
 const { isVideoFile } = require("../utils/fileHelpers");
+const { parseFilename } = require("../utils/nameParser");
+const notificationService = require("../services/notificationService");
 
 // In-memory folders cache — eliminates disk I/O on every API call.
 // Populated on first read, updated atomically on every write.
@@ -23,6 +25,64 @@ const DEBOUNCE_MS = parseInt(process.env.WATCH_DEBOUNCE_MS || "1500", 10);
 const USE_POLLING = process.env.WATCH_USE_POLLING === "true";
 
 const _watchers = new Map(); // folderId -> chokidar watcher instance
+
+// ─── "New media" notifications ────────────────────────────────────────────────
+// _knownIds is the baseline of media ids per folder. It is seeded when a folder
+// starts being watched (so files that already exist never trigger an alert) and
+// refreshed after every rescan; anything in a rescan that isn't in the baseline
+// is "new" and gets announced.
+const _knownIds = new Map(); // folderId -> Set<mediaId>
+const _seeding = new Map(); // folderId -> Promise (baseline in progress)
+
+function _seedBaseline(folder) {
+    const p = getAllCached([folder])
+        .then(({ allMedia }) => {
+            _knownIds.set(folder.id, new Set(allMedia.map((f) => f.id)));
+        })
+        .catch((err) => console.warn(`[Watcher] Baseline scan failed for "${folder.label}":`, err.message));
+    _seeding.set(folder.id, p);
+    return p;
+}
+
+function _cleanTitle(file) {
+    try {
+        return parseFilename(file.name)?.title || file.name;
+    } catch {
+        return file.name;
+    }
+}
+
+function _announceNewMedia(folder, allMedia) {
+    const prev = _knownIds.get(folder.id);
+    _knownIds.set(folder.id, new Set(allMedia.map((f) => f.id)));
+    if (!prev) {
+        console.warn(`[Notify] new-media: no baseline for "${folder.label}" yet — skipped this rescan`);
+        return; // never guess
+    }
+
+    const added = allMedia.filter((f) => !prev.has(f.id));
+    if (!added.length) return;
+    console.log(`[Notify] new-media: ${added.length} new file(s) in "${folder.label}"`);
+
+    const titles = [...new Set(added.map(_cleanTitle))];
+
+    // Same set of files → same key, so a repeated rescan can never alert twice.
+    const key = require("crypto").createHash("sha1").update(added.map((f) => f.id).sort().join("|")).digest("hex").slice(0, 16);
+
+    notificationService
+        .notifyLibraryUsers(folder.id, {
+            type: notificationService.TYPES.NEW_MEDIA,
+            title: added.length === 1 ? "New title added" : `${added.length} new titles added`,
+            // Generic on purpose (push can show on a lock screen); titles are in `meta` and
+            // only returned by the API after re-checking the viewer's library access.
+            body: `${added.length === 1 ? "1 new title" : `${added.length} new titles`} in ${folder.label}`,
+            meta: { libraryId: folder.id, libraryLabel: folder.label, count: added.length, titles: titles.slice(0, 10), mediaId: added.length === 1 ? added[0].id : null },
+            dedupeKey: `new_media:${folder.id}:${key}`,
+            dedupeWindowMs: 6 * 60 * 60 * 1000,
+        })
+        .then((rows) => console.log(`[Notify] new-media: stored for ${rows.length} recipient(s)${rows.length ? "" : " — check the [Notify] errors above"}`))
+        .catch((err) => console.error("[Watcher] new-media notification failed:", err.message));
+}
 const _debounceTimers = new Map(); // folderId -> timeout handle
 
 // Debounced so a big folder copy (50 files landing at once) triggers ONE
@@ -34,6 +94,8 @@ function _scheduleRescan(folder) {
         folder.id,
         setTimeout(async () => {
             _debounceTimers.delete(folder.id);
+            // Make sure the baseline exists before the cache is invalidated.
+            await (_seeding.get(folder.id) || Promise.resolve());
             invalidateFolder(folder.id);
             console.log(`[Watcher] Change in "${folder.label}" — cache invalidated`);
 
@@ -41,6 +103,11 @@ function _scheduleRescan(folder) {
                 // Force the rescan NOW and warm TMDB metadata so posters are
                 // ready before the user even opens the app.
                 const { allMedia } = await getAllCached([folder]);
+
+                // Announce FIRST. Warming TMDB metadata for the whole library below can be slow
+                // (or hang if TMDB is unreachable) and must never delay the notification.
+                _announceNewMedia(folder, allMedia);
+
                 await Promise.all(allMedia.map((f) => getMetadata(f).catch(() => null)));
                 console.log(`[Watcher] Rescanned "${folder.label}" — ${allMedia.length} file(s), metadata warmed`);
             } catch (err) {
@@ -58,6 +125,8 @@ function _watchFolder(folder) {
         console.warn(`[Watcher] Path missing, skipping: ${folder.path}`);
         return;
     }
+
+    _seedBaseline(folder);
 
     const watcher = chokidar.watch(folder.path, {
         persistent: true,
@@ -242,6 +311,8 @@ async function removeFolder(req, res) {
         await writeFolders(folders);
         invalidateFolder(id);
         _stopWatching(id);
+        _knownIds.delete(id);
+        _seeding.delete(id);
 
         return res.json({ message: "Folder removed", id });
     } catch (err) {

@@ -1,11 +1,60 @@
 /**
  * stream.js — FLUX Web API (web/src/api/stream.js)
  *
- * Single-user self-hosted install — no auth tokens needed.
+ * Every /stream/* route is protected server-side (verified e-mail + admin approval + active access).
+ * resolvePlayback() first asks POST /stream/start/:id for a stream token (this is where a pending
+ * user is told "approval required"), then talks to the stream routes.
  */
+
+import { axiosInstance, getAuthToken, setStreamToken, getStreamToken, withStreamToken, API_BASE_URL } from "./client";
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const CLIENT_ID_KEY = "flux_client_id";
+
+// ─── Auth for stream requests made with plain fetch() ─────────────────────────
+// PlayerPage/VideoCore/subtitle code calls fetch() on /stream/* URLs directly. Rather than touch every
+// call site, one wrapper adds the credentials the server needs:
+//   - Authorization (fresh access JWT — refreshed by startStream below) on video/start/transcode/mediainfo
+//   - X-Flux-Stream-Token on subtitle requests (4 h token, survives access-JWT expiry)
+// HLS manifest/segment/ping/stop requests are deliberately left alone: they are authorised by the
+// HLS session the server tied to this account when playback started.
+const PROTECTED_FETCH = /\/stream\/(video|start|transcode|mediainfo)\//;
+const SUBTITLE_FETCH = /\/stream\/subtitle\//;
+let _fetchPatched = false;
+function installStreamFetchAuth() {
+    if (_fetchPatched || typeof window === "undefined" || typeof window.fetch !== "function") return;
+    _fetchPatched = true;
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init = {}) => {
+        const url = typeof input === "string" ? input : input?.url || "";
+        const ours = url.startsWith(BASE) || url.startsWith(API_BASE_URL) || url.startsWith("/stream/");
+        if (ours && (PROTECTED_FETCH.test(url) || SUBTITLE_FETCH.test(url))) {
+            const headers = new Headers(init.headers || (typeof input !== "string" ? input.headers : undefined));
+            if (PROTECTED_FETCH.test(url)) {
+                const jwt = getAuthToken();
+                if (jwt && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${jwt}`);
+            } else {
+                const st = getStreamToken();
+                if (st && !headers.has("X-Flux-Stream-Token")) headers.set("X-Flux-Stream-Token", st);
+            }
+            return original(input, { ...init, headers, credentials: init.credentials || "include" });
+        }
+        return original(input, init);
+    };
+}
+installStreamFetchAuth();
+
+// ─── Start stream (authorization checkpoint) ──────────────────────────────────
+/**
+ * POST /stream/start/:id — succeeds only for a verified, APPROVED account with access to this media.
+ * Pending users get 403 { code: "PENDING_APPROVAL" } (err.apiCode) and no token/cookie is issued.
+ * Also refreshes the access JWT if it expired (axios interceptor), so later fetches carry a valid one.
+ */
+export async function startStream(mediaId) {
+    const res = await axiosInstance.post(`/stream/start/${encodeURIComponent(mediaId)}`);
+    setStreamToken(res.data?.streamToken || null);
+    return res.data;
+}
 
 // ─── Client ID ────────────────────────────────────────────────────────────────
 
@@ -39,6 +88,9 @@ export function getOrCreateClientId() {
 export async function resolvePlayback(mediaId, opts = {}) {
     const clientId = getOrCreateClientId();
 
+    const started = await startStream(mediaId); // throws with err.apiCode === "PENDING_APPROVAL" etc. when not allowed
+    const streamToken = started?.streamToken || null;
+
     const qs = new URLSearchParams({ info: "1" });
     if (opts.seekSec > 0) qs.set("t", String(opts.seekSec));
     if (opts.quality) qs.set("quality", opts.quality);
@@ -51,7 +103,11 @@ export async function resolvePlayback(mediaId, opts = {}) {
 
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Stream resolve failed: HTTP ${res.status}`);
+        const err = new Error(body.error || `Stream resolve failed: HTTP ${res.status}`);
+        err.status = res.status;
+        err.apiCode = body.code;
+        if (res.status === 403 || res.status === 401) window.dispatchEvent(new CustomEvent("flux:account-state-changed", { detail: { code: body.code } }));
+        throw err;
     }
 
     const data = await res.json();
@@ -59,7 +115,7 @@ export async function resolvePlayback(mediaId, opts = {}) {
     if (data.mode === "direct") {
         return {
             mode: "direct",
-            streamUrl: data.streamUrl,
+            streamUrl: withStreamToken(data.streamUrl, streamToken),
             sessionId: null,
             duration: data.duration || null,
             clientId,

@@ -1,8 +1,11 @@
-import { useState, useRef } from "react";
-import { Trash2, Download, Upload, Check } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Trash2, Download, Upload, Check, Monitor, Smartphone, Globe, Pencil, Info } from "lucide-react";
 import { Card, Row, Toggle, SectionLabel, DangerButton, ConfirmModal, GhostButton, PinModal, PREFS_KEY, PIN_KEY, hasPin } from "./shared";
 import { clearHistory } from "../../api";
 import { useApi } from "../../Context/apiContext";
+import { useAuth } from "../../auth/useAuth";
+import DashConfirm from "../../dashboard/components/ConfirmModal";
+import { getDevices, renameDevice, logoutDevices, logoutOtherDevices } from "../../api/user";
 
 const isFluxKey = (k) => !!k && k.startsWith("flux-") && k !== PIN_KEY; // PIN hash is never exported or wiped here
 
@@ -13,6 +16,221 @@ function localKeys(test) {
         if (k && test(k)) out.push(k);
     }
     return out;
+}
+
+function relTime(iso) {
+    if (!iso) return "—";
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 90) return "Active now";
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+}
+
+const deviceGlyph = (t) => (t === "mobile" ? <Smartphone size={16} /> : t === "tablet" ? <Monitor size={16} /> : <Globe size={16} />);
+
+const IP_NOTE = "If the IP is the same, it may be the same device signed in with a different browser.";
+
+function DeviceRow({ glyph, name, current, meta, ip, active, tag, children }) {
+    const [tip, setTip] = useState(false);
+    return (
+        <li className="flex flex-col gap-3 border-b border-base-content/10 px-4 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-base-300 text-primary">{glyph}</span>
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-medium leading-tight text-base-content">{name}</p>
+                        {current && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
+                                This device
+                            </span>
+                        )}
+                        {tag && <span className="rounded-full bg-base-300 px-2 py-0.5 text-[11px] font-medium text-base-content/60">{tag}</span>}
+                    </div>
+                    {meta && <p className="mt-0.5 text-[13px] leading-snug text-base-content/60">{meta}</p>}
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[13px] leading-snug text-base-content/55">
+                        <span>IP</span>
+                        <span className="font-mono text-base-content/80">{ip || "not recorded"}</span>
+                        <button
+                            type="button"
+                            onClick={() => setTip((v) => !v)}
+                            aria-expanded={tip}
+                            aria-label="About IP addresses"
+                            title={IP_NOTE}
+                            className="grid h-5 w-5 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content focus-visible:outline-2 focus-visible:outline-primary">
+                            <Info size={13} />
+                        </button>
+                        <span aria-hidden="true">·</span>
+                        <span className={active ? "text-success" : ""}>{relTime(active)}</span>
+                    </p>
+                    {tip && (
+                        <p role="note" className="mt-1.5 rounded-md bg-base-300 px-2.5 py-1.5 text-xs leading-relaxed text-base-content/70">
+                            {IP_NOTE}
+                        </p>
+                    )}
+                </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{children}</div>
+        </li>
+    );
+}
+
+/** Account-owner devices. One list; every action is a real server call and the list is re-read afterwards. */
+export function DevicesSection() {
+    const { logout, user, isApproved } = useAuth();
+    const [data, setData] = useState(null); // { devices } — one row per browser + IP, however many times it signed in
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState(null);
+    const [rename, setRename] = useState(null); // { id, value }
+    const [confirm, setConfirm] = useState(null); // { kind: "device"|"others", target? }
+
+    const load = useCallback(async () => {
+        try {
+            setData(await getDevices());
+            setError(null);
+        } catch (e) {
+            setError(e?.message || "Could not load your devices.");
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (user && isApproved) load();
+        else setLoading(false);
+    }, [load, user, isApproved]);
+
+    async function run(fn, okText) {
+        setBusy(true);
+        setNote(null);
+        try {
+            const res = await fn();
+            if (res?.currentSessionRevoked) {
+                await logout(); // this device was logged out → normal sign-out path
+                return;
+            }
+            setNote({ ok: true, text: okText });
+            await load();
+        } catch (e) {
+            setNote({ ok: false, text: e?.message || "That didn't work. Try again." });
+        } finally {
+            setBusy(false);
+            setConfirm(null);
+        }
+    }
+
+    async function saveName() {
+        const { id, value } = rename;
+        await run(() => renameDevice(id, value), "Device renamed.");
+        setRename(null);
+    }
+
+    if (!user || !isApproved) return null; // only for a signed-in, approved account
+
+    const devices = data?.devices ?? [];
+    const total = devices.length;
+    const hasOthers = devices.some((d) => !d.isCurrent);
+
+    return (
+        <div>
+            <SectionLabel hint="Browsers and apps signed in to your account. Log out any you don't recognise.">Devices</SectionLabel>
+            <Card>
+                <div className="flex items-center justify-between gap-3 border-b border-base-content/10 px-4 py-3 sm:px-5">
+                    <p className="text-[13px] text-base-content/60" aria-live="polite">
+                        {loading ? "Loading…" : `${total} device${total === 1 ? "" : "s"} signed in`}
+                    </p>
+                    <GhostButton onClick={() => setConfirm({ kind: "others" })} disabled={busy || !hasOthers}>
+                        Log out other devices
+                    </GhostButton>
+                </div>
+
+                {error && (
+                    <p role="alert" className="px-4 py-3 text-[13px] text-error sm:px-5">
+                        {error}{" "}
+                        <button type="button" onClick={load} className="cursor-pointer border-0 bg-transparent p-0 text-error underline">
+                            Retry
+                        </button>
+                    </p>
+                )}
+                {note && (
+                    <p role={note.ok ? "status" : "alert"} className={`px-4 py-2 text-[13px] sm:px-5 ${note.ok ? "text-success" : "text-error"}`}>
+                        {note.text}
+                    </p>
+                )}
+                {!loading && !error && total === 0 && <p className="px-4 py-4 text-[13px] text-base-content/50 sm:px-5">No signed-in devices found.</p>}
+
+                <ul>
+                    {devices.map((d) => (
+                        <DeviceRow key={d.id} glyph={deviceGlyph(d.deviceType)} name={d.name} current={d.isCurrent} tag={d.legacy ? "Earlier sign-in" : null} meta={[d.browser, d.os].filter(Boolean).join(" · ")} ip={d.ip} active={d.lastActiveAt}>
+                            {rename?.rowId === d.id ? (
+                                <>
+                                    <input
+                                        data-autofocus
+                                        autoFocus
+                                        maxLength={60}
+                                        value={rename.value}
+                                        onChange={(e) => setRename({ ...rename, value: e.target.value })}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") saveName();
+                                            if (e.key === "Escape") setRename(null);
+                                        }}
+                                        aria-label="Device name"
+                                        placeholder="Device name"
+                                        className="input input-sm input-bordered w-44"
+                                    />
+                                    <GhostButton onClick={saveName} disabled={busy}>
+                                        Save
+                                    </GhostButton>
+                                    <GhostButton onClick={() => setRename(null)} disabled={busy}>
+                                        Cancel
+                                    </GhostButton>
+                                </>
+                            ) : (
+                                <>
+                                    {d.renamable && (
+                                        <GhostButton onClick={() => setRename({ id: d.deviceIds[0], rowId: d.id, value: d.customName || "" })} disabled={busy}>
+                                            <Pencil size={12} /> Rename
+                                        </GhostButton>
+                                    )}
+                                    <DangerButton onClick={() => setConfirm({ kind: "device", target: d })} loading={busy}>
+                                        Log out
+                                    </DangerButton>
+                                </>
+                            )}
+                        </DeviceRow>
+                    ))}
+                </ul>
+            </Card>
+
+            <DashConfirm
+                open={confirm?.kind === "device"}
+                onClose={() => !busy && setConfirm(null)}
+                variant="warning"
+                title="Log out this device?"
+                message={
+                    confirm?.target?.isCurrent
+                        ? "You'll be signed out here right away and need to sign in again."
+                        : `${confirm?.target?.name ?? "That device"} will be signed out of your account and must sign in again.`
+                }
+                confirmText="Log out"
+                loading={busy}
+                onConfirm={() => run(() => logoutDevices({ deviceIds: confirm.target.deviceIds, sessionIds: confirm.target.sessionIds }), "Device logged out.")}
+            />
+            <DashConfirm
+                open={confirm?.kind === "others"}
+                onClose={() => !busy && setConfirm(null)}
+                variant="warning"
+                title="Log out all other devices?"
+                message="Every other device will be signed out of your account. This device stays signed in."
+                confirmText="Log out others"
+                loading={busy}
+                onConfirm={() => run(logoutOtherDevices, "Other devices logged out.")}
+            />
+        </div>
+    );
 }
 
 export default function PrivacySection({ prefs, setPref, setPrefs }) {

@@ -38,14 +38,21 @@ export const authApi = {
             data: { email, password, name },
         }),
 
-    verifyEmail: (userId, code) =>
+    // Account comes from the access token (added by the client interceptor) - never from the body.
+    verifyEmail: (code) =>
         authRequest("/auth/verify-email", {
-            data: { userId, code },
+            data: { code },
         }),
 
-    resendOTP: (userId) =>
-        authRequest("/auth/resend-otp", {
-            data: { userId },
+    resendOTP: () => authRequest("/auth/resend-otp"),
+
+    // Rejected user asks again — server flips rejected → pending and notifies the admins.
+    requestApproval: () => authRequest("/auth/request-approval"),
+
+    // Trades the single-use code from the Google redirect for the session tokens.
+    oauthExchange: (code) =>
+        authRequest("/auth/oauth/exchange", {
+            data: { code },
         }),
 
     login: (email, password) =>
@@ -75,6 +82,17 @@ export const authApi = {
             method: "patch",
             headers: { Authorization: `Bearer ${accessToken}` },
             data,
+        }),
+
+    // Forgot password: always answers the same (no account enumeration); the code goes to the mailbox.
+    forgotPassword: (email) =>
+        authRequest("/auth/forgot-password", {
+            data: { email },
+        }),
+
+    resetPassword: (email, code, password) =>
+        authRequest("/auth/reset-password", {
+            data: { email, code, password },
         }),
 
     googleLoginUrl: () => `${BASE_URL}/auth/google`,

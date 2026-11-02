@@ -1,5 +1,5 @@
 // web/src/dashboard/pages/DashMedia.jsx
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { Link } from "react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
@@ -14,7 +14,6 @@ import {
     Search,
     Play,
     Info,
-    Copy,
     FolderOpen,
     Check,
     Image as ImageIcon,
@@ -35,8 +34,34 @@ import {
     ShieldOff,
     SortAsc,
     User,
+    Monitor,
+    Volume2,
+    Gauge,
+    Clock,
+    Link2,
+    Languages,
 } from "lucide-react";
 import { api } from "../../api/client";
+import ConfirmModal, {
+    ModalShell,
+    ModalHeader,
+    ModalTabs,
+    ModalContent,
+    ModalSection,
+    ModalRows,
+    ModalKV,
+    ModalStats,
+    ModalCallout,
+    ModalReview,
+    ModalCopyButton,
+    ModalFooter,
+    ModalBadge,
+    ModalButton,
+    ModalSegmented,
+    ModalToggle,
+    PANEL,
+    MODAL_INPUT,
+} from "../components/ConfirmModal";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +87,37 @@ function fmtDuration(seconds) {
     const m = Math.floor((seconds % 3600) / 60);
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
+}
+
+// Generic "all metadata" rows: turns a flat ffprobe-ish object into label / value pairs.
+const humanize = (k) =>
+    k
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .replace(/^./, (c) => c.toUpperCase());
+function fmtMeta(k, v) {
+    if (typeof v === "boolean") return v ? "Yes" : "No";
+    if (typeof v === "number") {
+        if (/bytes$|^size$/i.test(k)) return fmtBytes(v);
+        if (/bps$|bitrate/i.test(k)) return `${(v / 1_000_000).toFixed(2)} Mbps`;
+        if (/seconds$|^duration$/i.test(k)) return fmtDuration(v);
+        return v.toLocaleString();
+    }
+    return String(v);
+}
+function metaRows(obj, prefix = "") {
+    if (!obj || typeof obj !== "object") return [];
+    const out = [];
+    for (const [k, v] of Object.entries(obj)) {
+        if (v == null || v === "") continue;
+        const label = prefix ? `${prefix} · ${humanize(k)}` : humanize(k);
+        if (Array.isArray(v)) {
+            if (v.every((x) => x == null || typeof x !== "object")) out.push({ label, value: v.join(", ") });
+            else v.forEach((x, i) => out.push(...metaRows(x, `${label} ${i + 1}`)));
+        } else if (typeof v === "object") out.push(...metaRows(v, label));
+        else out.push({ label, value: fmtMeta(k, v) });
+    }
+    return out.filter((r) => r.value !== "");
 }
 
 // ffprobe reports frame rate as a fraction string like "24000/1001" or "24/1" —
@@ -130,22 +186,6 @@ function MetricCard({ title, value, icon: Icon, accent, sub, isLoading }) {
     );
 }
 
-function CopyBtn({ text, title }) {
-    const [copied, setCopied] = useState(false);
-    const handle = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        navigator.clipboard.writeText(text).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-    };
-    return (
-        <button onClick={handle} title={title} className="w-6 h-6 rounded-md flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 transition-colors">
-            {copied ? <Check size={11} className="text-success" strokeWidth={2.2} /> : <Copy size={11} className="text-white/90" strokeWidth={2} />}
-        </button>
-    );
-}
-
 function Badge({ label, variant = "default", size = "sm" }) {
     const cls =
         {
@@ -190,61 +230,20 @@ function CodecChip({ label }) {
     return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-mono font-bold ${cls}`}>{label}</span>;
 }
 
-// ─── Modal Shell ──────────────────────────────────────────────────────────────
+// ─── Modals (shared shell, header, footer and atoms: ../components/ConfirmModal) ──
 
-function Modal({ onClose, children }) {
-    return createPortal(
-        <div className="fixed inset-0 z-9999 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
-            <div
-                className="relative w-[min(32rem,90vw)] max-h-[min(32rem,90vh)] bg-base-200 rounded-2xl shadow-2xl border border-white/10 overflow-hidden flex flex-col"
-                style={{ boxShadow: "0 25px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06)" }}
-                onClick={(e) => e.stopPropagation()}>
-                {children}
-            </div>
-        </div>,
-        document.body,
-    );
-}
+const TYPE_TONE = { movie: "primary", series: "info", anime: "accent" };
+const TYPE_LABEL = { movie: "Movie", series: "Series", anime: "Anime" };
 
-function ModalHeader({ title, subtitle, onClose, poster, typeBadge }) {
-    const config = typeBadge ? TYPE_CONFIG[typeBadge.type] : null;
+function PosterThumb({ src, Icon, className = "h-14 w-10" }) {
     return (
-        <div className="flex items-start justify-between px-5 pt-4 pb-3.5 border-b border-white/8 shrink-0">
-            <div className="flex items-center gap-3.5 min-w-0">
-                {poster !== undefined && (
-                    <div className="w-10 h-14 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-white/10">
-                        {poster ? <img src={poster} alt="" className="w-full h-full object-cover" /> : <ImageIcon size={14} className="text-white/40" />}
-                    </div>
-                )}
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h2 className="font-bold text-sm text-white leading-tight">{title}</h2>
-                        {typeBadge && <Badge label={typeBadge.label} variant={typeBadge.type} />}
-                    </div>
-                    {subtitle && <p className="text-[11px] text-white/70 truncate font-mono">{subtitle}</p>}
-                </div>
-            </div>
-            <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors shrink-0 ml-2 cursor-pointer">
-                <X size={14} />
-            </button>
+        <div className={`grid ${className} shrink-0 place-items-center overflow-hidden rounded-md border border-base-content/15 bg-base-300`}>
+            {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : <Icon size={16} className="text-base-content/40" />}
         </div>
     );
 }
 
-function ModalFooter({ children }) {
-    return <div className="px-5 py-3.5 flex items-center justify-end gap-2 border-t border-white/8 shrink-0 bg-black/20">{children}</div>;
-}
-
-// ─── Section divider for modals ───────────────────────────────────────────────
-
-function SectionLabel({ label }) {
-    return (
-        <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/85">{label}</span>
-            <div className="flex-1 h-px bg-white/8" />
-        </div>
-    );
-}
+const INPUT_LG = `${MODAL_INPUT} !h-[42px]`;
 
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
 
@@ -253,144 +252,145 @@ function EditModal({ media, onClose, onSave, isPending, error }) {
     const [year, setYear] = useState(media._year || "");
     const [type, setType] = useState(media._type || "movie");
     const [permission, setPermission] = useState(media._permission !== false);
+    const TypeIcon = (TYPE_CONFIG[media._type] || TYPE_CONFIG.movie).Icon;
 
     const handleSubmit = () => {
         onSave({ id: media._id, payload: { title, year: Number(year), type, permission } });
     };
 
+    const access = (v) => (v ? "Normal" : "Restricted");
+    const changes = [
+        title !== (media._title || "") && { name: "Title", from: media._title || "—", to: title || "—" },
+        String(year) !== String(media._year || "") && { name: "Year", from: media._year || "—", to: year || "—" },
+        type !== (media._type || "movie") && { name: "Type", from: TYPE_LABEL[media._type || "movie"], to: TYPE_LABEL[type] },
+        permission !== (media._permission !== false) && { name: "Access", from: access(media._permission !== false), to: access(permission) },
+    ].filter(Boolean);
+    const dirty = changes.length > 0;
+    const edited = (a, b) => (String(a) !== String(b) ? "!border-primary/60" : "");
+
     return (
-        <Modal onClose={onClose}>
-            <ModalHeader title="Edit Metadata" subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />
-
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 scrollbar-none">
-                {error && (
-                    <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                        <AlertTriangle size={13} className="shrink-0 text-error" strokeWidth={2} />
-                        <span>{error.message || "Failed to update media"}</span>
-                    </div>
-                )}
-
-                <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Title</label>
+        <ModalShell onClose={onClose} busy={isPending} labelledBy="media-edit-t">
+            <ModalHeader
+                id="media-edit-t"
+                avatar={<PosterThumb src={media._poster} Icon={TypeIcon} className="h-[60px] w-[42px]" />}
+                title="Edit metadata"
+                subtitle={<span className="font-mono">{media._filename}</span>}
+                badges={
+                    <ModalBadge tone={TYPE_TONE[media._type] || "primary"} icon={TypeIcon}>
+                        {media._typeLabel}
+                    </ModalBadge>
+                }
+                onClose={onClose}
+                busy={isPending}
+            />
+            <ModalContent>
+                <ModalSection label="Title">
                     <input
+                        id="media-edit-title"
                         type="text"
+                        data-autofocus
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        className="input input-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-primary/50 focus:bg-base-100 transition-colors"
-                        placeholder="Media title..."
+                        className={`${INPUT_LG} ${edited(title, media._title || "")}`}
+                        placeholder="Media title…"
                     />
-                </div>
+                </ModalSection>
 
-                <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Year</label>
+                <div className="grid shrink-0 grid-cols-1 items-start gap-4 sm:grid-cols-2">
+                    <ModalSection label="Year">
                         <input
+                            id="media-edit-year"
                             type="number"
                             value={year}
                             onChange={(e) => setYear(e.target.value)}
-                            className="input input-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-primary/50 transition-colors"
+                            className={`${INPUT_LG} ${edited(year, media._year || "")}`}
                             placeholder="2024"
                             min={1900}
                             max={2099}
                         />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/85">Type</label>
-                        <select
+                    </ModalSection>
+                    <ModalSection label="Type">
+                        <ModalSegmented
+                            label="Type"
                             value={type}
-                            onChange={(e) => setType(e.target.value)}
-                            className="select select-sm w-full bg-base-300 border border-white/15 rounded-xl text-sm text-white focus:outline-none focus:border-primary/50 transition-colors">
-                            <option value="movie" className="text-black">
-                                Movie
-                            </option>
-                            <option value="series" className="text-black">
-                                Series
-                            </option>
-                            <option value="anime" className="text-black">
-                                Anime
-                            </option>
-                        </select>
-                    </div>
+                            onChange={setType}
+                            options={[
+                                { value: "movie", label: "Movie", icon: Film },
+                                { value: "series", label: "Series", icon: Tv2 },
+                                { value: "anime", label: "Anime", icon: Swords },
+                            ]}
+                        />
+                    </ModalSection>
                 </div>
 
-                {/* Permission toggle
-                    permission=true  → Normal (allowed)
-                    permission=false → Restricted
-                    Toggle is "Restrict access" — checked means RESTRICTED (permission=false) */}
-                <div className={`border rounded-xl p-4 transition-colors ${permission ? "bg-base-300 border-white/8" : "bg-error/10 border-error/25"}`}>
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                            {permission ? (
-                                <div className="w-8 h-8 rounded-lg bg-success/20 flex items-center justify-center shrink-0">
-                                    <Shield size={15} className="text-success" strokeWidth={2} />
-                                </div>
-                            ) : (
-                                <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center shrink-0">
-                                    <ShieldOff size={15} className="text-error" strokeWidth={2} />
-                                </div>
-                            )}
-                            <div>
-                                <p className={`text-xs font-bold ${permission ? "text-success" : "text-error"}`}>{permission ? "Normal Access" : "Restricted"}</p>
-                                <p className="text-[10px] text-white/70 mt-0.5">{permission ? "Media is accessible — click to restrict" : "Access is restricted — click to allow"}</p>
-                            </div>
+                {/* permission=true → Normal (allowed), permission=false → Restricted.
+                    The switch is "Restrict access": ON means RESTRICTED (permission=false). */}
+                <ModalSection label="Access & identity">
+                    <div className={`${PANEL} divide-y divide-base-content/10 overflow-hidden`}>
+                        <label className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-base-content/5">
+                            <span className="grid size-9 shrink-0 place-items-center rounded-full border border-base-content/10 bg-base-200">
+                                {permission ? <Shield size={16} className="text-success" /> : <ShieldOff size={16} className="text-error" />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block text-[13px] font-medium text-base-content">{permission ? "Normal access" : "Restricted"}</span>
+                                <span className="block text-xs text-base-content/60">
+                                    {permission ? "Media is accessible. Turn on to restrict it." : "Access is restricted. Turn off to allow it."}
+                                </span>
+                            </span>
+                            <span className="text-xs text-base-content/60">{permission ? "Off" : "On"}</span>
+                            <ModalToggle value={!permission} onChange={(v) => setPermission(!v)} label="Restrict access" />
+                        </label>
+                        <div className="flex min-h-12 items-center gap-4 px-4 py-2">
+                            <span className="w-28 shrink-0 text-xs text-base-content/60">Media ID</span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/90">{media._id}</span>
+                            <ModalCopyButton text={media._id} label="media ID" />
                         </div>
-                        {/* checkbox checked = restricted = !permission */}
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={!permission}
-                            onClick={() => setPermission((prev) => !prev)}
-                            className={`relative inline-flex items-center w-11 h-6 rounded-full border shrink-0 transition-colors duration-200 focus:outline-none cursor-pointer ${!permission ? "bg-error/70 border-error/40" : "bg-white/15 border-white/25"}`}>
-                            <span className={`absolute left-0.5 w-4.5 h-4.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${!permission ? "translate-x-5" : "translate-x-0"}`} />
-                        </button>
                     </div>
-                </div>
+                </ModalSection>
 
-                {/* Media ID */}
-                <div className="space-y-1.5">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-white/85">Media ID</p>
-                    <div className="flex items-center gap-2 bg-base-300 border border-white/8 rounded-xl px-3 py-2">
-                        <span className="text-[10px] font-mono text-white/85 truncate flex-1">{media._id}</span>
-                        <CopyBtn text={media._id} title="Copy ID" />
-                    </div>
-                </div>
-            </div>
-
-            <ModalFooter>
-                <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
+                {error && (
+                    <ModalCallout tone="error" icon={AlertTriangle} compact className="mt-auto">
+                        {error.message || "Failed to update media"}
+                    </ModalCallout>
+                )}
+                <ModalReview
+                    changes={changes}
+                    saved={[
+                        { name: "Title", value: media._title },
+                        { name: "Year", value: media._year },
+                        { name: "Type", value: TYPE_LABEL[media._type || "movie"] },
+                        { name: "Access", value: access(media._permission !== false) },
+                    ]}
+                    className={error ? "" : "mt-auto"}
+                />
+            </ModalContent>
+            <ModalFooter
+                note={
+                    dirty ? (
+                        <span className="inline-flex items-center gap-1.5 text-warning">
+                            <span className="size-2 rounded-full bg-warning" />
+                            Unsaved changes
+                        </span>
+                    ) : (
+                        <span className="text-base-content/60">No changes yet</span>
+                    )
+                }>
+                <ModalButton onClick={onClose} disabled={isPending}>
                     Cancel
-                </button>
-                <button
-                    onClick={handleSubmit}
-                    disabled={isPending}
-                    className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                    {isPending ? <Loader2 size={12} className="animate-spin" strokeWidth={2.2} /> : <Check size={12} strokeWidth={2.2} />}
-                    {isPending ? "Saving…" : "Save changes"}
-                </button>
+                </ModalButton>
+                <ModalButton variant="primary" className="gap-1.5" onClick={handleSubmit} loading={isPending} loadingText="Saving…" disabled={!dirty}>
+                    <Check size={14} />
+                    Save changes
+                </ModalButton>
             </ModalFooter>
-        </Modal>
+        </ModalShell>
     );
 }
 
 // ─── Details Modal ────────────────────────────────────────────────────────────
 
-function InfoRow({ label, value, mono = false, full = false, copyText }) {
-    return (
-        <div className={full ? "col-span-2" : ""}>
-            <div className="flex items-center gap-1.5 mb-1">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-white/85">{label}</p>
-                {copyText && <CopyBtn text={copyText} title={`Copy ${label}`} />}
-            </div>
-            {mono ? (
-                <p className="text-[10px] font-mono text-white/90 break-all bg-base-300 border border-white/8 rounded-lg px-2.5 py-1.5 leading-relaxed">{value || "—"}</p>
-            ) : (
-                <p className="text-sm font-semibold text-white">{value || "—"}</p>
-            )}
-        </div>
-    );
-}
-
 function DetailsModal({ media, onClose }) {
+    const [tab, setTab] = useState("overview");
     const linkDest = media._type === "movie" ? `/player/${media._id}` : `/series/${media._id}`;
     const config = TYPE_CONFIG[media._type] || TYPE_CONFIG.movie;
     const TypeIcon = config.Icon;
@@ -431,228 +431,260 @@ function DetailsModal({ media, onClose }) {
     const realAudioLang = primaryAudio?.language || media._audioLang;
 
     const linkUrl = typeof window !== "undefined" ? `${window.location.origin}${linkDest}` : linkDest;
+    const tone = TYPE_TONE[media._type] || "primary";
+
+    const specs = [
+        { label: "Resolution", icon: Monitor, tone: "text-info", value: realResolution },
+        { label: "Frame rate", icon: Gauge, tone: "text-success", value: realFps || null },
+        { label: "Bitrate", icon: Database, tone: "text-warning", value: realBitrate ? `${(realBitrate / 1_000_000).toFixed(1)} Mbps` : null },
+        { label: "Audio", icon: Volume2, tone: "text-accent", value: realChannels ? `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` : null },
+    ].filter((x) => x.value);
+
+    const monoRow = (icon, label, value) => (
+        <ModalKV icon={icon} label={label} mono action={value ? <ModalCopyButton text={value} label={label.toLowerCase()} /> : null}>
+            <span title={value}>{value || "—"}</span>
+        </ModalKV>
+    );
+
+    const techGroups = [
+        {
+            label: "Summary",
+            rows: [
+                realResolution && { label: "Resolution", value: realResolution },
+                realRes && { label: "Quality", value: realRes },
+                realFps && { label: "Frame rate", value: realFps },
+                realBitrate && { label: "Bitrate", value: `${(realBitrate / 1_000_000).toFixed(2)} Mbps` },
+                realDuration && { label: "Duration", value: fmtDuration(realDuration) },
+                realSize && { label: "Size", value: fmtBytes(realSize) },
+                media.vcodec && { label: "Video codec", value: media.vcodec },
+                media.acodec && { label: "Audio codec", value: media.acodec },
+                realChannels && { label: "Audio", value: `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` },
+            ].filter(Boolean),
+        },
+        { label: "Container", rows: metaRows(mediaInfo?.container) },
+        { label: "Video stream", rows: metaRows(mediaInfo?.video) },
+        ...(mediaInfo?.audioTracks || []).map((t, i) => ({ label: `Audio track ${i + 1}`, rows: metaRows(t) })),
+        ...(mediaInfo?.subtitleTracks || []).map((t, i) => ({ label: `Subtitle track ${i + 1}`, rows: metaRows(t) })),
+    ].filter((g) => g.rows.length > 0);
+
+    const genres = media.metadata?.genres || [];
+    const cast = media.metadata?.cast || [];
+    const audioCount = mediaInfo?.audioTracks?.length;
+    const subCount = mediaInfo?.subtitleTracks?.length;
 
     return (
-        <Modal onClose={onClose}>
-            {/* Hero section with poster */}
-            {media._poster && (
-                <div className="relative h-28 sm:h-36 overflow-hidden shrink-0">
-                    <img src={media._poster} alt="" className="w-full h-full object-cover scale-110 blur-sm opacity-30" />
-                    <div className="absolute inset-0 bg-linear-to-b from-transparent to-base-200" />
-                    <div className="absolute bottom-3 left-5 flex items-end gap-3">
-                        <div className="w-12 h-17 sm:w-14 sm:h-20 rounded-xl overflow-hidden ring-2 ring-white/20 shadow-xl shrink-0">
-                            <img src={media._poster} alt="" className="w-full h-full object-cover" />
-                        </div>
-                        <div className="pb-1">
-                            <div className="flex items-center gap-2 mb-1">
-                                <Badge label={media._typeLabel} variant={media._type} />
-                                {media._year && <span className="text-[10px] text-white/75 font-medium">{media._year}</span>}
-                            </div>
-                            <h2 className="font-bold text-sm sm:text-base text-white leading-tight max-w-56 sm:max-w-65 truncate">{media._title}</h2>
-                        </div>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="absolute top-3 right-3 w-7 h-7 rounded-lg bg-black/50 flex items-center justify-center text-white/90 hover:text-white hover:bg-black/70 transition-colors cursor-pointer">
-                        <X size={14} />
-                    </button>
-                </div>
-            )}
-
-            {!media._poster && <ModalHeader title={media._title} subtitle={media._filename} onClose={onClose} poster={media._poster} typeBadge={{ label: media._typeLabel, type: media._type }} />}
-
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 scrollbar-none">
-                {/* Quick stats */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {[
-                        { label: "Year", value: media._year || "—", icon: Calendar },
-                        { label: "Quality", value: realRes ? `${realRes}${video ? ` · ${video.width}×${video.height}` : ""}` : "—", icon: Star },
-                        { label: "Duration", value: fmtDuration(realDuration), icon: Layers },
-                        { label: "Size", value: fmtBytes(realSize), icon: HardDrive },
-                    ].map(({ label, value, icon: Icon }) => (
-                        <div key={label} className="bg-base-300 border border-white/8 rounded-xl p-3 text-center">
-                            <Icon size={13} className="mx-auto mb-1 text-white/85" strokeWidth={2} />
-                            <p className="text-[9px] font-semibold uppercase tracking-widest text-white/85 mb-1">{label}</p>
-                            <p className="text-xs font-bold text-white tabular-nums leading-tight">{value}</p>
-                        </div>
-                    ))}
-                </div>
-
-                {/* Overview */}
-                {media.metadata?.overview && (
-                    <div>
-                        <SectionLabel label="Overview" />
-                        {media.metadata?.tagline && <p className="text-xs italic text-white/70 mb-1.5">"{media.metadata.tagline}"</p>}
-                        <p className="text-xs text-white/90 leading-relaxed line-clamp-4">{media.metadata.overview}</p>
-                    </div>
-                )}
-
-                {/* Genres */}
-                {media.metadata?.genres?.length > 0 && (
-                    <div>
-                        <SectionLabel label="Genres" />
-                        <div className="flex flex-wrap gap-1.5">
-                            {media.metadata.genres.map((g) => (
-                                <span key={g} className="px-2.5 py-1 rounded-lg bg-primary/15 border border-primary/40 text-[10px] font-medium text-primary/90">
-                                    {g}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Cast */}
-                {media.metadata?.cast?.length > 0 && (
-                    <div>
-                        <SectionLabel label="Cast" />
-                        <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
-                            {media.metadata.cast.slice(0, 8).map((c) => (
-                                <div key={c.name} className="flex flex-col items-center gap-1 shrink-0 w-14 text-center">
-                                    <div className="w-12 h-12 rounded-full overflow-hidden bg-base-300 ring-1 ring-white/10 shrink-0">
-                                        {c.photo ? <img src={c.photo} alt="" className="w-full h-full object-cover" /> : <User size={16} className="text-white/40 m-auto mt-3" />}
-                                    </div>
-                                    <p className="text-[9px] font-semibold text-white leading-tight truncate w-full">{c.name}</p>
-                                    {c.character && <p className="text-[8px] text-white/60 leading-tight truncate w-full">{c.character}</p>}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Technical — real ffprobe-backed spec sheet, not just filename guesses */}
-                {(media.vcodec || media.acodec || realResolution) && (
-                    <div>
-                        <SectionLabel label="Technical" />
-                        <div className="flex items-center gap-2 flex-wrap mb-2.5">
-                            {media.vcodec && <CodecChip label={media.vcodec} />}
-                            {media.acodec && <CodecChip label={media.acodec} />}
-                            {realRes && <QualityChip label={realRes} />}
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            {[
-                                { label: "Resolution", value: realResolution },
-                                { label: "Frame Rate", value: realFps || null },
-                                { label: "Bitrate", value: realBitrate ? `${(realBitrate / 1_000_000).toFixed(1)} Mbps` : null },
-                                { label: "Audio", value: realChannels ? `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` : null },
-                            ]
-                                .filter((s) => s.value)
-                                .map((s) => (
-                                    <div key={s.label} className="bg-base-300 border border-white/8 rounded-lg px-2.5 py-2">
-                                        <p className="text-[8px] font-semibold uppercase tracking-widest text-white/70 mb-0.5">{s.label}</p>
-                                        <p className="text-[11px] font-bold text-white tabular-nums">{s.value}</p>
-                                    </div>
-                                ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* File details */}
-                <div>
-                    <SectionLabel label="File Information" />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-                        <InfoRow
-                            label="Library"
-                            value={
-                                <span className="flex items-center gap-1.5 text-sm">
-                                    <FolderOpen size={12} className="text-white/85 shrink-0" strokeWidth={2} />
-                                    {media._library}
-                                </span>
-                            }
-                            full
-                        />
-                        <InfoRow label="Added" value={fmtDate(realAdded)} />
-                        {media.metadata?.rating && (
-                            <InfoRow
-                                label="TMDB Rating"
-                                value={
-                                    <span className="flex items-center gap-1">
-                                        <Star size={12} className="text-warning fill-warning" strokeWidth={2} />
-                                        {media.metadata.rating}
-                                    </span>
-                                }
-                            />
+        <ModalShell onClose={onClose} labelledBy="media-details-t">
+            <ModalHeader
+                id="media-details-t"
+                avatar={<PosterThumb src={media._poster} Icon={TypeIcon} />}
+                title={media._title}
+                subtitle={<span className="font-mono">{media._filename}</span>}
+                badges={
+                    <>
+                        <ModalBadge tone={tone} icon={TypeIcon}>
+                            {media._typeLabel}
+                        </ModalBadge>
+                        {media._year && <ModalBadge>{media._year}</ModalBadge>}
+                        {realRes && <ModalBadge tone={realRes === "4K" ? "warning" : realRes === "1080p" ? "success" : "info"}>{realRes}</ModalBadge>}
+                        {media._permission ? (
+                            <ModalBadge tone="success" icon={Shield}>
+                                Normal
+                            </ModalBadge>
+                        ) : (
+                            <ModalBadge tone="error" icon={ShieldOff}>
+                                Restricted
+                            </ModalBadge>
                         )}
-                        {media.metadata?.status && <InfoRow label="Status" value={media.metadata.status} />}
-                        {media.metadata?.language && <InfoRow label="Language" value={media.metadata.language.toUpperCase()} />}
-                        <InfoRow
-                            label="Access"
-                            value={
-                                media._permission ? (
-                                    <span className="inline-flex items-center gap-1 text-success">
-                                        <Shield size={12} strokeWidth={2} /> Normal
-                                    </span>
-                                ) : (
-                                    <span className="inline-flex items-center gap-1 text-error">
-                                        <ShieldOff size={12} strokeWidth={2} /> Restricted
-                                    </span>
-                                )
-                            }
+                    </>
+                }
+                onClose={onClose}
+            />
+            <ModalTabs
+                value={tab}
+                onChange={setTab}
+                tabs={[
+                    { id: "overview", label: "Overview", icon: Info },
+                    { id: "technical", label: "Technical", icon: Monitor },
+                    { id: "file", label: "File", icon: FolderOpen },
+                ]}
+            />
+            <ModalContent>
+                {tab === "overview" && (
+                    <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" className="flex shrink-0 flex-col gap-4">
+                        <ModalStats
+                            items={[
+                                { icon: Calendar, tone: "text-info", label: "Year", value: media._year || "—" },
+                                { icon: Star, tone: "text-warning", label: "Quality", value: realRes ? `${realRes}${video ? ` · ${video.width}×${video.height}` : ""}` : "—" },
+                                { icon: Clock, tone: "text-accent", label: "Duration", value: fmtDuration(realDuration) },
+                                { icon: HardDrive, tone: "text-success", label: "Size", value: fmtBytes(realSize) },
+                            ]}
                         />
-                        <InfoRow label="Player Link" value={linkUrl} mono full copyText={linkUrl} />
-                        <InfoRow label="File Path" value={media._path} mono full copyText={media._path} />
-                        <InfoRow label="Media ID" value={media._id} mono full copyText={media._id} />
-                    </div>
-                </div>
-            </div>
 
-            <ModalFooter>
-                <button onClick={onClose} className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                    Close
-                </button>
-                <Link
-                    to={linkDest}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer flex items-center gap-1.5">
-                    <Play size={13} className="ml-0.5" strokeWidth={2.2} />
-                    Play Now
+                        <ModalSection label="Overview">
+                            <div className={`${PANEL} flex flex-col gap-2 p-4`}>
+                                {media.metadata?.overview ? (
+                                    <>
+                                        {media.metadata?.tagline && <p className="text-xs italic text-base-content/60">“{media.metadata.tagline}”</p>}
+                                        <p className="text-[13px] leading-relaxed text-base-content/90">{media.metadata.overview}</p>
+                                    </>
+                                ) : (
+                                    <p className="flex items-center gap-2 text-[13px] text-base-content/55">
+                                        <Info size={15} className="shrink-0 text-info" />
+                                        No description yet. Metadata comes from TMDB once this title is matched.
+                                    </p>
+                                )}
+                            </div>
+                        </ModalSection>
+
+                        <ModalSection label="Genres">
+                            {genres.length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                    {genres.map((g) => (
+                                        <ModalBadge key={g} tone="primary">
+                                            {g}
+                                        </ModalBadge>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="text-[13px] text-base-content/50">No genres yet.</p>
+                            )}
+                        </ModalSection>
+                    </div>
+                )}
+
+                {tab === "technical" && (
+                    <div role="tabpanel" id="panel-technical" aria-labelledby="tab-technical" className="flex flex-1 flex-col gap-4">
+                        {techGroups.length === 0 ? (
+                            <ModalCallout tone="info" compact>
+                                No technical details available for this title yet.
+                            </ModalCallout>
+                        ) : (
+                            <div className={`${PANEL} overflow-hidden`}>
+                                <table className="w-full table-fixed border-collapse text-left text-[13px]">
+                                    <thead>
+                                        <tr className="border-b border-base-content/10 bg-base-content/5 text-xs text-base-content/65">
+                                            <th className="w-2/5 px-4 py-2.5 font-medium">Property</th>
+                                            <th className="px-4 py-2.5 font-medium">Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {techGroups.map((g) => (
+                                            <Fragment key={g.label}>
+                                                <tr className="border-y border-base-content/10 bg-base-200/60">
+                                                    <td colSpan={2} className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-base-content/60">
+                                                        {g.label}
+                                                    </td>
+                                                </tr>
+                                                {g.rows.map((r) => (
+                                                    <tr key={`${g.label}-${r.label}`} className="border-b border-base-content/10 last:border-b-0">
+                                                        <td className="px-4 py-2.5 align-top text-xs text-base-content/60">{r.label}</td>
+                                                        <td className="break-words px-4 py-2.5 align-top text-base-content tabular-nums">{r.value}</td>
+                                                    </tr>
+                                                ))}
+                                            </Fragment>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {tab === "file" && (
+                    <div role="tabpanel" id="panel-file" aria-labelledby="tab-file" className="flex shrink-0 flex-col gap-4">
+                        <ModalSection label="File information">
+                            <ModalRows>
+                                <ModalKV icon={FolderOpen} tone="text-primary" label="Library">
+                                    {media._library || "—"}
+                                </ModalKV>
+                                <ModalKV icon={Calendar} tone="text-info" label="Added">
+                                    {fmtDate(realAdded)}
+                                </ModalKV>
+                                {media.metadata?.rating && (
+                                    <ModalKV icon={Star} tone="text-warning" label="TMDB rating">
+                                        <span className="tabular-nums">{media.metadata.rating}</span>
+                                    </ModalKV>
+                                )}
+                                {media.metadata?.status && (
+                                    <ModalKV icon={Info} label="Status">
+                                        {media.metadata.status}
+                                    </ModalKV>
+                                )}
+                                {media.metadata?.language && (
+                                    <ModalKV icon={Languages} label="Language">
+                                        {media.metadata.language.toUpperCase()}
+                                    </ModalKV>
+                                )}
+                                <ModalKV icon={media._permission ? Shield : ShieldOff} tone={media._permission ? "text-success" : "text-error"} label="Access">
+                                    <span className={media._permission ? "text-success" : "text-error"}>{media._permission ? "Normal" : "Restricted"}</span>
+                                </ModalKV>
+                            </ModalRows>
+                        </ModalSection>
+
+                        <ModalSection label="Links & IDs">
+                            <ModalRows>
+                                {monoRow(Play, "Player link", linkUrl)}
+                                {monoRow(FolderOpen, "File path", media._path)}
+                                {monoRow(Database, "Media ID", media._id)}
+                            </ModalRows>
+                        </ModalSection>
+                    </div>
+                )}
+            </ModalContent>
+            <ModalFooter note="Read only">
+                <ModalButton onClick={onClose}>Close</ModalButton>
+                <Link to={linkDest} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-primary gap-1.5 rounded-md border border-primary hover:brightness-110 [--depth:0] [--noise:0]">
+                    <Play size={14} />
+                    Play now
                 </Link>
             </ModalFooter>
-        </Modal>
+        </ModalShell>
     );
 }
 
 // ─── Delete Modal ─────────────────────────────────────────────────────────────
 
 function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
+    const TypeIcon = (TYPE_CONFIG[media._type] || TYPE_CONFIG.movie).Icon;
     return (
-        <Modal onClose={onClose}>
-            <ModalHeader title="Delete Media" subtitle="This action cannot be undone" onClose={onClose} />
-
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 scrollbar-none">
-                {error && (
-                    <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                        <AlertTriangle size={13} className="shrink-0" />
-                        <span>{error.message || "Failed to delete"}</span>
+        <ConfirmModal
+            open
+            badge={false}
+            onClose={onClose}
+            onConfirm={() => onConfirm(media._id)}
+            loading={isPending}
+            error={error ? error.message || "Failed to delete" : null}
+            variant="danger"
+            title={`Delete ${media._title}?`}
+            subtitle={<span className="font-mono">{media._filename}</span>}
+            confirmIcon={Trash2}
+            confirmText="Delete media"
+            timeline={[
+                { icon: Database, tone: "text-error", title: "Always", text: "This entry is removed from the database." },
+                { icon: AlertTriangle, tone: "text-warning", title: "Depends on server settings", text: "The physical file may also be removed." },
+            ]}
+            note="This action cannot be undone."
+            noteTone="error">
+            <ModalSection label="You are about to delete">
+                <div className={`${PANEL} flex items-center gap-4 px-4 py-3`}>
+                    <PosterThumb src={media._poster} Icon={TypeIcon} />
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-base-content">{media._title}</p>
+                        <p className="truncate font-mono text-xs text-base-content/55">{media._filename}</p>
                     </div>
-                )}
-
-                <div className="flex items-start gap-3 bg-error/10 border border-error/20 rounded-xl p-4">
-                    <div className="w-8 h-8 rounded-lg bg-error/20 flex items-center justify-center shrink-0">
-                        <Trash2 size={15} className="text-error" strokeWidth={2} />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="text-sm font-bold text-white truncate">{media._title}</p>
-                        <p className="text-[10px] font-mono text-white/85 truncate mt-0.5">{media._filename}</p>
-                    </div>
+                    <ModalBadge tone={TYPE_TONE[media._type] || "primary"} icon={TypeIcon}>
+                        {media._typeLabel}
+                    </ModalBadge>
                 </div>
-
-                <p className="text-xs text-white/90 leading-relaxed">Deletes this entry from the database. Depending on server settings, the physical file may also be removed.</p>
-            </div>
-
-            <ModalFooter>
-                <button onClick={onClose} className="btn btn-sm btn-ghost rounded-xl text-white/60 hover:text-white hover:bg-white/8 focus:outline-none">
-                    Cancel
-                </button>
-                <button
-                    onClick={() => onConfirm(media._id)}
-                    disabled={isPending}
-                    className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                    {isPending ? <Loader2 size={12} className="animate-spin" strokeWidth={2.2} /> : <Trash2 size={12} strokeWidth={2.2} />}
-                    {isPending ? "Deleting…" : "Delete"}
-                </button>
-            </ModalFooter>
-        </Modal>
+            </ModalSection>
+            <ModalStats
+                items={[
+                    { icon: Calendar, tone: "text-info", label: "Year", value: media._year || "—" },
+                    { icon: HardDrive, tone: "text-success", label: "Size", value: fmtBytes(media._size) },
+                    { icon: FolderOpen, tone: "text-primary", label: "Library", value: media._library || "—" },
+                ]}
+            />
+        </ConfirmModal>
     );
 }
 

@@ -48,6 +48,22 @@ async function validateStreamToken(req, res, next) {
             return res.status(401).json({ error: "Stream token expired" });
         }
 
+        // Stream tokens die with their session, and never outlive account approval / deletion.
+        const u = streamToken.user;
+        if (!u || u.status !== "approved") {
+            return res.status(403).json({ error: "Account not approved", code: u?.status === "deleted" ? "ACCOUNT_DELETED" : "NOT_APPROVED" });
+        }
+        if (u.accessType === "temporary" && u.accessExpiresAt && Date.now() > new Date(u.accessExpiresAt).getTime()) {
+            return res.status(403).json({ error: "Access expired", code: "ACCESS_EXPIRED" });
+        }
+        if (streamToken.sessionId) {
+            const s = await prisma.session.findUnique({ where: { id: streamToken.sessionId }, select: { isActive: true, expiresAt: true, lastSeenAt: true } });
+            if (!s || !require("../services/tokenService").isSessionLive(s)) {
+                await prisma.streamToken.delete({ where: { id: streamToken.id } }).catch(() => {});
+                return res.status(401).json({ error: "Session revoked", code: "SESSION_REVOKED" });
+            }
+        }
+
         // Attach user to request
         const { parsePermissions } = require("../services/permissionService");
         req.user = streamToken.user;

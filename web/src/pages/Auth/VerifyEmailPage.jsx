@@ -1,31 +1,46 @@
-import React, { useState, useRef } from "react";
-import { useNavigate, useLocation, Link } from "react-router";
+import { useState, useRef, useEffect } from "react";
+import { useNavigate, useLocation, Navigate } from "react-router";
 import { useAuth } from "../../auth/AuthContext";
+import { postAuthPath } from "../../auth/accountRouting";
+import { FullScreenSpinner } from "../../auth/AuthGate";
+import { MailCheck } from "lucide-react";
+import { AuthPanel, AuthHeading, AuthAlert, AuthSubmit, AuthBadge } from "../../Components/auth/AuthUI";
 
+const RESEND_COOLDOWN_SEC = 60;
+
+// The account being verified comes from the signed-in (restricted) session — not from router state —
+// so this page survives a refresh, a closed tab or a re-opened browser.
 export default function VerifyEmailPage() {
-    const { verifyEmail, resendOTP } = useAuth();
+    const { user, loading: authLoading, verifyEmail, resendOTP, logout } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
 
-    const { userId, email } = location.state || {};
+    const email = user?.email;
     const [code, setCode] = useState(["", "", "", "", "", ""]);
     const [loading, setLoading] = useState(false);
     const [resending, setResending] = useState(false);
-    const [error, setError] = useState(null);
+    // arriving from sign-up / sign-in when the server could NOT send the code: say so instead of waiting for a mail that will never come
+    const [error, setError] = useState(location.state?.emailFailed ? "We couldn’t send the verification email. Press Resend code to try again, or ask the administrator to check the mail settings." : null);
     const [success, setSuccess] = useState(null);
+    // A code was just e-mailed when we arrive from register/login → start the resend cooldown.
+    const [cooldown, setCooldown] = useState(location.state?.codeSent ? RESEND_COOLDOWN_SEC : 0);
 
     const inputRefs = useRef([]);
 
-    if (!userId) {
-        return (
-            <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-                <div className="text-center">
-                    <p className="text-base-content/60 mb-4">No verification session found.</p>
-                    <Link to="/register" className="btn btn-primary">Register</Link>
-                </div>
-            </div>
-        );
-    }
+    useEffect(() => {
+        if (cooldown <= 0) return undefined;
+        const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+        return () => clearTimeout(t);
+    }, [cooldown]);
+
+    useEffect(() => {
+        inputRefs.current[0]?.focus();
+    }, [authLoading]);
+
+    if (authLoading) return <FullScreenSpinner />;
+    if (!user) return <Navigate to="/login" replace />;
+    // Already verified (e.g. verified in another tab / refreshed after success): go where the account belongs.
+    if (user.emailVerified && !success) return <Navigate to={postAuthPath(user)} replace />;
 
     function handleDigit(idx, val) {
         if (!/^\d*$/.test(val)) return;
@@ -65,11 +80,15 @@ export default function VerifyEmailPage() {
         setLoading(true);
 
         try {
-            await verifyEmail(userId, fullCode);
-            setSuccess("Email verified! Redirecting...");
-            setTimeout(() => navigate("/pending", { replace: true }), 1500);
+            // Validates the code on the server, marks the e-mail verified and returns the
+            // authoritative account (status, canPlay…). Verification never grants playback by itself.
+            const verifiedUser = await verifyEmail(fullCode);
+            setSuccess("Email verified! Taking you to FLUX…");
+            setTimeout(() => navigate(postAuthPath(verifiedUser), { replace: true }), 900);
         } catch (err) {
-            setError(err.message || "Verification failed");
+            if (err.apiCode === "OTP_EXPIRED") setError("This code has expired. Request a new one below.");
+            else if (err.apiCode === "OTP_LOCKED" || err.status === 429) setError(err.message || "Too many attempts. Please wait a moment and try again.");
+            else setError(err.message || "Verification failed");
             setCode(["", "", "", "", "", ""]);
             inputRefs.current[0]?.focus();
         } finally {
@@ -81,97 +100,89 @@ export default function VerifyEmailPage() {
         setResending(true);
         setError(null);
         try {
-            await resendOTP(userId);
+            await resendOTP();
             setSuccess("New code sent!");
+            setCooldown(RESEND_COOLDOWN_SEC);
             setTimeout(() => setSuccess(null), 3000);
         } catch (err) {
+            if (err.retryAfterSec) setCooldown(Math.min(err.retryAfterSec, 3600));
             setError(err.message || "Failed to resend code");
         } finally {
             setResending(false);
         }
     }
 
+    async function handleSignOut() {
+        await logout();
+        navigate("/login", { replace: true });
+    }
+
     return (
-        <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-            <div className="w-full max-w-md">
-                <div className="text-center mb-8">
-                    <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
-                        <span className="text-3xl">📧</span>
+        <AuthPanel>
+            <AuthBadge icon={MailCheck} />
+            <AuthHeading
+                persistent
+                title="Check your email"
+                subtitle={
+                    <>
+                        We sent a 6-digit code to <span className="font-medium text-base-content [overflow-wrap:anywhere]">{email}</span>. It expires in 10 minutes.
+                    </>
+                }
+            />
+
+            {error && <AuthAlert>{error}</AuthAlert>}
+            {success && <AuthAlert kind="success">{success}</AuthAlert>}
+
+            <form onSubmit={handleVerify}>
+                <fieldset className="min-w-0" disabled={loading || !!success && success.startsWith("Email verified")}>
+                    <legend className="sr-only">Verification code</legend>
+                    <div className="grid grid-cols-6 gap-2 sm:gap-2.5" onPaste={handlePaste}>
+                        {code.map((digit, idx) => (
+                            <input
+                                key={idx}
+                                id={`otp-${idx}`}
+                                ref={(el) => (inputRefs.current[idx] = el)}
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete={idx === 0 ? "one-time-code" : "off"}
+                                pattern="\d"
+                                maxLength={1}
+                                value={digit}
+                                onChange={(e) => handleDigit(idx, e.target.value)}
+                                onKeyDown={(e) => handleKeyDown(idx, e)}
+                                onFocus={(e) => e.target.select()}
+                                aria-label={`Digit ${idx + 1} of 6`}
+                                className={`h-[calc(var(--auth-field)*1.25)] min-w-0 w-full rounded-lg border bg-base-200/70 px-0 text-center text-xl font-semibold text-base-content outline-none transition-colors
+                                    focus:border-primary focus:bg-base-200 focus:ring-2 focus:ring-primary/30 ${digit ? "border-primary/50" : "border-base-content/12"}`}
+                            />
+                        ))}
                     </div>
-                    <h1 className="text-2xl font-bold text-base-content mb-2">Check your email</h1>
-                    <p className="text-base-content/50 text-sm">
-                        We sent a 6-digit code to{" "}
-                        <span className="text-base-content font-medium">{email || "your email"}</span>
-                    </p>
+                </fieldset>
+
+                <div className="mt-[var(--auth-gap-lg)]">
+                    <AuthSubmit id="otp-verify-btn" loading={loading} loadingText="Verifying…" disabled={loading || code.join("").length < 6}>
+                        Verify email
+                    </AuthSubmit>
                 </div>
+            </form>
 
-                <div className="bg-base-200 rounded-2xl p-8 shadow-xl border border-base-300">
-                    {error && (
-                        <div className="alert alert-error mb-6 text-sm py-3">
-                            <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
-                            </svg>
-                            {error}
-                        </div>
-                    )}
-                    {success && (
-                        <div className="alert alert-success mb-6 text-sm py-3">
-                            <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
-                            </svg>
-                            {success}
-                        </div>
-                    )}
-
-                    <form onSubmit={handleVerify}>
-                        {/* OTP digit inputs */}
-                        <div className="flex gap-3 justify-center mb-6" onPaste={handlePaste}>
-                            {code.map((digit, idx) => (
-                                <React.Fragment key={idx}>
-                                    <label htmlFor={`otp-digit-${idx}`} className="sr-only">Digit {idx + 1}</label>
-                                    <input
-                                        id={`otp-digit-${idx}`}
-                                        name={`otp-digit-${idx}`}
-                                        autoComplete="one-time-code"
-                                        ref={(el) => (inputRefs.current[idx] = el)}
-                                        type="text"
-                                        inputMode="numeric"
-                                    maxLength={1}
-                                    value={digit}
-                                    onChange={(e) => handleDigit(idx, e.target.value)}
-                                    onKeyDown={(e) => handleKeyDown(idx, e)}
-                                        className="w-12 h-14 text-center text-xl font-bold input input-bordered bg-base-100 focus:border-primary"
-                                    />
-                                </React.Fragment>
-                            ))}
-                        </div>
-
-                        <button
-                            id="otp-verify-btn"
-                            type="submit"
-                            className="btn btn-primary w-full"
-                            disabled={loading || code.join("").length < 6}
-                        >
-                            {loading ? <span className="loading loading-spinner loading-sm"></span> : "Verify email"}
-                        </button>
-                    </form>
-
-                    <div className="text-center mt-6">
-                        <p className="text-sm text-base-content/50">
-                            Didn't receive the code?{" "}
-                            <button
-                                id="otp-resend-btn"
-                                type="button"
-                                className="text-primary hover:underline font-medium disabled:opacity-50"
-                                onClick={handleResend}
-                                disabled={resending}
-                            >
-                                {resending ? "Sending..." : "Resend"}
-                            </button>
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
+            <p className="mt-[var(--auth-gap-lg)] text-center text-sm text-base-content/60">
+                Didn’t get it?{" "}
+                <button
+                    id="otp-resend-btn"
+                    type="button"
+                    onClick={handleResend}
+                    disabled={resending || cooldown > 0}
+                    className="font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:text-base-content/40 disabled:no-underline">
+                    {resending ? "Sending…" : cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+                </button>
+            </p>
+            <p className="mt-2 text-center text-xs text-base-content/45">
+                Wrong account?{" "}
+                <button id="otp-signout-btn" type="button" className="underline decoration-base-content/30 underline-offset-2 hover:text-base-content/80" onClick={handleSignOut}>
+                    Sign out
+                </button>
+            </p>
+        </AuthPanel>
     );
 }

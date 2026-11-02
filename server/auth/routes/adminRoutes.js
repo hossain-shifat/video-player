@@ -4,6 +4,10 @@
  * auth/routes/adminRoutes.js
  * Admin-only APIs for user management.
  * All routes require: JWT + approved + admin role.
+ * NOTE: admins manage ACCOUNTS here (approve / reject / block / permissions). There is intentionally
+ * NO route that revokes another user's sessions or logs their devices out. Blocking works through
+ * status checks (requireApprovedUser etc.), and deletion is the separate recoverable lifecycle in
+ * /api/admin-dashboard (DELETE /users/:id).
  */
 
 const express = require("express");
@@ -14,7 +18,13 @@ const { authenticateJWT } = require("../middleware/authenticateJWT");
 const { requireApprovedUser } = require("../middleware/requireApprovedUser");
 const { requireRole } = require("../middleware/requireRole");
 const { parsePermissions, serializePermissions } = require("../services/permissionService");
-const { sendApprovalEmail } = require("../services/emailService");
+const { notifyApproved } = require("../services/emailService");
+const notificationService = require("../../services/notificationService");
+const { syncPlaybackAccess } = require("../services/playbackRevocation");
+
+// Snapshot of what a user could be told about (status + access duration) before an admin changes it.
+const accountSnapshot = (id) => prisma.user.findUnique({ where: { id }, select: { status: true, accessType: true, accessExpiresAt: true } });
+const { summarizeDevicesForAdmin } = require("../services/tokenService");
 
 // All admin routes require: authenticated + approved + admin
 router.use(authenticateJWT, requireApprovedUser, requireRole("admin"));
@@ -61,7 +71,7 @@ router.get("/users/:id", async (req, res) => {
     try {
         const user = await prisma.user.findUnique({
             where: { id: req.params.id },
-            include: { _count: { select: { sessions: true, profiles: true } } },
+            include: { _count: { select: { sessions: true, devices: true } } },
         });
 
         if (!user) return res.status(404).json({ error: "User not found" });
@@ -83,13 +93,18 @@ router.get("/users/:id", async (req, res) => {
 // ─── PATCH /admin/users/:id/approve ───────────────────────────────────────────
 router.patch("/users/:id/approve", async (req, res) => {
     try {
+        const before = await accountSnapshot(req.params.id);
         const user = await prisma.user.update({
-            where: { id: req.params.id },
+            where: { id: req.params.id, deletedAt: null },
             data: { status: "approved" },
         });
 
-        // Notify user via email
-        sendApprovalEmail(user.email, user.name).catch(() => {});
+        await syncPlaybackAccess(user);
+
+        // Notify user via email (only on a real pending/rejected/blocked → approved change)
+        if (before?.status !== "approved") notifyApproved(user).catch(() => {});
+
+        notificationService.notifyAccountChange({ userId: user.id, before, after: user }).catch(() => {});
 
         res.json({ message: "User approved", userId: user.id, status: user.status });
     } catch (err) {
@@ -102,10 +117,13 @@ router.patch("/users/:id/approve", async (req, res) => {
 // ─── PATCH /admin/users/:id/reject ────────────────────────────────────────────
 router.patch("/users/:id/reject", async (req, res) => {
     try {
+        const before = await accountSnapshot(req.params.id);
         const user = await prisma.user.update({
-            where: { id: req.params.id },
+            where: { id: req.params.id, deletedAt: null },
             data: { status: "rejected" },
         });
+        await syncPlaybackAccess(user);
+        notificationService.notifyAccountChange({ userId: user.id, before, after: user }).catch(() => {});
         res.json({ message: "User rejected", userId: user.id, status: user.status });
     } catch (err) {
         if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
@@ -117,17 +135,16 @@ router.patch("/users/:id/reject", async (req, res) => {
 // ─── PATCH /admin/users/:id/block ─────────────────────────────────────────────
 router.patch("/users/:id/block", async (req, res) => {
     try {
-        // Also revoke all sessions
-        await prisma.session.updateMany({
-            where: { userId: req.params.id },
-            data: { isActive: false },
-        });
-
+        // Block = status change only. Access stops immediately because every protected route checks
+        // status; sessions are NOT revoked here (admins have no session-revocation power).
+        const before = await accountSnapshot(req.params.id);
         const user = await prisma.user.update({
-            where: { id: req.params.id },
+            where: { id: req.params.id, deletedAt: null },
             data: { status: "blocked" },
         });
-        res.json({ message: "User blocked and all sessions revoked", userId: user.id });
+        await syncPlaybackAccess(user);
+        notificationService.notifyAccountChange({ userId: user.id, before, after: user }).catch(() => {});
+        res.json({ message: "User blocked", userId: user.id });
     } catch (err) {
         if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
         console.error("[Admin] Block user error:", err);
@@ -139,7 +156,7 @@ router.patch("/users/:id/block", async (req, res) => {
 router.patch("/users/:id/permissions", async (req, res) => {
     try {
         const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
-        if (!existing) return res.status(404).json({ error: "User not found" });
+        if (!existing || existing.deletedAt) return res.status(404).json({ error: "User not found" });
 
         const currentPerms = parsePermissions(existing.permissionsJson);
         const { permissions, accessType, accessExpiresAt } = req.body;
@@ -153,9 +170,11 @@ router.patch("/users/:id/permissions", async (req, res) => {
         }
 
         const user = await prisma.user.update({
-            where: { id: req.params.id },
+            where: { id: req.params.id, deletedAt: null },
             data: updateData,
         });
+        // Access-duration changes (accessType / accessExpiresAt) are reported to that user.
+        notificationService.notifyAccountChange({ userId: user.id, before: existing, after: user }).catch(() => {});
 
         res.json({
             message: "Permissions updated",
@@ -171,59 +190,16 @@ router.patch("/users/:id/permissions", async (req, res) => {
 });
 
 // ─── GET /admin/users/:id/sessions ────────────────────────────────────────────
+// Permitted summary only (counts, browser/OS, timestamps). No IPs, user agents, session ids,
+// fingerprints, or the owner's custom device names.
 router.get("/users/:id/sessions", async (req, res) => {
     try {
-        const sessions = await prisma.session.findMany({
-            where: { userId: req.params.id },
-            orderBy: { lastSeenAt: "desc" },
-            select: {
-                id: true,
-                deviceFingerprint: true,
-                deviceName: true,
-                browser: true,
-                os: true,
-                isActive: true,
-                createdAt: true,
-                lastSeenAt: true,
-            },
-        });
-
-        // Deduplicate by deviceFingerprint
-        const seenDevices = new Set();
-        const uniqueSessions = [];
-        for (const s of sessions) {
-            if (!seenDevices.has(s.deviceFingerprint)) {
-                seenDevices.add(s.deviceFingerprint);
-                uniqueSessions.push(s);
-            }
-        }
-
-        // Strip deviceFingerprint before sending
-        const mappedSessions = uniqueSessions.map(s => {
-            const copy = { ...s };
-            delete copy.deviceFingerprint;
-            return copy;
-        });
-
-        res.json({ sessions: mappedSessions, total: mappedSessions.length });
+        const exists = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+        if (!exists) return res.status(404).json({ error: "User not found" });
+        res.json(await summarizeDevicesForAdmin(req.params.id));
     } catch (err) {
-        console.error("[Admin] Get user sessions error:", err);
-        res.status(500).json({ error: "Failed to get sessions" });
-    }
-});
-
-// ─── DELETE /admin/sessions/:id ───────────────────────────────────────────────
-router.delete("/sessions/:id", async (req, res) => {
-    try {
-        await prisma.session.update({
-            where: { id: req.params.id },
-            data: { isActive: false },
-        });
-        res.json({ message: "Session revoked" });
-    } catch (err) {
-        if (err.code === "P2025") return res.status(404).json({ error: "Session not found" });
-        console.error("[Admin] Revoke session error:", err);
-        res.status(500).json({ error: "Failed to revoke session" });
+        console.error("[Admin] Get user devices error:", err);
+        res.status(500).json({ error: "Failed to get devices" });
     }
 });
 

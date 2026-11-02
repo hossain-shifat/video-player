@@ -10,6 +10,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, Component } from "re
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import Hls from "hls.js";
+import { useNavigate } from "react-router";
 import {
     Tv,
     Satellite,
@@ -29,16 +30,21 @@ import {
     ChevronRight,
     Info,
     Image as ImageIcon,
-    Pencil,
     FileText,
     CheckCircle2,
     XCircle,
     Clock,
     Play,
-    Copy,
     RotateCw,
     AlertCircle,
     Star,
+    Copy,
+    ShieldCheck,
+    SquarePen,
+    RotateCcw,
+    MonitorPlay,
+    EyeOff,
+    Layers,
 } from "lucide-react";
 import {
     getLiveSources,
@@ -61,6 +67,23 @@ import {
     deleteLiveChannel,
 } from "../../api/live";
 import { safeChannel, safeSource } from "../../utils/fallbacks";
+import {
+    ModalShell,
+    ModalHeader,
+    ModalContent,
+    ModalSection,
+    ModalRows,
+    ModalKV,
+    ModalStats,
+    ModalCallout,
+    ModalBullets,
+    ModalReview,
+    ModalCopyButton,
+    ModalFooter,
+    ModalBadge,
+    ModalButton,
+    PANEL,
+} from "../components/ConfirmModal";
 
 const ACCEPTED_EXTENSIONS = ".m3u,.m3u8,.yml,.yaml,.json,.xml,.txt";
 const PAGE_SIZE = 50;
@@ -156,23 +179,6 @@ function Toast({ toast }) {
     );
 }
 
-function CopyIconBtn({ text, title }) {
-    const [copied, setCopied] = useState(false);
-    return (
-        <button
-            onClick={(e) => {
-                e.stopPropagation();
-                navigator.clipboard.writeText(text || "").catch(() => {});
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-            }}
-            title={title}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
-            {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-        </button>
-    );
-}
-
 // ─── Backend-pagination component ─────────────────────────────────────────────
 
 function Pagination({ pagination, onPageChange }) {
@@ -234,34 +240,128 @@ function Pagination({ pagination, onPageChange }) {
     );
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// ─── Modals ───────────────────────────────────────────────────────────────────
+// Same labelled-section design as the Users / Media / Libraries / Storage dialogs (ConfirmModal.jsx).
 
-function Modal({ onClose, title, icon: Icon, children }) {
-    return createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm" onClick={onClose}>
-            <div
-                className="relative w-[min(28rem,96vw)] max-h-[92vh] sm:max-h-[85vh] bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col"
-                style={{ boxShadow: "0 20px 50px rgba(0,0,0,0.45)" }}
-                onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 sm:py-4 border-b border-base-content/8 shrink-0">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                        {Icon && (
-                            <span className="w-8 h-8 rounded-md bg-primary/15 flex items-center justify-center shrink-0">
-                                <Icon size={16} className="text-primary" />
-                            </span>
-                        )}
-                        <h3 className="text-sm font-bold text-white truncate">{title}</h3>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer border-none shrink-0">
-                        <X size={14} />
+const TONE_CLS = { primary: "text-primary", info: "text-info", success: "text-success", warning: "text-warning", error: "text-error", accent: "text-accent" };
+const FIELD = "flex h-[42px] items-center gap-2 rounded-md border border-base-content/15 bg-base-100 px-3 transition-colors focus-within:border-primary/60";
+const FIELD_INPUT = "min-w-0 flex-1 bg-transparent text-[13px] text-base-content outline-none placeholder:text-base-content/40";
+
+const apiError = (e) => e?.response?.data?.message || e?.message;
+const STATUS_TONE = { ready: "success", working: "success", pending: "warning", timeout: "warning", error: "error", offline: "error", checking: "info" };
+const STATUS_ICON = { success: CheckCircle2, warning: Clock, error: AlertCircle, info: Loader2 };
+const cap = (v) => (v ? String(v).charAt(0).toUpperCase() + String(v).slice(1) : "—");
+
+/** Shell + header + body + footer. `dense` tightens the gaps for the tall edit forms. */
+function IptvModal({ id, icon, tone = "primary", avatar, dense = false, title, subtitle, badges, right, busy = false, onClose, error, note, actions, children }) {
+    return (
+        <ModalShell onClose={onClose} busy={busy} labelledBy={id}>
+            <ModalHeader id={id} icon={icon} avatar={avatar} tone={TONE_CLS[tone] || TONE_CLS.primary} title={title} subtitle={subtitle} badges={badges} right={right} onClose={onClose} busy={busy} />
+            <ModalContent className={`${dense ? "!gap-3 !py-4" : ""}`}>
+                {error && (
+                    <ModalCallout tone="error" icon={AlertTriangle} compact>
+                        {error}
+                    </ModalCallout>
+                )}
+                {children}
+            </ModalContent>
+            <ModalFooter note={note}>{actions}</ModalFooter>
+        </ModalShell>
+    );
+}
+
+/** Small muted label above a control. A dot + Reset appear once the field differs from the saved value. */
+function Field({ label, hint, htmlFor, changed = false, onReset, className = "", children }) {
+    return (
+        <section className={`flex shrink-0 flex-col gap-1.5 ${className}`}>
+            <div className="flex min-h-5 items-center justify-between gap-2">
+                <label htmlFor={htmlFor} className="flex items-center gap-1.5 text-xs font-medium text-base-content/65">
+                    {label}
+                    {hint && <span className="font-normal text-base-content/45">· {hint}</span>}
+                    {changed && <span className="size-1.5 rounded-full bg-warning" title="Changed" />}
+                </label>
+                {changed && onReset && (
+                    <button type="button" onClick={onReset} className="inline-flex cursor-pointer items-center gap-1 text-[11px] text-base-content/55 transition-colors hover:text-base-content">
+                        <RotateCcw size={11} />
+                        Reset
                     </button>
-                </div>
-                <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">{children}</div>
+                )}
             </div>
-        </div>,
-        document.body,
+            {children}
+        </section>
+    );
+}
+
+function TextInput({ icon: Icon, changed = false, mono = false, readOnly = false, ...props }) {
+    return (
+        <div className={`${FIELD} ${changed ? "!border-primary/60" : ""} ${readOnly ? "bg-base-200/40" : ""}`}>
+            {Icon && <Icon size={14} className="shrink-0 text-base-content/50" />}
+            <input type="text" readOnly={readOnly} {...props} className={`${FIELD_INPUT} ${mono ? "font-mono text-xs" : ""}`} />
+        </div>
+    );
+}
+
+/** Footer note of the edit dialogs: "● Unsaved changes" or a quiet idle line. */
+function DirtyNote({ dirty }) {
+    return dirty ? (
+        <span className="inline-flex items-center gap-1.5 text-warning">
+            <span className="size-2 rounded-full bg-warning" />
+            Unsaved changes
+        </span>
+    ) : (
+        <span className="text-base-content/60">No changes yet</span>
+    );
+}
+
+/** Split a playlist / stream address into the pieces the info dialogs show. */
+function parseAddress(raw) {
+    try {
+        const u = new URL(String(raw));
+        const file = u.pathname.split("/").filter(Boolean).pop() || "";
+        const ext = file.includes(".") ? file.split(".").pop().toLowerCase() : "";
+        return { ok: true, host: u.host, scheme: u.protocol.replace(":", "").toUpperCase(), secure: u.protocol === "https:", path: `${u.pathname}${u.search}` || "/", file, ext };
+    } catch {
+        return { ok: false };
+    }
+}
+const STREAM_KIND = { m3u8: "HLS", m3u: "HLS", mpd: "MPEG-DASH", ts: "MPEG-TS", mp4: "MP4", mkv: "MKV", flv: "FLV" };
+
+/** Round channel logo (falls back to the initial when missing or broken), used in place of an icon tile. */
+function ChannelLogo({ src, name, size = "size-10" }) {
+    const [bad, setBad] = useState(false);
+    useEffect(() => setBad(false), [src]);
+    const initial = (name || "?").trim()[0]?.toUpperCase() || "?";
+    return (
+        <div className={`${size} grid shrink-0 place-items-center overflow-hidden rounded-full border border-base-content/20 bg-base-300`}>
+            {src && !bad ? (
+                <img src={src} alt="" onError={() => setBad(true)} className="h-full w-full object-contain p-1" />
+            ) : (
+                <span className="text-sm font-medium text-base-content">{initial}</span>
+            )}
+        </div>
+    );
+}
+
+function ModalStatus({ status }) {
+    const tone = STATUS_TONE[status] || "neutral";
+    return (
+        <ModalBadge tone={tone} icon={STATUS_ICON[tone]}>
+            {cap(status)}
+        </ModalBadge>
+    );
+}
+
+/** Panel naming what a delete dialog is about to remove. */
+function TargetCard({ avatar, title, sub, mono = false, badge }) {
+    return (
+        <div className={`${PANEL} flex shrink-0 items-center gap-4 px-4 py-3`}>
+            {avatar}
+            <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-base-content">{title}</p>
+                {sub && <p className={`truncate text-xs text-base-content/55 ${mono ? "font-mono" : ""}`}>{sub}</p>}
+            </div>
+            {badge}
+        </div>
     );
 }
 
@@ -271,6 +371,7 @@ function Modal({ onClose, title, icon: Icon, children }) {
 // can actually preview the stream, and treats 404/503/timeout as retryable
 // network errors instead of a dead end.
 function PlayerModal({ channel, onClose }) {
+    const navigate = useNavigate();
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
     const retriesRef = useRef(0);
@@ -356,35 +457,65 @@ function PlayerModal({ channel, onClose }) {
 
     if (!channel) return null;
 
-    return createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-sm" onClick={onClose}>
-            <div className="relative w-full max-w-3xl bg-base-300 rounded-2xl shadow-2xl border border-base-content/10 overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between px-4 py-3 border-b border-base-content/8 shrink-0">
-                    <h3 className="text-sm font-bold text-white truncate pr-2">{channel.name || "Preview"}</h3>
-                    <button
-                        onClick={onClose}
-                        className="w-7 h-7 rounded-md flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer border-none shrink-0">
-                        <X size={14} />
-                    </button>
-                </div>
-                <div className="relative w-full bg-black aspect-video">
-                    <video ref={videoRef} controls autoPlay playsInline className="w-full h-full" />
-                    {status === "loading" && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <Loader2 size={28} className="text-white/70 animate-spin" />
-                        </div>
-                    )}
-                    {status === "error" && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/85 px-4 text-center">
+    const tone = status === "playing" ? "success" : status === "error" ? "error" : "info";
+    const addr = parseAddress(channel.url);
+    return (
+        <IptvModal
+            id="iptv-player-t"
+            avatar={<ChannelLogo src={channel.logo} name={channel.name} />}
+            title={channel.name || "Preview"}
+            subtitle={[channel.group || channel.category, channel.country].filter(Boolean).join(" · ") || undefined}
+            badges={
+                <ModalBadge tone={tone} icon={STATUS_ICON[tone]}>
+                    {status === "playing" ? "Playing" : status === "error" ? "Error" : "Connecting"}
+                </ModalBadge>
+            }
+            onClose={onClose}
+            note={<span className="block truncate font-mono">{channel.url}</span>}
+            actions={
+                <>
+                    <ModalCopyButton text={channel.url} label="stream URL" />
+                    <ModalButton onClick={onClose}>Close</ModalButton>
+                    <ModalButton
+                        variant="primary"
+                        className="gap-1.5"
+                        onClick={() =>
+                            navigate(`/live/watch/${encodeURIComponent(channel.id ?? "preview")}`, {
+                                state: { streamUrl: channel.url, channelName: channel.name, channelLogo: channel.logo || null },
+                            })
+                        }>
+                        <MonitorPlay size={14} />
+                        Open in player
+                    </ModalButton>
+                </>
+            }>
+            <div className="relative min-h-40 flex-1 overflow-hidden rounded-lg border border-base-content/10 bg-black">
+                <video ref={videoRef} controls autoPlay playsInline className="h-full w-full object-contain" />
+                {status === "loading" && (
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
+                        <span className="grid size-14 place-items-center rounded-full border border-base-content/25 bg-base-content/10">
+                            <Loader2 size={24} className="animate-spin text-base-content/70" />
+                        </span>
+                        <p className="text-xs text-white/70">Connecting</p>
+                    </div>
+                )}
+                {status === "error" && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/85 px-4 text-center">
+                        <span className="grid size-14 place-items-center rounded-full border border-error/35 bg-error/10">
                             <AlertCircle size={24} className="text-error" />
-                            <p className="text-xs text-white/70">{errorMsg}</p>
-                        </div>
-                    )}
-                </div>
-                <div className="px-4 py-2 text-[10px] text-white/35 truncate border-t border-base-content/8 shrink-0">{channel.url}</div>
+                        </span>
+                        <p className="text-xs text-white/70">{errorMsg}</p>
+                    </div>
+                )}
             </div>
-        </div>,
-        document.body,
+            <ModalStats
+                items={[
+                    { icon: Play, tone: "text-info", label: "Stream type", value: addr.ok ? STREAM_KIND[addr.ext] || "Stream" : "—" },
+                    { icon: ShieldCheck, tone: addr.secure ? "text-success" : "text-warning", label: "Protocol", value: addr.ok ? addr.scheme : "—" },
+                    { icon: Globe2, tone: "text-accent", label: "Host", value: addr.ok ? addr.host : "—", mono: true },
+                ]}
+            />
+        </IptvModal>
     );
 }
 
@@ -403,7 +534,7 @@ function RowActions({ onInfo, onEdit, onRefresh, onDelete, refreshing }) {
                 onClick={onEdit}
                 title="Edit"
                 className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
-                <Pencil size={13} />
+                <SquarePen size={13} />
             </button>
             <button
                 onClick={onRefresh}
@@ -536,7 +667,7 @@ function ChannelsTable({ list, loading, pageOffset, emptyTitle, emptySub, getSta
                                             onClick={() => onEdit(ch)}
                                             title="Edit"
                                             className="w-7 h-7 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer">
-                                            <Pencil size={12} />
+                                            <SquarePen size={12} />
                                         </button>
                                         <button
                                             onClick={() => onHide(ch)}
@@ -1301,438 +1432,613 @@ function DashIPTVInner() {
 
             {/* Upload Modal */}
             {uploadOpen && (
-                <Modal onClose={closeUploadModal} title="Upload Playlist" icon={Upload}>
-                    {addUploadMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{addUploadMutation.error?.response?.data?.message || addUploadMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Source Name</label>
-                        <input
-                            type="text"
+                <IptvModal
+                    id="iptv-upload-t"
+                    icon={Upload}
+                    tone="primary"
+                    title="Upload playlist"
+                    subtitle="Add channels from a file"
+                    busy={addUploadMutation.isPending}
+                    onClose={closeUploadModal}
+                    error={addUploadMutation.error ? apiError(addUploadMutation.error) : null}
+                    note={`${uploadFile ? `Detected format: ${detectFormat(uploadFile.name)}` : "No file chosen yet"} · Accepted: ${ACCEPTED_EXTENSIONS.split(",").join(" ")}`}
+                    actions={
+                        <>
+                            <ModalButton onClick={closeUploadModal} disabled={addUploadMutation.isPending}>
+                                Cancel
+                            </ModalButton>
+                            <ModalButton
+                                variant="primary"
+                                className="gap-1.5"
+                                onClick={() => addUploadMutation.mutate({ name: uploadName.trim(), file: uploadFile })}
+                                disabled={!uploadFile}
+                                loading={addUploadMutation.isPending}
+                                loadingText="Uploading…">
+                                <Plus size={14} />
+                                Add source
+                            </ModalButton>
+                        </>
+                    }>
+                    <Field label="Source name" htmlFor="iptv-upload-name">
+                        <TextInput
+                            id="iptv-upload-name"
+                            data-autofocus
+                            changed={!!uploadName.trim()}
                             placeholder="e.g. Sports Bundle"
                             value={uploadName}
                             onChange={(e) => setUploadName(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
                         />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">File</label>
+                    </Field>
+                    <ModalSection label="File" grow>
                         <div
+                            role="button"
+                            tabIndex={0}
                             onClick={() => fileInputRef.current?.click()}
-                            className="rounded-xl border-2 border-dashed border-white/15 hover:border-primary/40 transition-colors cursor-pointer flex flex-col items-center justify-center gap-2 py-7 px-4 text-center">
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    fileInputRef.current?.click();
+                                }
+                            }}
+                            className={`flex min-h-32 flex-1 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 text-center transition-colors ${
+                                uploadFile ? "border-primary/50 bg-base-100" : "border-base-content/25 bg-base-100 hover:border-primary/50"
+                            }`}>
                             <input ref={fileInputRef} type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
-                            <Upload size={20} className="text-white/25" />
+                            <span className={`grid size-12 place-items-center rounded-full border border-base-content/10 bg-base-200 ${uploadFile ? "text-primary" : "text-base-content/60"}`}>
+                                {uploadFile ? <FileText size={20} /> : <Upload size={20} />}
+                            </span>
                             {uploadFile ? (
-                                <p className="text-sm text-white/80 font-medium truncate max-w-full px-2">{uploadFile.name}</p>
+                                <>
+                                    <p className="max-w-full truncate text-sm text-base-content">{uploadFile.name}</p>
+                                    <p className="text-xs text-base-content/55">Click to choose a different file</p>
+                                </>
                             ) : (
                                 <>
-                                    <p className="text-sm text-white/50">Click to choose a file</p>
-                                    <p className="text-[11px] text-white/30">.m3u .m3u8 .yml .yaml .json .xml .txt — up to 50MB</p>
+                                    <p className="text-sm text-base-content">Click to choose a file</p>
+                                    <p className="text-xs text-base-content/55">M3U, M3U8, YAML, JSON, XML or TXT · up to 50 MB</p>
                                 </>
                             )}
                         </div>
-                        {uploadFile && <p className="text-[11px] text-white/35">Detected format: {detectFormat(uploadFile.name)}</p>}
-                    </div>
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={closeUploadModal}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => addUploadMutation.mutate({ name: uploadName.trim(), file: uploadFile })}
-                            disabled={!uploadFile || addUploadMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {addUploadMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-                            {addUploadMutation.isPending ? "Uploading…" : "Add Source"}
-                        </button>
-                    </div>
-                </Modal>
+                    </ModalSection>
+                    <ModalStats
+                        items={[
+                            { icon: Layers, tone: "text-success", label: "Size", value: uploadFile ? `${(uploadFile.size / 1048576).toFixed(1)} MB` : "—" },
+                            { icon: ShieldCheck, tone: "text-warning", label: "Limit", value: "50 MB" },
+                        ]}
+                    />
+                </IptvModal>
             )}
 
             {/* Add URL Modal */}
-            {urlOpen && (
-                <Modal onClose={closeUrlModal} title="Add Remote Playlist" icon={LinkIcon}>
-                    {addUrlMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{addUrlMutation.error?.response?.data?.message || addUrlMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Source Name</label>
-                        <input
-                            type="text"
-                            placeholder="e.g. IPTV-ORG Country Index"
-                            value={urlName}
-                            onChange={(e) => setUrlName(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Playlist URL</label>
-                        <input
-                            type="text"
-                            placeholder="https://raw.githubusercontent.com/iptv-org/iptv/master/streams/bd.m3u"
-                            value={urlValue}
-                            onChange={(e) => setUrlValue(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full font-mono"
-                        />
-                        {urlValue.trim() && <p className="text-[11px] text-white/35">Detected format: {detectFormat(urlValue.trim())}</p>}
-                    </div>
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button onClick={closeUrlModal} className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => addUrlMutation.mutate({ name: urlName.trim(), url: urlValue.trim() })}
-                            disabled={!urlValue.trim() || addUrlMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {addUrlMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-                            {addUrlMutation.isPending ? "Adding…" : "Add Source"}
-                        </button>
-                    </div>
-                </Modal>
-            )}
+            {urlOpen &&
+                (() => {
+                    const addr = parseAddress(urlValue.trim());
+                    return (
+                        <IptvModal
+                            id="iptv-url-t"
+                            icon={LinkIcon}
+                            tone="info"
+                            title="Add remote playlist"
+                            subtitle="Import channels from a URL"
+                            busy={addUrlMutation.isPending}
+                            onClose={closeUrlModal}
+                            error={addUrlMutation.error ? apiError(addUrlMutation.error) : null}
+                            note={urlValue.trim() ? `Detected format: ${detectFormat(urlValue.trim())}` : "Waiting for a URL"}
+                            actions={
+                                <>
+                                    <ModalButton onClick={closeUrlModal} disabled={addUrlMutation.isPending}>
+                                        Cancel
+                                    </ModalButton>
+                                    <ModalButton
+                                        variant="primary"
+                                        className="gap-1.5"
+                                        onClick={() => addUrlMutation.mutate({ name: urlName.trim(), url: urlValue.trim() })}
+                                        disabled={!urlValue.trim()}
+                                        loading={addUrlMutation.isPending}
+                                        loadingText="Adding…">
+                                        <Plus size={14} />
+                                        Add source
+                                    </ModalButton>
+                                </>
+                            }>
+                            <Field label="Source name" htmlFor="iptv-url-name">
+                                <TextInput
+                                    id="iptv-url-name"
+                                    data-autofocus
+                                    changed={!!urlName.trim()}
+                                    placeholder="e.g. IPTV-ORG Country Index"
+                                    value={urlName}
+                                    onChange={(e) => setUrlName(e.target.value)}
+                                />
+                            </Field>
+                            <Field label="Playlist URL" htmlFor="iptv-url-value">
+                                <TextInput
+                                    id="iptv-url-value"
+                                    mono
+                                    changed={!!urlValue.trim()}
+                                    placeholder="https://raw.githubusercontent.com/iptv-org/iptv/master/streams/bd.m3u"
+                                    value={urlValue}
+                                    onChange={(e) => setUrlValue(e.target.value)}
+                                />
+                            </Field>
+                            <ModalStats
+                                items={[
+                                    { icon: Globe2, tone: "text-accent", label: "Host", value: addr.ok ? addr.host : "—", mono: true },
+                                    { icon: ShieldCheck, tone: addr.secure ? "text-success" : "text-warning", label: "Protocol", value: addr.ok ? addr.scheme : "—" },
+                                ]}
+                            />
+                            <ModalCallout tone="info" compact className="mt-auto">
+                                M3U, YAML, JSON or XML playlist address. Format and host are detected as you type.
+                            </ModalCallout>
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Source Info Modal */}
-            {infoSource && (
-                <Modal onClose={() => setInfoSource(null)} title="Source Info" icon={Info}>
-                    <div className="divide-y divide-base-content/8">
-                        {[
-                            ["Name", infoSource.name],
-                            ["Type", infoSource.type === "url" ? "URL" : "File"],
-                            ["Format", infoSource.format],
-                            ["Location", infoSource.location],
-                            ["Channels", infoSource.channelCount?.toLocaleString?.() ?? infoSource.channelCount],
-                            ["Status", infoSource.status],
-                            ["Added", fmtDate(infoSource.date)],
-                            ...(infoSource.status === "error" && infoSource.error ? [["Error", infoSource.error]] : []),
-                        ].map(([label, value]) => (
-                            <div key={label} className="flex items-start justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
-                                <span className="text-xs font-semibold text-white/45 shrink-0">{label}</span>
-                                <span className="flex items-center gap-1.5 min-w-0">
-                                    <span className="text-sm text-white/85 text-right break-all">{value ?? "—"}</span>
-                                    {label === "Location" && value && <CopyIconBtn text={value} title="Copy location" />}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                </Modal>
-            )}
+            {infoSource &&
+                (() => {
+                    const addr = infoSource.type === "url" ? parseAddress(infoSource.location) : { ok: false };
+                    const isUrl = infoSource.type === "url";
+                    const sTone = STATUS_TONE[infoSource.status] || "neutral";
+                    return (
+                        <IptvModal
+                            id="iptv-src-info-t"
+                            icon={isUrl ? LinkIcon : FileText}
+                            tone="info"
+                            title={infoSource.name || "Source"}
+                            subtitle={<span className="font-mono">{infoSource.location}</span>}
+                            badges={
+                                <>
+                                    <ModalBadge tone="info">{isUrl ? "URL" : "File"}</ModalBadge>
+                                    {infoSource.format && <ModalBadge>{infoSource.format}</ModalBadge>}
+                                    <ModalStatus status={infoSource.status} />
+                                </>
+                            }
+                            onClose={() => setInfoSource(null)}
+                            note="Read only"
+                            actions={<ModalButton onClick={() => setInfoSource(null)}>Close</ModalButton>}>
+                            <ModalStats
+                                items={[
+                                    { icon: Tv, tone: "text-info", label: "Channels", value: infoSource.channelCount?.toLocaleString?.() ?? infoSource.channelCount ?? "—" },
+                                    {
+                                        icon: STATUS_ICON[sTone] || Info,
+                                        tone: TONE_CLS[sTone] || "text-base-content/60",
+                                        label: "Status",
+                                        value: cap(infoSource.status),
+                                        valueTone: sTone === "neutral" ? undefined : sTone,
+                                    },
+                                    { icon: Clock, tone: "text-warning", label: "Added", value: fmtDate(infoSource.date) },
+                                ]}
+                            />
+                            <ModalSection label="Source" grow>
+                                <ModalRows className="flex-1">
+                                    <ModalKV label="Name">{infoSource.name ?? "—"}</ModalKV>
+                                    <ModalKV label="Type">{isUrl ? "URL" : "Uploaded file"}</ModalKV>
+                                    <ModalKV label="Format">{infoSource.format ?? "—"}</ModalKV>
+                                    {isUrl && addr.ok && (
+                                        <>
+                                            <ModalKV label="Host" mono>
+                                                {addr.host}
+                                            </ModalKV>
+                                            <ModalKV label="Protocol">
+                                                <span className={addr.secure ? "text-success" : "text-warning"}>{addr.scheme}</span>
+                                            </ModalKV>
+                                        </>
+                                    )}
+                                    <ModalKV label={isUrl ? "Location" : "Stored as"} mono action={infoSource.location ? <ModalCopyButton text={infoSource.location} label="location" /> : null}>
+                                        <span title={infoSource.location}>{infoSource.location ?? "—"}</span>
+                                    </ModalKV>
+                                    {infoSource.id != null && (
+                                        <ModalKV label="Source ID" mono action={<ModalCopyButton text={String(infoSource.id)} label="source ID" />}>
+                                            {String(infoSource.id)}
+                                        </ModalKV>
+                                    )}
+                                </ModalRows>
+                            </ModalSection>
+                            {infoSource.status === "error" && infoSource.error && (
+                                <ModalCallout tone="error" icon={AlertTriangle} compact>
+                                    {infoSource.error}
+                                </ModalCallout>
+                            )}
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Edit Source Modal */}
-            {editSource && (
-                <Modal onClose={closeEditModal} title="Edit Source" icon={Pencil}>
-                    {editMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{editMutation.error?.response?.data?.message || editMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Source Name</label>
-                        <input
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    {editSource.type === "url" && (
-                        <div className="space-y-1.5">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Playlist URL</label>
-                            <input
-                                type="text"
-                                value={editLocation}
-                                onChange={(e) => setEditLocation(e.target.value)}
-                                className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full font-mono"
+            {editSource &&
+                (() => {
+                    const isUrl = editSource.type === "url";
+                    const changes = [
+                        editName.trim() !== (editSource.name || "") && { name: "Name", from: editSource.name || "—", to: editName.trim() || "—" },
+                        isUrl && editLocation.trim() !== (editSource.location || "") && { name: "URL", from: editSource.location || "—", to: editLocation.trim() || "—" },
+                    ].filter(Boolean);
+                    return (
+                        <IptvModal
+                            id="iptv-src-edit-t"
+                            icon={SquarePen}
+                            tone="warning"
+                            title="Edit source"
+                            subtitle={editSource.name}
+                            busy={editMutation.isPending}
+                            onClose={closeEditModal}
+                            error={editMutation.error ? apiError(editMutation.error) : null}
+                            note={<DirtyNote dirty={changes.length > 0} />}
+                            actions={
+                                <>
+                                    <ModalButton onClick={closeEditModal} disabled={editMutation.isPending}>
+                                        Cancel
+                                    </ModalButton>
+                                    <ModalButton
+                                        variant="primary"
+                                        className="gap-1.5"
+                                        onClick={() =>
+                                            editMutation.mutate({
+                                                id: editSource.id,
+                                                data: isUrl ? { name: editName.trim(), url: editLocation.trim() } : { name: editName.trim() },
+                                            })
+                                        }
+                                        disabled={!editName.trim()}
+                                        loading={editMutation.isPending}
+                                        loadingText="Saving…">
+                                        <Check size={14} />
+                                        Save changes
+                                    </ModalButton>
+                                </>
+                            }>
+                            <Field label="Source name" htmlFor="iptv-src-edit-name" changed={editName.trim() !== (editSource.name || "")} onReset={() => setEditName(editSource.name || "")}>
+                                <TextInput
+                                    id="iptv-src-edit-name"
+                                    data-autofocus
+                                    changed={editName.trim() !== (editSource.name || "")}
+                                    value={editName}
+                                    onChange={(e) => setEditName(e.target.value)}
+                                />
+                            </Field>
+                            <Field
+                                label="Playlist URL"
+                                hint="URL sources only"
+                                htmlFor="iptv-src-edit-url"
+                                changed={isUrl && editLocation.trim() !== (editSource.location || "")}
+                                onReset={() => setEditLocation(editSource.location || "")}>
+                                <TextInput
+                                    id="iptv-src-edit-url"
+                                    mono
+                                    readOnly={!isUrl}
+                                    changed={isUrl && editLocation.trim() !== (editSource.location || "")}
+                                    value={isUrl ? editLocation : editSource.location || "Uploaded file — nothing to edit"}
+                                    onChange={(e) => isUrl && setEditLocation(e.target.value)}
+                                />
+                            </Field>
+                            <ModalStats
+                                items={[
+                                    { icon: isUrl ? LinkIcon : FileText, tone: "text-info", label: "Type", value: isUrl ? "URL" : "File" },
+                                    { icon: FileText, tone: "text-accent", label: "Format", value: editSource.format ?? "—" },
+                                    { icon: Tv, tone: "text-success", label: "Channels", value: editSource.channelCount?.toLocaleString?.() ?? editSource.channelCount ?? "—" },
+                                ]}
                             />
-                        </div>
-                    )}
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={closeEditModal}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() =>
-                                editMutation.mutate({
-                                    id: editSource.id,
-                                    data: editSource.type === "url" ? { name: editName.trim(), url: editLocation.trim() } : { name: editName.trim() },
-                                })
-                            }
-                            disabled={!editName.trim() || editMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {editMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                            {editMutation.isPending ? "Saving…" : "Save Changes"}
-                        </button>
-                    </div>
-                </Modal>
-            )}
+                            {!isUrl && (
+                                <ModalCallout tone="info" icon={Info} compact>
+                                    Uploaded as a file, so only the name can be changed. Upload a new file to replace the channels.
+                                </ModalCallout>
+                            )}
+                            <ModalReview changes={changes} saved={[{ name: "Name", value: editSource.name }, ...(isUrl ? [{ name: "URL", value: editSource.location }] : [])]} className="mt-auto" />
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Channel Info Modal */}
-            {infoChannel && (
-                <Modal onClose={() => setInfoChannel(null)} title="Channel Info" icon={Info}>
-                    <div className="divide-y divide-base-content/8">
-                        {[
-                            ["Name", infoChannel.name],
-                            ["Country", infoChannel.country],
-                            ["Group", infoChannel.group],
-                            ["Category", infoChannel.category],
-                            ["Working Status", channelStatus(infoChannel)],
-                            ["Stream URL", infoChannel.url],
-                        ].map(([label, value]) => (
-                            <div key={label} className="flex items-start justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
-                                <span className="text-xs font-semibold text-white/45 shrink-0">{label}</span>
-                                <span className="flex items-center gap-1.5 min-w-0">
-                                    <span className="text-sm text-white/85 text-right break-all">{value ?? "—"}</span>
-                                    {label === "Stream URL" && value && <CopyIconBtn text={value} title="Copy stream URL" />}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                </Modal>
-            )}
+            {infoChannel &&
+                (() => {
+                    const st = channelStatus(infoChannel);
+                    const addr = parseAddress(infoChannel.url);
+                    const sTone = STATUS_TONE[st] || "neutral";
+                    return (
+                        <IptvModal
+                            id="iptv-ch-info-t"
+                            avatar={<ChannelLogo src={infoChannel.logo} name={infoChannel.name} />}
+                            title={infoChannel.name || "Channel"}
+                            subtitle={[infoChannel.country, infoChannel.group].filter(Boolean).join(" · ") || undefined}
+                            badges={
+                                <>
+                                    <ModalStatus status={st} />
+                                    {addr.ok && <ModalBadge>{STREAM_KIND[addr.ext] || "Stream"}</ModalBadge>}
+                                </>
+                            }
+                            onClose={() => setInfoChannel(null)}
+                            note="Read only"
+                            actions={<ModalButton onClick={() => setInfoChannel(null)}>Close</ModalButton>}>
+                            <ModalStats
+                                items={[
+                                    { icon: Play, tone: "text-info", label: "Stream type", value: addr.ok ? STREAM_KIND[addr.ext] || "Stream" : "—" },
+                                    { icon: ShieldCheck, tone: addr.secure ? "text-success" : "text-warning", label: "Protocol", value: addr.ok ? addr.scheme : "—" },
+                                    { icon: Globe2, tone: "text-accent", label: "Host", value: addr.ok ? addr.host : "—", mono: true },
+                                ]}
+                            />
+                            <ModalSection label="Channel" grow>
+                                <ModalRows className="flex-1">
+                                    <ModalKV label="Name">{infoChannel.name ?? "—"}</ModalKV>
+                                    <ModalKV label="Country">{infoChannel.country ?? "—"}</ModalKV>
+                                    <ModalKV label="Group">{infoChannel.group ?? "—"}</ModalKV>
+                                    <ModalKV label="Category">{infoChannel.category ?? "—"}</ModalKV>
+                                    <ModalKV label="Working status">
+                                        <span className={TONE_CLS[sTone] || ""}>{cap(st)}</span>
+                                    </ModalKV>
+                                    <ModalKV label="Stream URL" mono action={infoChannel.url ? <ModalCopyButton text={infoChannel.url} label="stream URL" /> : null}>
+                                        <span title={infoChannel.url}>{infoChannel.url ?? "—"}</span>
+                                    </ModalKV>
+                                </ModalRows>
+                            </ModalSection>
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Edit Channel Modal — saved to backend (channel-state.json) */}
-            {editChannel && (
-                <Modal onClose={closeEditChannelModal} title="Edit Channel" icon={Pencil}>
-                    {editChannelMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{editChannelMutation.error?.response?.data?.message || editChannelMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Channel Name</label>
-                        <input
-                            type="text"
-                            value={editChName}
-                            onChange={(e) => setEditChName(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Category</label>
-                        <input
-                            type="text"
-                            value={editChCategory}
-                            onChange={(e) => setEditChCategory(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Country</label>
-                        <input
-                            type="text"
-                            value={editChCountry}
-                            onChange={(e) => setEditChCountry(e.target.value)}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={closeEditChannelModal}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={saveChannelEdit}
-                            disabled={!editChName.trim() || editChannelMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {editChannelMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                            {editChannelMutation.isPending ? "Saving…" : "Save Changes"}
-                        </button>
-                    </div>
-                </Modal>
-            )}
+            {editChannel &&
+                (() => {
+                    const changes = [
+                        editChName.trim() !== (editChannel.name || "") && { name: "Name", from: editChannel.name || "—", to: editChName.trim() || "—" },
+                        editChCategory.trim() !== (editChannel.category || "") && { name: "Category", from: editChannel.category || "—", to: editChCategory.trim() || "—" },
+                        editChCountry.trim() !== (editChannel.country || "") && { name: "Country", from: editChannel.country || "—", to: editChCountry.trim() || "—" },
+                    ].filter(Boolean);
+                    const addr = parseAddress(editChannel.url);
+                    const nameCh = editChName.trim() !== (editChannel.name || "");
+                    const catCh = editChCategory.trim() !== (editChannel.category || "");
+                    const couCh = editChCountry.trim() !== (editChannel.country || "");
+                    return (
+                        <IptvModal
+                            id="iptv-ch-edit-t"
+                            avatar={<ChannelLogo src={editChannel.logo} name={editChannel.name} />}
+                            title="Edit channel"
+                            subtitle={editChannel.name}
+                            dense
+                            busy={editChannelMutation.isPending}
+                            onClose={closeEditChannelModal}
+                            error={editChannelMutation.error ? apiError(editChannelMutation.error) : null}
+                            note={<DirtyNote dirty={changes.length > 0} />}
+                            actions={
+                                <>
+                                    <ModalButton onClick={closeEditChannelModal} disabled={editChannelMutation.isPending}>
+                                        Cancel
+                                    </ModalButton>
+                                    <ModalButton
+                                        variant="primary"
+                                        className="gap-1.5"
+                                        onClick={saveChannelEdit}
+                                        disabled={!editChName.trim()}
+                                        loading={editChannelMutation.isPending}
+                                        loadingText="Saving…">
+                                        <Check size={14} />
+                                        Save changes
+                                    </ModalButton>
+                                </>
+                            }>
+                            <Field label="Channel name" htmlFor="iptv-ch-name" changed={nameCh} onReset={() => setEditChName(editChannel.name || "")}>
+                                <TextInput id="iptv-ch-name" data-autofocus changed={nameCh} value={editChName} onChange={(e) => setEditChName(e.target.value)} />
+                            </Field>
+                            <div className="grid shrink-0 grid-cols-1 gap-4 sm:grid-cols-2">
+                                <Field label="Category" htmlFor="iptv-ch-category" changed={catCh} onReset={() => setEditChCategory(editChannel.category || "")}>
+                                    <TextInput id="iptv-ch-category" changed={catCh} value={editChCategory} onChange={(e) => setEditChCategory(e.target.value)} />
+                                </Field>
+                                <Field label="Country" htmlFor="iptv-ch-country" changed={couCh} onReset={() => setEditChCountry(editChannel.country || "")}>
+                                    <TextInput id="iptv-ch-country" changed={couCh} value={editChCountry} onChange={(e) => setEditChCountry(e.target.value)} />
+                                </Field>
+                            </div>
+                            <Field label="Stream URL" hint="read only">
+                                <div className={`${FIELD} bg-base-200/40`}>
+                                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/80" title={editChannel.url}>
+                                        {editChannel.url ?? "—"}
+                                    </span>
+                                    {editChannel.url && <ModalCopyButton text={editChannel.url} label="stream URL" />}
+                                </div>
+                            </Field>
+                            <ModalStats
+                                items={[
+                                    { icon: ListVideo, tone: "text-info", label: "Group", value: editChannel.group || "—" },
+                                    { icon: Clock, tone: "text-warning", label: "Status", value: cap(channelStatus(editChannel)) },
+                                    { icon: Globe2, tone: "text-accent", label: "Host", value: addr.ok ? addr.host : "—", mono: true },
+                                ]}
+                            />
+                            <ModalReview
+                                changes={changes}
+                                saved={[
+                                    { name: "Name", value: editChannel.name },
+                                    { name: "Category", value: editChannel.category },
+                                    { name: "Country", value: editChannel.country },
+                                ]}
+                                className="mt-auto"
+                            />
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Edit Active Channel Modal — CRUD scoped to active_live.json only,
                 separate from the Channels-tab "Edit Channel" modal above. */}
-            {editActiveChannel && (
-                <Modal onClose={closeEditActiveModal} title="Edit Active Channel" icon={Pencil}>
-                    {(editActiveMutation.error || uploadActiveLogoMutation.error) && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>
-                                {editActiveMutation.error?.response?.data?.message ||
-                                    editActiveMutation.error?.message ||
-                                    uploadActiveLogoMutation.error?.response?.data?.message ||
-                                    uploadActiveLogoMutation.error?.message}
-                            </span>
-                        </div>
-                    )}
-
-                    {/* Logo */}
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Logo</label>
-                        <div className="flex items-center gap-3">
-                            <div className="w-14 h-14 rounded-lg bg-base-100 border border-white/10 flex items-center justify-center overflow-hidden shrink-0">
-                                {activeEditForm.logo ? <img src={activeEditForm.logo} alt="" className="w-full h-full object-contain" /> : <ImageIcon size={18} className="text-white/25" />}
-                            </div>
-                            <div className="flex-1 min-w-0 space-y-1.5">
-                                <input
-                                    type="text"
-                                    placeholder="Logo URL"
-                                    value={activeEditForm.logo}
-                                    onChange={(e) => setActiveEditForm((f) => ({ ...f, logo: e.target.value }))}
-                                    className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                                />
-                                <input
-                                    ref={activeLogoInputRef}
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    onChange={(e) => {
-                                        const file = e.target.files?.[0] || null;
-                                        setActiveLogoFile(file);
-                                        if (file) uploadActiveLogoMutation.mutate({ id: editActiveChannel.id, file });
-                                    }}
-                                />
-                                <button
-                                    onClick={() => activeLogoInputRef.current?.click()}
-                                    disabled={uploadActiveLogoMutation.isPending}
-                                    className="text-xs font-bold text-primary hover:text-primary/80 transition-colors border-none bg-transparent cursor-pointer flex items-center gap-1.5 disabled:opacity-40">
-                                    {uploadActiveLogoMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
-                                    {uploadActiveLogoMutation.isPending ? "Uploading to imgbb…" : "Upload image"}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Channel Name</label>
-                        <input
-                            type="text"
-                            value={activeEditForm.name}
-                            onChange={(e) => setActiveEditForm((f) => ({ ...f, name: e.target.value }))}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Category</label>
+            {editActiveChannel &&
+                (() => {
+                    const changes = ["name", "logo", "category", "country", "group", "url"]
+                        .filter((k) => (activeEditForm[k] || "").trim() !== (editActiveChannel[k] || ""))
+                        .map((k) => ({ name: cap(k), from: editActiveChannel[k] || "—", to: (activeEditForm[k] || "").trim() || "—" }));
+                    const setF = (k) => (e) => setActiveEditForm((f) => ({ ...f, [k]: e.target.value }));
+                    const chg = (k) => (activeEditForm[k] || "").trim() !== (editActiveChannel[k] || "");
+                    const rst = (k) => () => setActiveEditForm((f) => ({ ...f, [k]: editActiveChannel[k] || "" }));
+                    return (
+                        <IptvModal
+                            id="iptv-active-edit-t"
+                            avatar={<ChannelLogo src={editActiveChannel.logo} name={editActiveChannel.name} />}
+                            title="Edit active channel"
+                            subtitle={editActiveChannel.name}
+                            dense
+                            busy={editActiveMutation.isPending || uploadActiveLogoMutation.isPending}
+                            onClose={closeEditActiveModal}
+                            error={editActiveMutation.error || uploadActiveLogoMutation.error ? apiError(editActiveMutation.error) || apiError(uploadActiveLogoMutation.error) : null}
+                            note={<DirtyNote dirty={changes.length > 0} />}
+                            actions={
+                                <>
+                                    <ModalButton onClick={closeEditActiveModal} disabled={editActiveMutation.isPending}>
+                                        Cancel
+                                    </ModalButton>
+                                    <ModalButton
+                                        variant="primary"
+                                        className="gap-1.5"
+                                        onClick={saveActiveChannelEdit}
+                                        disabled={!activeEditForm.name.trim()}
+                                        loading={editActiveMutation.isPending}
+                                        loadingText="Saving…">
+                                        <Check size={14} />
+                                        Save changes
+                                    </ModalButton>
+                                </>
+                            }>
                             <input
-                                type="text"
-                                value={activeEditForm.category}
-                                onChange={(e) => setActiveEditForm((f) => ({ ...f, category: e.target.value }))}
-                                className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
+                                ref={activeLogoInputRef}
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0] || null;
+                                    setActiveLogoFile(file);
+                                    if (file) uploadActiveLogoMutation.mutate({ id: editActiveChannel.id, file });
+                                }}
                             />
-                        </div>
-                        <div className="space-y-1.5">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Country</label>
-                            <input
-                                type="text"
-                                value={activeEditForm.country}
-                                onChange={(e) => setActiveEditForm((f) => ({ ...f, country: e.target.value }))}
-                                className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                            />
-                        </div>
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Group</label>
-                        <input
-                            type="text"
-                            value={activeEditForm.group}
-                            onChange={(e) => setActiveEditForm((f) => ({ ...f, group: e.target.value }))}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full"
-                        />
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-widest text-white/70">Stream URL</label>
-                        <input
-                            type="text"
-                            value={activeEditForm.url}
-                            onChange={(e) => setActiveEditForm((f) => ({ ...f, url: e.target.value }))}
-                            className="input input-sm bg-base-100 border border-white/10 focus:outline-none focus:border-primary/50 w-full font-mono text-xs"
-                        />
-                    </div>
-
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={closeEditActiveModal}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={saveActiveChannelEdit}
-                            disabled={!activeEditForm.name.trim() || editActiveMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {editActiveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                            {editActiveMutation.isPending ? "Saving…" : "Save Changes"}
-                        </button>
-                    </div>
-                </Modal>
-            )}
+                            <Field label="Logo" htmlFor="iptv-active-logo" changed={chg("logo")} onReset={rst("logo")}>
+                                <div className="flex items-center gap-3">
+                                    <ChannelLogo src={activeEditForm.logo.trim()} name={activeEditForm.name} size="size-[42px]" />
+                                    <div className="min-w-0 flex-1">
+                                        <TextInput id="iptv-active-logo" mono changed={chg("logo")} placeholder="https://…" value={activeEditForm.logo} onChange={setF("logo")} />
+                                    </div>
+                                    <ModalButton
+                                        className="h-[42px] shrink-0 gap-1.5 px-4"
+                                        onClick={() => activeLogoInputRef.current?.click()}
+                                        loading={uploadActiveLogoMutation.isPending}
+                                        loadingText="Uploading…">
+                                        <Upload size={14} />
+                                        Upload
+                                    </ModalButton>
+                                </div>
+                            </Field>
+                            <Field label="Channel name" htmlFor="iptv-active-name" changed={chg("name")} onReset={rst("name")}>
+                                <TextInput id="iptv-active-name" data-autofocus changed={chg("name")} value={activeEditForm.name} onChange={setF("name")} />
+                            </Field>
+                            <div className="grid shrink-0 grid-cols-1 gap-4 sm:grid-cols-3">
+                                <Field label="Category" htmlFor="iptv-active-category" changed={chg("category")} onReset={rst("category")}>
+                                    <TextInput id="iptv-active-category" changed={chg("category")} value={activeEditForm.category} onChange={setF("category")} />
+                                </Field>
+                                <Field label="Country" htmlFor="iptv-active-country" changed={chg("country")} onReset={rst("country")}>
+                                    <TextInput id="iptv-active-country" changed={chg("country")} value={activeEditForm.country} onChange={setF("country")} />
+                                </Field>
+                                <Field label="Group" htmlFor="iptv-active-group" changed={chg("group")} onReset={rst("group")}>
+                                    <TextInput id="iptv-active-group" changed={chg("group")} value={activeEditForm.group} onChange={setF("group")} />
+                                </Field>
+                            </div>
+                            <Field label="Stream URL" htmlFor="iptv-active-url" changed={chg("url")} onReset={rst("url")}>
+                                <TextInput id="iptv-active-url" mono changed={chg("url")} value={activeEditForm.url} onChange={setF("url")} />
+                            </Field>
+                            <ModalReview changes={changes} saved={["name", "category", "country", "group"].map((k) => ({ name: cap(k), value: editActiveChannel[k] }))} className="mt-auto" />
+                        </IptvModal>
+                    );
+                })()}
 
             {/* Play Preview Modal — plays the .m3u8 in-place via hls.js */}
             {playChannel && <PlayerModal channel={playChannel} onClose={() => setPlayChannel(null)} />}
 
-            {/* Confirm Delete Source Modal — state existed (set by the Sources-tab
-                trash icon) but no modal was ever rendered for it, so clicking
-                Delete silently set state and nothing appeared. */}
+            {/* Confirm Delete Source Modal */}
             {confirmDeleteSource && (
-                <Modal onClose={() => setConfirmDeleteSource(null)} title="Delete Source" icon={Trash2}>
-                    <p className="text-sm text-white/75">
-                        Remove <span className="font-bold text-white">{confirmDeleteSource.name}</span>? All channels ingested from this source are removed too. This can't be undone — you'd need to
-                        re-add the playlist to get them back.
-                    </p>
-                    {deleteMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{deleteMutation.error?.response?.data?.message || deleteMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={() => setConfirmDeleteSource(null)}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => deleteMutation.mutate(confirmDeleteSource.id)}
-                            disabled={deleteMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {deleteMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                            {deleteMutation.isPending ? "Deleting…" : "Delete"}
-                        </button>
-                    </div>
-                </Modal>
+                <IptvModal
+                    id="iptv-del-src-t"
+                    icon={Trash2}
+                    tone="error"
+                    title={`Delete ${confirmDeleteSource.name}?`}
+                    subtitle="Playlist source"
+                    busy={deleteMutation.isPending}
+                    onClose={() => setConfirmDeleteSource(null)}
+                    error={deleteMutation.error ? apiError(deleteMutation.error) : null}
+                    actions={
+                        <>
+                            <ModalButton onClick={() => setConfirmDeleteSource(null)} disabled={deleteMutation.isPending} data-autofocus>
+                                Cancel
+                            </ModalButton>
+                            <ModalButton variant="danger" className="gap-1.5" onClick={() => deleteMutation.mutate(confirmDeleteSource.id)} loading={deleteMutation.isPending} loadingText="Deleting…">
+                                <Trash2 size={14} />
+                                Delete source
+                            </ModalButton>
+                        </>
+                    }>
+                    <ModalSection label="You are about to delete">
+                        <TargetCard
+                            avatar={
+                                <span className="grid size-10 shrink-0 place-items-center rounded-full border border-base-content/10 bg-base-200">
+                                    {confirmDeleteSource.type === "url" ? <LinkIcon size={16} className="text-info" /> : <FileText size={16} className="text-info" />}
+                                </span>
+                            }
+                            title={confirmDeleteSource.name || "Source"}
+                            sub={confirmDeleteSource.location}
+                            mono
+                            badge={<ModalBadge tone="info">{confirmDeleteSource.type === "url" ? "URL" : "File"}</ModalBadge>}
+                        />
+                    </ModalSection>
+                    <ModalStats
+                        items={[
+                            { icon: Tv, tone: "text-error", label: "Channels removed", value: confirmDeleteSource.channelCount?.toLocaleString?.() ?? confirmDeleteSource.channelCount ?? "—" },
+                            { icon: FileText, tone: "text-info", label: "Format", value: confirmDeleteSource.format ?? "—" },
+                            { icon: Clock, tone: "text-warning", label: "Added", value: fmtDate(confirmDeleteSource.date) },
+                        ]}
+                    />
+                    <ModalBullets
+                        items={[
+                            { icon: Trash2, tone: "text-error", text: "Every channel ingested from this source is removed too." },
+                            { icon: RefreshCw, tone: "text-warning", text: "You would need to re-add the playlist to get them back." },
+                        ]}
+                    />
+                    <ModalCallout tone="error" icon={AlertTriangle} compact className="mt-auto">
+                        This can’t be undone.
+                    </ModalCallout>
+                </IptvModal>
             )}
 
             {/* Confirm Delete Channel Modal */}
             {confirmHideChannel && (
-                <Modal onClose={() => setConfirmHideChannel(null)} title="Delete Channel" icon={Trash2}>
-                    <p className="text-sm text-white/75">
-                        Remove <span className="font-bold text-white">{confirmHideChannel.name}</span>? This hides it everywhere (player and dashboard) — the source playlist file itself is unchanged,
-                        so it comes back only if you restore it or the source is deleted and re-added.
-                    </p>
-                    {hideChannelMutation.error && (
-                        <div className="flex items-center gap-2.5 text-xs text-error bg-error/10 border border-error/20 rounded-xl px-4 py-3">
-                            <AlertTriangle size={13} className="shrink-0" />
-                            <span>{hideChannelMutation.error?.response?.data?.message || hideChannelMutation.error?.message}</span>
-                        </div>
-                    )}
-                    <div className="flex justify-end gap-2 pt-1">
-                        <button
-                            onClick={() => setConfirmHideChannel(null)}
-                            className="px-4 py-2 rounded-md text-sm font-bold text-white/75 hover:text-white hover:bg-white/8 transition-colors border-none cursor-pointer">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => hideChannel(confirmHideChannel)}
-                            disabled={hideChannelMutation.isPending}
-                            className="px-4 py-2 rounded-md text-sm font-bold bg-error text-error-content hover:opacity-90 transition-opacity border-none cursor-pointer disabled:opacity-40 flex items-center gap-1.5">
-                            {hideChannelMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                            {hideChannelMutation.isPending ? "Deleting…" : "Delete"}
-                        </button>
-                    </div>
-                </Modal>
+                <IptvModal
+                    id="iptv-del-ch-t"
+                    icon={Trash2}
+                    tone="error"
+                    title={`Delete ${confirmHideChannel.name}?`}
+                    subtitle="Hidden everywhere in FLUX"
+                    busy={hideChannelMutation.isPending}
+                    onClose={() => setConfirmHideChannel(null)}
+                    error={hideChannelMutation.error ? apiError(hideChannelMutation.error) : null}
+                    actions={
+                        <>
+                            <ModalButton onClick={() => setConfirmHideChannel(null)} disabled={hideChannelMutation.isPending} data-autofocus>
+                                Cancel
+                            </ModalButton>
+                            <ModalButton variant="danger" className="gap-1.5" onClick={() => hideChannel(confirmHideChannel)} loading={hideChannelMutation.isPending} loadingText="Deleting…">
+                                <Trash2 size={14} />
+                                Delete channel
+                            </ModalButton>
+                        </>
+                    }>
+                    <ModalSection label="You are about to delete">
+                        <TargetCard
+                            avatar={<ChannelLogo src={confirmHideChannel.logo} name={confirmHideChannel.name} />}
+                            title={confirmHideChannel.name || "Channel"}
+                            sub={[confirmHideChannel.country, confirmHideChannel.group].filter(Boolean).join(" · ") || undefined}
+                        />
+                    </ModalSection>
+                    <ModalStats
+                        items={[
+                            { icon: Globe2, tone: "text-info", label: "Country", value: confirmHideChannel.country || "—" },
+                            { icon: ListVideo, tone: "text-accent", label: "Group", value: confirmHideChannel.group || "—" },
+                            { icon: Satellite, tone: "text-warning", label: "Category", value: confirmHideChannel.category || "—" },
+                        ]}
+                    />
+                    <ModalBullets
+                        items={[
+                            { icon: EyeOff, tone: "text-error", text: "Hidden in both the player and the dashboard." },
+                            { icon: FileText, tone: "text-success", text: "The source playlist file itself is unchanged." },
+                            { icon: RotateCcw, tone: "text-warning", text: "It comes back only if you restore it, or the source is deleted and re-added." },
+                        ]}
+                    />
+                </IptvModal>
             )}
         </div>
     );

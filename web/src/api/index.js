@@ -10,6 +10,7 @@ export * from "./user";
 export { api } from "./client";
 export * from "./stream";
 export * from "./trailers";
+export * from "./notifications";
 
 export { default as PlayerPage } from "../Pages/Player/PlayerPage";
 export { PlayerProvider, usePlayerState } from "../Pages/Player/UsePlayerState";

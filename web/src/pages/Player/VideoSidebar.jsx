@@ -26,7 +26,7 @@
  * One-directional dependency: this file never imports anything FROM
  * PlayerControls.jsx, to avoid a circular import between the two.
  */
-import { useEffect, useState, useRef, memo } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, memo } from "react";
 import { createPortal } from "react-dom";
 import {
     ArrowLeft,
@@ -316,17 +316,100 @@ function langAbbr(name) {
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "right", side, title: menuTitle, width }) {
     const ref = useRef(null);
+    // Direction actually used ("top" = opens upward, "bottom" = opens downward).
+    // Starts as the caller's `side`, then auto-flips below if the requested side
+    // has no room.
+    const [autoSide, setAutoSide] = useState(null);
+    const eff = autoSide || side;
+    // FIX (dropdowns not closing on outside click): two causes.
+    //  1. The listener was re-registered every time onClose changed identity.
+    //     PlayerControls re-renders constantly (time updates), and each
+    //     re-register had a 50ms dead window — clicks landing in it were lost.
+    //     onClose now lives in a ref so the listener registers once per open.
+    //  2. It listened for bubbling "mousedown" on document, so any element
+    //     that stops propagation (gesture layer, control bars) swallowed the
+    //     click before it got here. Capture phase sees it first regardless.
+    // Clicks inside the popup's own wrapper (its trigger button) are skipped so
+    // the button's toggle isn't fought by close-then-reopen. Esc also closes.
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
     useEffect(() => {
         if (!open) return;
         const close = (e) => {
-            if (ref.current && !ref.current.contains(e.target)) onClose();
+            const el = ref.current;
+            if (!el) return;
+            if (el.contains(e.target)) return;
+            const host = el.parentElement;
+            if (host && host.contains(e.target)) return;
+            onCloseRef.current?.();
         };
-        const id = setTimeout(() => document.addEventListener("mousedown", close), 50);
+        const onKey = (e) => {
+            if (e.key === "Escape") onCloseRef.current?.();
+        };
+        const id = setTimeout(() => document.addEventListener("pointerdown", close, true), 50);
+        document.addEventListener("keydown", onKey);
         return () => {
             clearTimeout(id);
-            document.removeEventListener("mousedown", close);
+            document.removeEventListener("pointerdown", close, true);
+            document.removeEventListener("keydown", onKey);
         };
-    }, [open, onClose]);
+    }, [open]);
+    // FIX (desktop: dropdown / floating menus not scrollable): .flux-popup has
+    // no height cap or overflow of its own, so any menu taller than the room
+    // between its anchor button and the viewport edge (channel list, playlist,
+    // audio/subtitle lists) just got clipped — nothing to scroll because the
+    // box itself never overflowed. Measure the room available on the side the
+    // popup opens toward, cap max-height to it, and let the popup scroll.
+    // Exposes the cap as --flux-popup-max so the inner list scrollers below
+    // (channels / playlist) can size themselves to fit instead of a fixed 70vh.
+    // FIX (bottom-bar dropdowns opened downward, off-screen, unreachable):
+    // nearly every picker passes side="bottom" (right for the top bar), but the
+    // same menus are also launched from buttons in the BOTTOM control bar,
+    // where "open downward" lands below the viewport. Decide direction from
+    // where the trigger really is: keep the requested side if it has room,
+    // otherwise open toward whichever side has more.
+    useLayoutEffect(() => {
+        if (!open) return;
+        const el = ref.current;
+        const host = el?.parentElement;
+        if (!host) return;
+        const pick = () => {
+            const hr = host.getBoundingClientRect();
+            const below = window.innerHeight - hr.bottom;
+            const above = hr.top;
+            const want = side === "bottom" ? "bottom" : "top"; // no side = CSS default, which opens upward
+            const roomWant = want === "bottom" ? below : above;
+            const roomOther = want === "bottom" ? above : below;
+            const NEED = 280;
+            setAutoSide(roomWant >= NEED || roomWant >= roomOther ? want : want === "bottom" ? "top" : "bottom");
+        };
+        pick();
+        window.addEventListener("resize", pick);
+        return () => window.removeEventListener("resize", pick);
+    }, [open, side]);
+    useLayoutEffect(() => {
+        if (!open) return;
+        const el = ref.current;
+        if (!el) return;
+        const PAD = 12;
+        const fit = () => {
+            const keep = el.scrollTop;
+            el.style.maxHeight = "none";
+            const r = el.getBoundingClientRect();
+            const avail = eff === "bottom" ? window.innerHeight - r.top - PAD : r.bottom - PAD;
+            const px = Math.max(160, Math.floor(avail));
+            el.style.maxHeight = `${px}px`;
+            el.style.setProperty("--flux-popup-max", `${px}px`);
+            el.scrollTop = keep;
+        };
+        fit();
+        const t = setTimeout(fit, 300); // re-measure once the open animation settles
+        window.addEventListener("resize", fit);
+        return () => {
+            clearTimeout(t);
+            window.removeEventListener("resize", fit);
+        };
+    }, [open, eff]);
     if (!open) return null;
     // FIX: the quality picker's trigger button sits in a spot where the
     // default .flux-popup CSS (opens upward, anchored above the button) was
@@ -335,9 +418,33 @@ const PopupMenu = memo(function PopupMenu({ open, onClose, children, align = "ri
     // change), an explicit side override wins via inline style only when a
     // caller actually asks for it — every other menu keeps its exact
     // existing default (no `side` passed = no change at all).
-    const sideStyle = side === "bottom" ? { top: "100%", bottom: "auto", marginTop: 8 } : side === "top" ? { bottom: "100%", top: "auto", marginBottom: 8 } : {};
+    const sideStyle = eff === "bottom" ? { top: "100%", bottom: "auto", marginTop: 8 } : eff === "top" ? { bottom: "100%", top: "auto", marginBottom: 8 } : {};
     return (
-        <div ref={ref} className={`flux-popup ${align === "left" ? "align-left" : ""}`} style={{ zIndex: 60, ...(width ? { width, maxWidth: "min(92vw, " + width + "px)" } : {}), ...sideStyle }}>
+        // Wheel / scroll keys stay inside the menu: stops the global player
+        // keyboard shortcuts (arrow = seek/volume, preventDefault) from eating
+        // list scrolling, and stops wheel chaining to the page underneath.
+        <div
+            ref={ref}
+            className={`flux-popup ${align === "left" ? "align-left" : ""}`}
+            onWheel={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+                if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) e.stopPropagation();
+            }}
+            style={{
+                zIndex: 60,
+                overflowY: "auto",
+                overflowX: "hidden",
+                overscrollBehavior: "contain",
+                scrollbarWidth: "none",
+                // FIX (menus too thin, text cramped/wrapping): the popup is
+                // absolutely positioned inside a tiny relative wrapper (the
+                // icon button), so with no width of its own its shrink-to-fit
+                // width is capped by that wrapper — a few dozen px. Size to
+                // content with a floor + ceiling instead. Menus that already
+                // pass an explicit width (More, Information) are unchanged.
+                ...(width ? { width, maxWidth: "min(92vw, " + width + "px)" } : { width: "max-content", minWidth: 240, maxWidth: "min(92vw, 380px)" }),
+                ...sideStyle,
+            }}>
             {menuTitle && <div className="flux-popup-header">{menuTitle}</div>}
             {children}
         </div>
@@ -781,7 +888,15 @@ export function PlaylistPanel({ open, onClose, isMobile, controlsPhase, mediaId,
                     <style>{`
                         .flux-playlist-scroll::-webkit-scrollbar { display: none; }
                     `}</style>
-                    <div className="flux-playlist-scroll" style={{ maxHeight: "min(70vh, 560px)", overflowY: "auto", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                    <div
+                        className="flux-playlist-scroll"
+                        style={{
+                            maxHeight: "min(calc(var(--flux-popup-max, 700px) - 72px), 560px)",
+                            overflowY: "auto",
+                            overscrollBehavior: "contain",
+                            scrollbarWidth: "none",
+                            msOverflowStyle: "none",
+                        }}>
                         {content}
                     </div>
                 </>
@@ -1114,7 +1229,15 @@ export function LiveChannelsPanel({ open, onClose, isMobile, controlsPhase, curr
                     <style>{`
                         .flux-channels-scroll::-webkit-scrollbar { display: none; }
                     `}</style>
-                    <div className="flux-channels-scroll px-2" style={{ maxHeight: "min(70vh, 560px)", overflowY: "auto", scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                    <div
+                        className="flux-channels-scroll px-2"
+                        style={{
+                            maxHeight: "min(calc(var(--flux-popup-max, 700px) - 130px), 560px)",
+                            overflowY: "auto",
+                            overscrollBehavior: "contain",
+                            scrollbarWidth: "none",
+                            msOverflowStyle: "none",
+                        }}>
                         {loading ? (
                             <div className="text-center text-[13px] text-base-content/40 py-6">Loading…</div>
                         ) : channelList.length === 0 ? (
@@ -1156,7 +1279,11 @@ export function QualityPicker({ open, onClose, isMobile, controlsPhase, onSwitch
     // resolution is." Show that resolution directly instead of a bare "Auto"
     // label that doesn't tell the user anything about what's actually
     // playing right now.
-    const currentAutoLabel = state.qualityLevels[0]?.label;
+    // FIX (Live): was always qualityLevels[0] = the LOWEST rung, so Auto
+    // claimed e.g. "360p" while 1080p was playing. LivePlayerPage now flags
+    // the rung hls.js is actually on with `playing`; VOD levels carry no flag
+    // and fall back to the old [0] behaviour untouched.
+    const currentAutoLabel = (state.qualityLevels.find((l) => l.playing) || state.qualityLevels[0])?.label;
     const isAutoActive = state.activeQuality === -1 && !state.requestedQuality;
     // FIX (Live: quality sidebar opens with nothing to pick): hls.js reports
     // a REAL multi-level ladder for Live (and for VOD when the multi-quality
@@ -1203,6 +1330,9 @@ export function QualityPicker({ open, onClose, isMobile, controlsPhase, onSwitch
                             </MenuItem>
                         ))}
                 </>
+            )}
+            {!hasRealLevels && !onSwitchQuality && (
+                <div style={{ padding: "8px 16px 10px", fontSize: 11.5, lineHeight: 1.4, opacity: 0.5 }}>This stream offers a single quality, so there is nothing to switch.</div>
             )}
             {!hasRealLevels && onSwitchQuality && (
                 <>

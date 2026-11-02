@@ -176,14 +176,47 @@ export function AuthProvider({ children }) {
         [scheduleRefresh, setAccessTokenBoth],
     );
 
-    const verifyEmail = useCallback(async (userId, code) => {
-        setError(null);
-        return authApi.verifyEmail(userId, code);
+    // Persist an updated user object (status / verification changes) next to the stored session.
+    const applyUser = useCallback((u) => {
+        if (!u) return;
+        setUser(u);
+        const session = sessionRef.current;
+        if (session) saveToStorage({ ...session, user: u });
     }, []);
 
-    const resendOTP = useCallback(async (userId) => {
-        return authApi.resendOTP(userId);
-    }, []);
+    // Verifies the e-mail of the SIGNED-IN (restricted) account — the server takes the account from the
+    // access token, so no userId travels in the body. Returns the authoritative user (status, canPlay…).
+    const verifyEmail = useCallback(
+        async (code) => {
+            setError(null);
+            const res = await authApi.verifyEmail(code);
+            applyUser(res.user);
+            return res.user;
+        },
+        [applyUser],
+    );
+
+    const resendOTP = useCallback(() => authApi.resendOTP(), []);
+
+    // Rejected → pending in one click (no sign-out / delete / re-register). Returns { requested, user }.
+    const requestApproval = useCallback(async () => {
+        const res = await authApi.requestApproval();
+        applyUser(res.user);
+        return res;
+    }, [applyUser]);
+
+    // Re-read the account from the server (status can change while the tab is open: approval, block, expiry).
+    const refreshUser = useCallback(async () => {
+        const token = accessTokenRef.current;
+        if (!token) return null;
+        try {
+            const res = await authApi.me(token);
+            applyUser(res.user);
+            return res.user;
+        } catch {
+            return null; // 401 is handled by the API client (refresh → sign-out)
+        }
+    }, [applyUser]);
 
     const login = useCallback(
         async (email, password) => {
@@ -197,7 +230,8 @@ export function AuthProvider({ children }) {
             saveToStorage({ ...session, user: data.user });
             scheduleRefresh(7 * 24 * 60 * 60 * 1000);
 
-            return data.user;
+            // `_emailSent` (login of an unverified account only): false = the server could not send the code.
+            return { ...data.user, _emailSent: data.emailSent };
         },
         [scheduleRefresh, setAccessTokenBoth],
     );
@@ -222,6 +256,21 @@ export function AuthProvider({ children }) {
         return res.user;
     }, []);
 
+    // ─── Finish Google sign-in: trade the single-use code from the redirect for the session ──────
+    const loginWithOAuthCode = useCallback(
+        async (code) => {
+            const data = await authApi.oauthExchange(code);
+            const session = { refreshToken: data.refreshToken, sessionId: data.sessionId };
+            sessionRef.current = session;
+            setAccessTokenBoth(data.accessToken);
+            setUser(data.user);
+            saveToStorage({ ...session, user: data.user });
+            scheduleRefresh(7 * 24 * 60 * 60 * 1000);
+            return data.user;
+        },
+        [scheduleRefresh, setAccessTokenBoth],
+    );
+
     // ─── Login with pre-issued tokens (admin register shortcut) ──────────────
     const loginWithTokens = useCallback(
         ({ accessToken: at, refreshToken, sessionId, user: u }) => {
@@ -238,24 +287,17 @@ export function AuthProvider({ children }) {
     // ─── Get current access token (uses ref for zero-staleness) ──────────────
     const getToken = useCallback(() => accessTokenRef.current, []);
 
-    // ─── Auth modal opener registration (set by AuthModalContext) ─────────────
-    // AuthModalContext calls this to allow 401s to trigger re-auth modal
-    const openModalRef = useRef(null);
-    const registerModalOpener = useCallback((fn) => {
-        openModalRef.current = fn;
-    }, []);
+    // Kept for backward compatibility with AuthModalContext's shim (no modal exists any more).
+    const registerModalOpener = useCallback(() => {}, []);
 
     // ─── Register with API client (enables auto-JWT injection + silent refresh) ─
     useEffect(() => {
         registerAuthProvider(
             () => accessTokenRef.current, // always returns latest (no closure staleness)
             () => {
-                // 401 after refresh also failed — show re-auth modal
-                if (openModalRef.current) {
-                    openModalRef.current({ view: "login" });
-                } else {
-                    clearAuth();
-                }
+                // 401 after refresh also failed → session is gone. Clearing auth state makes the route
+                // guards send the user to /login (full page), keeping the page they were on in `from`.
+                clearAuth();
             },
             // Silent refresh callback — called by api client on 401 with expired token
             async () => {
@@ -265,6 +307,28 @@ export function AuthProvider({ children }) {
         );
     }, [clearAuth, doRefresh]); // no accessToken dep needed — using ref
 
+    // ─── Keep account state fresh ──────────────────────────────────────────────
+    // The server answered 403 EMAIL_NOT_VERIFIED / PENDING_APPROVAL / … (see api/client.js) or the tab
+    // regained focus while the account cannot play yet (e.g. waiting for approval): re-read it.
+    const lastRefreshRef = useRef(0);
+    useEffect(() => {
+        const maybeRefresh = () => {
+            const now = Date.now();
+            if (now - lastRefreshRef.current < 3000) return;
+            lastRefreshRef.current = now;
+            refreshUser();
+        };
+        const onVisible = () => {
+            if (document.visibilityState === "visible" && sessionRef.current && !(user?.canPlay)) maybeRefresh();
+        };
+        window.addEventListener("flux:account-state-changed", maybeRefresh);
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            window.removeEventListener("flux:account-state-changed", maybeRefresh);
+            document.removeEventListener("visibilitychange", onVisible);
+        };
+    }, [refreshUser, user?.canPlay]);
+
     // ─── Context value ─────────────────────────────────────────────────────────
     const value = {
         user,
@@ -272,6 +336,11 @@ export function AuthProvider({ children }) {
         loading,
         error,
         isAuthenticated: !!user,
+        isEmailVerified: !!user?.emailVerified,
+        // browsing = signed in + verified e-mail (admin approval NOT required)
+        canBrowse: !!user?.emailVerified && user?.status !== "blocked" && user?.status !== "rejected",
+        // server's verdict on "may watch right now" (approved + active access + verified)
+        canPlay: !!user?.canPlay,
         isApproved: user?.status === "approved",
         isPending: user?.status === "pending",
         isBlocked: user?.status === "blocked",
@@ -281,8 +350,11 @@ export function AuthProvider({ children }) {
         register,
         verifyEmail,
         resendOTP,
+        requestApproval,
         login,
         loginWithTokens,
+        loginWithOAuthCode,
+        refreshUser,
         logout,
         updateMe,
         getToken,

@@ -354,8 +354,46 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
         video.addEventListener("volumechange", onVolumeChange);
 
         if (Hls.isSupported()) {
-            hls = new Hls({ maxMaxBufferLength: 8, enableWorker: true, lowLatencyMode: true });
+            // FIX (10-12s start delay): tuned for fastest first frame.
+            //  - startLevel 0 + testBandwidth false: begin on the lightest rung
+            //    right away instead of probing bandwidth first; ABR climbs
+            //    after the first fragment (high default estimate = fast climb).
+            //  - startFragPrefetch: fetch the first fragment while the level
+            //    playlist is still being parsed (saves one round trip).
+            //  - liveSyncDurationCount 2 (default 3): start closer to the live
+            //    edge, so less to buffer before play.
+            //  - short load timeouts / retry delays: a slow or dead first
+            //    request retries in ~0.5s instead of waiting out the default.
+            //  - small buffers: less to flush on a manual quality switch.
+            hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: true,
+                startLevel: 0,
+                testBandwidth: false,
+                startFragPrefetch: true,
+                abrEwmaDefaultEstimate: 5000000,
+                abrEwmaFastLive: 2,
+                abrEwmaSlowLive: 6,
+                liveSyncDurationCount: 2,
+                liveMaxLatencyDurationCount: 6,
+                maxBufferLength: 8,
+                maxMaxBufferLength: 12,
+                backBufferLength: 8,
+                maxBufferHole: 0.5,
+                manifestLoadingTimeOut: 6000,
+                manifestLoadingMaxRetry: 2,
+                manifestLoadingRetryDelay: 500,
+                levelLoadingTimeOut: 6000,
+                levelLoadingMaxRetry: 3,
+                levelLoadingRetryDelay: 500,
+                fragLoadingTimeOut: 8000,
+                fragLoadingMaxRetry: 3,
+                fragLoadingRetryDelay: 500,
+            });
             hlsRef.current = hls;
+            // Rebuilds the picker's level list with the currently-playing rung
+            // flagged (assigned in MANIFEST_PARSED, used in LEVEL_SWITCHED).
+            let levelBuilder = null;
             hls.loadSource(channel.url);
             hls.attachMedia(video);
 
@@ -363,27 +401,36 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                 actions.setReady(true);
                 actions.setBuffering(false);
                 if (hls.levels?.length > 0) {
-                    actions.setQualityLevels(
-                        hls.levels
-                            .map((l, i) => ({
-                                index: i,
-                                height: l.height,
-                                width: l.width,
-                                bitrate: l.bitrate,
-                                label: (() => {
-                                    if (l.height > 0) return `${l.height}p`;
-                                    const { resolution: nameRes } = extractNameMeta(channel?.name || "");
-                                    if (nameRes) return nameRes;
-                                    if (l.bitrate > 0) {
-                                        const kbps = Math.round(l.bitrate / 1000);
-                                        return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`;
-                                    }
-                                    return "Live";
-                                })(),
-                            }))
-                            // Low → High: ascending bitrate order for display
-                            .sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0)),
-                    );
+                    // FIX (resolution control): keep hls.js's own level order so
+                    // array position === hls level index. PlayerControls reads
+                    // qualityLevels[activeQuality] positionally for the badge,
+                    // and hls.nextLevel takes that same index — the old
+                    // re-sort by bitrate could desync the two. Labels: use the
+                    // real height when present; if several rungs lack RESOLUTION
+                    // (common in IPTV master playlists) fall back to bitrate per
+                    // rung — the old name-token fallback gave EVERY rung the same
+                    // "HD" label, so the picker listed identical rows.
+                    const lvls = hls.levels;
+                    const fmtRate = (bps) => {
+                        const kbps = Math.round(bps / 1000);
+                        return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`;
+                    };
+                    const buildLevels = (playingIdx) =>
+                        lvls.map((l, i) => ({
+                            index: i,
+                            height: l.height,
+                            width: l.width,
+                            bitrate: l.bitrate,
+                            playing: i === playingIdx,
+                            label: (() => {
+                                if (l.height > 0) return `${l.height}p`;
+                                if (l.bitrate > 0) return fmtRate(l.bitrate);
+                                const { resolution: nameRes } = extractNameMeta(channel?.name || "");
+                                return nameRes || `Level ${i + 1}`;
+                            })(),
+                        }));
+                    actions.setQualityLevels(buildLevels(hls.currentLevel));
+                    levelBuilder = buildLevels;
                     actions.setActiveQuality(-1);
                     // Real technical resolution from the highest available
                     // level's height — independent of whatever's in the
@@ -429,8 +476,11 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
                 attemptAutoplay(video);
             });
 
-            hls.on(Hls.Events.LEVEL_SWITCHED, () => {
+            hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => {
                 if (hls.autoLevelEnabled) actions.setActiveQuality(-1);
+                // Flag the rung actually playing so the picker's "Auto • xxx"
+                // label (and highlight) reflects reality, not the lowest rung.
+                if (levelBuilder && hls.levels?.length > 1) actions.setQualityLevels(levelBuilder(d?.level ?? hls.currentLevel));
             });
 
             hls.on(Hls.Events.ERROR, (_, d) => {
@@ -490,9 +540,21 @@ function LivePlayerInner({ stateStreamUrl, stateChannelName, stateChannelLogo })
     // stutter/black-frame on every quality change. nextLevel applies the
     // switch at the next keyframe boundary instead, buffer-preserving — the
     // established fix already used elsewhere in this project (PlayerPage.jsx).
+    //
+    // FIX (quality change took a few seconds): nextLevel only applies at the
+    // NEXT fragment boundary, so everything already buffered kept playing at
+    // the old quality first. A manual pick now uses currentLevel, which
+    // flushes the buffer and switches immediately (brief rebuffer = time to
+    // fetch one fragment of the new level). Back to Auto keeps nextLevel —
+    // nothing to flush, ABR just resumes.
     useEffect(() => {
-        if (!hlsRef.current) return;
-        hlsRef.current.nextLevel = state.activeQuality; // -1 = auto
+        const hls = hlsRef.current;
+        if (!hls) return;
+        if (state.activeQuality === -1) {
+            hls.nextLevel = -1;
+        } else if (hls.levels?.length > state.activeQuality) {
+            hls.currentLevel = state.activeQuality;
+        }
     }, [state.activeQuality]);
 
     // Sync active audio track → HLS engine

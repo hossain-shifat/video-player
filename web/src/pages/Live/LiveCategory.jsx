@@ -248,8 +248,10 @@ export default function LiveCategory() {
     const { slug } = useParams();
     const categoryValue = deslugify(slug || "");
 
-    const { isAuthenticated, isApproved, loading: authLoading } = useAuth();
-    const enabled = !authLoading && isAuthenticated && isApproved;
+    // Listings are browsable by any VERIFIED account (pending approval included); the server strips the
+    // stream address unless the account may actually watch.
+    const { isAuthenticated, isEmailVerified, loading: authLoading } = useAuth();
+    const enabled = !authLoading && isAuthenticated && isEmailVerified;
 
     // ── Search (debounced, backend-executed) ───────────────────────────────────
     const [searchInput, setSearchInput] = useState("");

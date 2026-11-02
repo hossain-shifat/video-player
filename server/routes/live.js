@@ -32,6 +32,8 @@ const {
 
 const { authenticateJWT } = require("../auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("../auth/middleware/requireApprovedUser");
+const { requireVerifiedEmail } = require("../auth/middleware/requireVerifiedEmail");
+const { liveUrlGuard } = require("../auth/middleware/liveUrlGuard");
 const { requireRole } = require("../auth/middleware/requireRole");
 
 const ACCEPTED_MIMETYPES = new Set([
@@ -81,12 +83,13 @@ router.patch("/sources/:id", ...adminOnly, editSource); // PATCH  /api/live/sour
 router.post("/sources/:id/refresh", ...adminOnly, refreshSource); // POST   /api/live/sources/:id/refresh
 router.delete("/sources/:id", ...adminOnly, removeSource); // DELETE /api/live/sources/:id
 
-// Channel list — any approved (logged-in) user, for the live TV player.
+// Channel list — any VERIFIED user may browse the listing (pending included). The upstream stream
+// address is stripped by liveUrlGuard unless the account is allowed to watch (approved + active).
 // Now backend-paginated/filtered (q, category, page, limit) — see liveController.getChannels.
-router.get("/channels", authenticateJWT, requireApprovedUser, getChannels); // GET /api/live/channels
+router.get("/channels", authenticateJWT, requireVerifiedEmail, liveUrlGuard, getChannels); // GET /api/live/channels
 
 // Category list with counts — powers the category tabs on the Live page.
-router.get("/categories", authenticateJWT, requireApprovedUser, getCategoriesList); // GET /api/live/categories
+router.get("/categories", authenticateJWT, requireVerifiedEmail, liveUrlGuard, getCategoriesList); // GET /api/live/categories
 
 // Flat channel list — admin dashboard only (DashIPTV.jsx "Channel" tab)
 router.get("/channels/flat", ...adminOnly, getChannelsFlat); // GET /api/live/channels/flat

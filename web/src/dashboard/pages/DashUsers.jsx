@@ -27,19 +27,37 @@ import {
     AlertTriangle,
     WifiOff,
     Shield,
-    LogOut,
     Users,
-    UserPlus,
     Activity,
-    Lock,
     ChevronFirst,
     ChevronLast,
-    Filter,
-    SlidersHorizontal,
     Check,
+    ChevronUp,
+    Mail,
+    LogOut,
+    Archive,
+    Flame,
+    Film,
+    Tv,
+    Sparkles,
+    Copy,
 } from "lucide-react";
 import { dashApi } from "../api/dashboardApi";
-import ConfirmModal from "../components/ConfirmModal";
+import ConfirmModal, {
+    ModalShell,
+    ModalHeader,
+    ModalTabs,
+    ModalAvatar,
+    PanelBody,
+    ModalFooter,
+    ModalBadge,
+    ModalButton,
+    ModalSegmented,
+    ModalToggle,
+    ModalNote,
+    ModalChange,
+    TONE,
+} from "../components/ConfirmModal";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -62,7 +80,7 @@ function fmtDateShort(iso) {
     return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 function deviceIcon(ua = "") {
-    if (/ipad|tablet/i.test(ua)) return <Monitor size={13} />;
+    if (/ipad|tablet/i.test(ua)) return <Monitor size={13} />; // also matches deviceType "tablet" / "mobile"
     if (/mobile|android|iphone/i.test(ua)) return <Smartphone size={13} />;
     return <Globe size={13} />;
 }
@@ -77,6 +95,7 @@ const STATUS_CFG = {
     pending: { dot: "bg-warning", badge: "bg-warning/10 border-warning/30 text-warning", label: "Pending" },
     rejected: { dot: "bg-error", badge: "bg-error/10   border-error/30   text-error", label: "Rejected" },
     blocked: { dot: "bg-error/70", badge: "bg-error/8   border-error/20   text-error/80", label: "Blocked" },
+    deleted: { dot: "bg-warning", badge: "bg-warning/8 border-warning/25 text-warning", label: "Pending deletion" },
 };
 
 function StatusBadge({ status }) {
@@ -111,6 +130,7 @@ function Avatar({ user, size = "sm" }) {
             sm: "w-8 h-8 text-xs",
             md: "w-10 h-10 text-sm",
             lg: "w-12 h-12 text-base",
+            xl: "w-20 h-20 text-3xl",
         }[size] ?? "w-8 h-8 text-xs";
     const initial = (user.name || user.email || "U")[0].toUpperCase();
     if (user.avatar) return <img src={user.avatar} alt="" className={`${dim} rounded-full object-cover ring-1 ring-base-300 shrink-0`} />;
@@ -130,24 +150,6 @@ function Toast({ toast }) {
             {toast.msg}
         </div>,
         document.body,
-    );
-}
-
-// ─── Toggle ───────────────────────────────────────────────────────────────────
-
-function Toggle({ value, onChange, disabled }) {
-    return (
-        <button
-            type="button"
-            onClick={() => !disabled && onChange(!value)}
-            disabled={disabled}
-            className={`relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0 disabled:opacity-40 border-none cursor-pointer
-                ${value ? "bg-primary" : "bg-white/15"}`}>
-            <span
-                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all duration-200
-                ${value ? "left-4.75" : "left-0.5"}`}
-            />
-        </button>
     );
 }
 
@@ -252,81 +254,6 @@ function ActionMenu({ user, onAction }) {
                     document.body,
                 )}
         </>
-    );
-}
-
-// ─── Modal shell ──────────────────────────────────────────────────────────────
-
-function Modal({ onClose, children, maxW = "max-w-md" }) {
-    useEffect(() => {
-        const h = (e) => {
-            if (e.key === "Escape") onClose();
-        };
-        document.addEventListener("keydown", h);
-        return () => document.removeEventListener("keydown", h);
-    }, [onClose]);
-
-    return (
-        <dialog open className="modal modal-open" style={{ zIndex: 9998 }}>
-            <div
-                className={`modal-box ${maxW} w-[calc(100vw-1.5rem)] sm:w-full p-0 overflow-hidden
-                bg-base-300 rounded-md border border-white/9
-                shadow-[0_4px_6px_rgba(0,0,0,0.3),0_16px_48px_rgba(0,0,0,0.7)]`}
-                style={{ animation: "mIn .15s cubic-bezier(.16,1,.3,1)", maxHeight: "calc(100vh - 3rem)" }}>
-                {children}
-            </div>
-            <div className="modal-backdrop bg-black/75" onClick={onClose} />
-            <style>{`
-                @keyframes mIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
-                .hs{scrollbar-width:none}.hs::-webkit-scrollbar{display:none}
-            `}</style>
-        </dialog>
-    );
-}
-
-function ModalHeader({ title, subtitle, icon: Icon, iconCls = "text-primary", onClose, badge }) {
-    return (
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.07] bg-base-200">
-            {Icon && (
-                <div className={`w-8 h-8 rounded-md bg-white/[0.07] flex items-center justify-center shrink-0 ${iconCls}`}>
-                    <Icon size={16} strokeWidth={1.8} />
-                </div>
-            )}
-            <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-bold text-white leading-tight">{title}</h3>
-                {subtitle && <p className="text-[11px] text-white/45 truncate mt-0.5">{subtitle}</p>}
-            </div>
-            {badge}
-            <button
-                onClick={onClose}
-                aria-label="Close"
-                className="w-7 h-7 rounded-md flex items-center justify-center text-white/35 border-none
-                    hover:text-white hover:bg-white/8 transition-all shrink-0 cursor-pointer">
-                <X size={14} strokeWidth={2} />
-            </button>
-        </div>
-    );
-}
-
-function Section({ label, icon: Icon, iconCls = "text-white/35", children }) {
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center gap-1.5">
-                {Icon && <Icon size={10} className={`shrink-0 ${iconCls}`} strokeWidth={2.5} />}
-                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/40">{label}</span>
-                <div className="flex-1 h-px bg-white/5" />
-            </div>
-            {children}
-        </div>
-    );
-}
-
-function FieldRow({ label, value }) {
-    return (
-        <div className="flex justify-between items-center py-1.5 border-b border-white/4 last:border-0">
-            <dt className="text-xs text-white/45 font-medium shrink-0 mr-3">{label}</dt>
-            <dd className="text-xs text-white font-semibold text-right max-w-[65%] truncate">{value}</dd>
-        </div>
     );
 }
 
@@ -482,178 +409,414 @@ function Pagination({ page, pages, total, limit, onPage }) {
     );
 }
 
-// ─── INFO MODAL ───────────────────────────────────────────────────────────────
+// ─── Modal helpers (design rules: MODAL_DESIGN_GUIDE.md) ──────────────────────
 
-function InfoModal({ user, onClose }) {
-    const [sessions, setSessions] = useState([]);
-    const [sessLoading, setSessLoading] = useState(false);
-    const [revoking, setRevoking] = useState(null);
+const STATUS_META = {
+    approved: { icon: CheckCircle, tone: "success", label: "Approved" },
+    pending: { icon: Clock, tone: "warning", label: "Pending" },
+    rejected: { icon: XCircle, tone: "error", label: "Rejected" },
+    blocked: { icon: Ban, tone: "error", label: "Blocked" },
+};
+const cap = (v) => v.charAt(0).toUpperCase() + v.slice(1);
 
-    useEffect(() => {
-        if (!user) return;
-        setSessions([]);
-        setSessLoading(true);
-        dashApi
-            .userSessions(user.id)
-            .then((d) => setSessions(d?.sessions ?? []))
-            .catch(() => setSessions([]))
-            .finally(() => setSessLoading(false));
-    }, [user?.id]);
-
-    if (!user) return null;
-
-    const active = sessions.filter((s) => s.isActive !== false);
-    const lastMs = sessions.length > 0 ? Math.max(...sessions.map((s) => new Date(s.lastSeenAt || 0).getTime())) : null;
-    const expired = isExpired(user);
-
-    async function revoke(sid) {
-        setRevoking(sid);
-        try {
-            await dashApi.revokeSession(sid);
-            setSessions((p) => p.filter((s) => s.id !== sid));
-        } catch {
-            /* silent */
-        } finally {
-            setRevoking(null);
-        }
-    }
-
+function StatusChip({ user }) {
+    const m = user.deletedAt ? { icon: Trash2, tone: "warning", label: "Pending deletion" } : (STATUS_META[user.status] ?? { icon: Clock, tone: "neutral", label: cap(user.status || "unknown") });
     return (
-        <Modal onClose={onClose} maxW="max-w-md">
-            {/* ── Header ── */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.07] bg-base-200">
-                <div className="relative shrink-0">
-                    <Avatar user={user} size="md" />
-                    {active.length > 0 && <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-base-200" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-white truncate">{user.name || "Unnamed"}</p>
-                    <p className="text-[11px] text-white/40 font-mono truncate">{user.email}</p>
-                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                        <RoleBadge role={user.role} />
-                        <StatusBadge status={user.status} />
-                    </div>
-                </div>
-                <button
-                    onClick={onClose}
-                    aria-label="Close"
-                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/30 border-none
-                        hover:text-white hover:bg-white/8 transition-all cursor-pointer shrink-0 self-start mt-0.5">
-                    <X size={14} strokeWidth={2} />
-                </button>
-            </div>
-
-            {/* ── Stats bar ── */}
-            <div className="grid grid-cols-2 divide-x divide-white/6 bg-base-200 border-b border-white/6">
-                {[
-                    { label: "Sessions", val: user._count?.sessions ?? active.length, cls: "text-primary" },
-                    { label: "Last seen", val: lastMs ? fmtRel(lastMs) : "—", cls: "text-white/70" },
-                ].map(({ label, val, cls }) => (
-                    <div key={label} className="flex flex-col items-center py-2.5 px-2">
-                        <span className={`text-sm font-black tabular-nums leading-none ${cls}`}>{val}</span>
-                        <span className="text-[9px] text-white/35 uppercase tracking-wider mt-0.5">{label}</span>
-                    </div>
-                ))}
-            </div>
-
-            {/* ── Scrollable body ── */}
-            <div className="hs overflow-y-auto" style={{ maxHeight: "calc(min(65vh, 420px))" }}>
-                {/* Account section */}
-                <div className="px-4 pt-4 pb-0">
-                    <Section label="Account" icon={User} iconCls="text-primary/60">
-                        <div className="bg-base-200 rounded-md border border-white/6 px-1">
-                            <FieldRow label="User ID" value={<span className="font-mono text-[10px] text-white/50">{user.id.slice(0, 18)}…</span>} />
-                            <FieldRow
-                                label="Verified"
-                                value={user.emailVerified ? <span className="text-success font-bold">✓ Verified</span> : <span className="text-warning font-bold">✗ Unverified</span>}
-                            />
-                            <FieldRow label="Joined" value={fmtDate(user.createdAt)} />
-                            <FieldRow label="Updated" value={fmtDate(user.updatedAt)} />
-                        </div>
-                    </Section>
-                </div>
-
-                {/* Access section */}
-                <div className="px-4 pt-4 pb-0">
-                    <Section label="Access" icon={Shield} iconCls="text-accent/60">
-                        <div className="bg-base-200 rounded-md border border-white/6 px-1">
-                            <FieldRow label="Type" value={<span className="capitalize">{user.accessType || "Permanent"}</span>} />
-                            {user.accessType === "temporary" && <FieldRow label="Expires" value={<span className={expired ? "text-error font-bold" : ""}>{fmtDate(user.accessExpiresAt)}</span>} />}
-                            <FieldRow
-                                label="Restricted content"
-                                value={user.permissions?.allowAdult ? <span className="text-warning font-bold">Unrestricted</span> : <span className="text-white/50">Restricted</span>}
-                            />
-                            <FieldRow label="Last IP" value={<span className="font-mono text-[10px] text-white/50">{user.lastIp || "—"}</span>} />
-                        </div>
-                    </Section>
-                </div>
-
-                {/* Sessions section */}
-                <div className="px-4 pt-4 pb-4">
-                    <Section label={`Sessions${active.length > 0 ? ` · ${active.length} active` : ""}`} icon={Monitor} iconCls="text-success/60">
-                        {sessLoading ? (
-                            <div className="space-y-1.5">
-                                {[1, 2].map((i) => (
-                                    <div key={i} className="flex gap-3 items-center px-3 py-2.5 rounded-md bg-base-200 border border-white/5">
-                                        <div className="w-7 h-7 rounded-md bg-white/5 animate-pulse shrink-0" />
-                                        <div className="flex-1 space-y-1.5">
-                                            <div className="h-2.5 w-28 bg-white/5 rounded animate-pulse" />
-                                            <div className="h-2 w-20 bg-white/4 rounded animate-pulse" />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : active.length === 0 ? (
-                            <div className="flex items-center gap-2.5 px-3 py-3 rounded-md border border-dashed border-white/8 bg-base-200">
-                                <WifiOff size={14} className="text-white/20 shrink-0" />
-                                <p className="text-xs text-white/35">No active sessions</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-1.5">
-                                {active.map((s) => (
-                                    <div
-                                        key={s.id}
-                                        className="flex items-center gap-3 px-3 py-2.5 rounded-md
-                                        bg-base-200 border border-white/6 hover:border-white/10 transition-colors">
-                                        <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">{deviceIcon(s.userAgent ?? "")}</div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs font-semibold text-white truncate">{[s.browser, s.os].filter(Boolean).join(" · ") || s.userAgent || "Unknown Device"}</p>
-                                            <div className="flex items-center gap-2 mt-0.5">
-                                                {s.ip && <span className="text-[10px] font-mono text-white/35">{s.ip}</span>}
-                                                {s.lastSeenAt && (
-                                                    <span className="text-[10px] text-white/35 flex items-center gap-0.5">
-                                                        <Clock size={9} /> {fmtRel(s.lastSeenAt)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={() => revoke(s.id)}
-                                            title="Revoke"
-                                            disabled={revoking === s.id}
-                                            className="w-6 h-6 rounded-md flex items-center justify-center text-white/25 border-none
-                                                hover:bg-error/15 hover:text-error transition-all shrink-0 disabled:opacity-40 cursor-pointer">
-                                            {revoking === s.id ? <span className="loading loading-spinner loading-xs" /> : <LogOut size={12} />}
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </Section>
-                </div>
-            </div>
-        </Modal>
+        <ModalBadge tone={m.tone} icon={m.icon}>
+            {m.label}
+        </ModalBadge>
     );
 }
 
-// ─── REQUEST MODAL ────────────────────────────────────────────────────────────
+// Tinted icon tile palette (same idea as StatCard: text-X on bg-X/10). Colour carries meaning, not decoration.
+const TILE = {
+    "text-primary": "bg-primary/10",
+    "text-success": "bg-success/10",
+    "text-warning": "bg-warning/10",
+    "text-error": "bg-error/10",
+    "text-info": "bg-info/10",
+    "text-accent": "bg-accent/10",
+};
+
+function ChoiceCard({ on, onClick, icon: Icon, tone = "text-primary", border = "border-primary", title, desc, disabled, vertical = false }) {
+    return (
+        <button
+            type="button"
+            role="radio"
+            aria-checked={on}
+            disabled={disabled}
+            onClick={onClick}
+            className={`card border relative cursor-pointer rounded-md bg-base-100 text-left outline-0! transition-colors hover:bg-base-content/5 focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${on ? `${border} bg-base-content/5` : "border-base-content/10"}`}>
+            <span className={`card-body gap-1.5 p-4 ${vertical ? "items-center justify-center text-center" : "flex-row items-center gap-3"}`}>
+                <span className={`grid shrink-0 place-items-center rounded-full h-10 w-10 ${TILE[tone] ?? "bg-base-300"} ${tone}`}>
+                    <Icon size={vertical ? 21 : 19} />
+                </span>
+                <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-medium text-base-content">{title}</span>
+                    <span className="block text-xs leading-snug text-base-content/70">{desc}</span>
+                </span>
+                {on && <CheckCircle size={16} className={`shrink-0 ${vertical ? "absolute right-2.5 top-2.5" : ""} ${tone}`} />}
+            </span>
+        </button>
+    );
+}
+
+function SettingRow({ icon: Icon, tone = "text-base-content/70", title, desc, right, children }) {
+    return (
+        <div className="card border shrink-0 rounded-md border-base-content/10 bg-base-100">
+            <div className="card-body gap-3 px-4 py-3">
+                <div className="flex items-center gap-3">
+                    <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${TILE[tone] ?? "bg-base-300"} ${tone}`}>
+                        <Icon size={18} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[13.5px] font-medium text-base-content">{title}</p>
+                        <p className="text-xs leading-snug text-base-content/70">{desc}</p>
+                    </div>
+                    {right}
+                </div>
+                {children}
+            </div>
+        </div>
+    );
+}
+
+// Overview primitives: a titled card holding label / value rows, like a spec sheet.
+function DetailCard({ icon: Icon, title, children }) {
+    return (
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-md border border-base-content/10 bg-base-100">
+            <h3 className="flex items-center gap-2 border-b border-base-content/10 bg-base-content/5 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/60">
+                <Icon size={13} className="text-primary" />
+                {title}
+            </h3>
+            <dl className="flex flex-1 flex-col divide-y divide-base-content/10">{children}</dl>
+        </section>
+    );
+}
+
+function DetailRow({ icon: Icon, tone = "text-base-content/50", label, children }) {
+    return (
+        <div className="flex min-h-11 items-center justify-between gap-4 px-4 py-2 md:flex-1">
+            <dt className="flex shrink-0 items-center gap-2 text-xs text-base-content/60">
+                <Icon size={14} className={tone} />
+                {label}
+            </dt>
+            <dd className="flex min-w-0 items-center justify-end gap-2 text-[13px] font-medium text-base-content">{children}</dd>
+        </div>
+    );
+}
+
+function CopyButton({ text, label }) {
+    const [done, setDone] = useState(false);
+    async function copy() {
+        try {
+            if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+            else {
+                // plain-http LAN addresses have no navigator.clipboard
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+            }
+            setDone(true);
+            setTimeout(() => setDone(false), 1400);
+        } catch {
+            /* ignore */
+        }
+    }
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            aria-label={done ? "Copied" : `Copy ${label}`}
+            title={done ? "Copied" : `Copy ${label}`}
+            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-base-content/50 transition-colors hover:bg-base-content/10 hover:text-base-content">
+            {done ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+        </button>
+    );
+}
+
+function HeaderMetric({ label, value }) {
+    return (
+        <div className="stat grid-rows-2 gap-0 px-4 py-0">
+            <div className="stat-value row-start-1 text-sm font-medium tabular-nums text-base-content">{value}</div>
+            <div className="stat-title row-start-2 text-[11px]">{label}</div>
+        </div>
+    );
+}
+
+// ─── DETAILS ──────────────────────────────────────────────────────────────────
+
+function InfoModal({ user, onClose }) {
+    // Admins get a privacy-safe DEVICE SUMMARY (actual machines, repeat logins merged). They cannot log a user's
+    // devices out; owners do that themselves in Settings → Profile → Devices.
+    const [tab, setTab] = useState("overview");
+    const [devices, setDevices] = useState([]);
+    const [summary, setSummary] = useState({ lastIp: "", registeredDevices: 0, activeSessions: 0 });
+    const [loading, setLoading] = useState(false);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        if (!user) return;
+        setTab("overview");
+        setDevices([]);
+        setFailed(false);
+        setLoading(true);
+        dashApi
+            .userSessions(user.id)
+            .then((d) => {
+                setDevices(d?.devices ?? []);
+                setSummary({ lastIp: d?.lastIp || "", registeredDevices: d?.registeredDevices ?? 0, activeSessions: d?.activeSessions ?? 0 });
+            })
+            .catch(() => setFailed(true))
+            .finally(() => setLoading(false));
+    }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (!user) return null;
+
+    const expired = isExpired(user);
+    const lastIp = user.lastIp || summary.lastIp || "";
+    const lastMs = devices.length ? Math.max(...devices.map((d) => new Date(d.lastActiveAt || 0).getTime())) : user.lastLoginAt ? new Date(user.lastLoginAt).getTime() : null;
+    const deleting = !!user.deletedAt;
+    const daysLeft = user.purgeAt ? Math.max(0, Math.ceil((new Date(user.purgeAt).getTime() - Date.now()) / 86400000)) : null;
+    const delStart = user.deletedAt ? new Date(user.deletedAt).getTime() : null;
+    const delEnd = user.purgeAt ? new Date(user.purgeAt).getTime() : null;
+    const delPct = delStart && delEnd && delEnd > delStart ? Math.min(100, Math.max(0, Math.round(((Date.now() - delStart) / (delEnd - delStart)) * 100))) : 0;
+    const accessText = expired ? `Expired ${fmtDate(user.accessExpiresAt)}` : user.accessType === "temporary" ? `Temporary · ${fmtDate(user.accessExpiresAt)}` : "Permanent";
+    const deviceCount = loading ? "…" : summary.registeredDevices || (user._count?.devices ?? 0);
+
+    return (
+        <ModalShell onClose={onClose} labelledBy="um-info-t">
+            <ModalHeader
+                id="um-info-t"
+                avatar={<ModalAvatar name={user.name || user.email} src={user.avatar} className="w-14" ring="border-primary" />}
+                title={user.name || "Unnamed"}
+                subtitle={user.email}
+                badges={
+                    <>
+                        <ModalBadge tone={user.role === "admin" ? "primary" : "info"} icon={user.role === "admin" ? Crown : User}>
+                            {user.role === "admin" ? "Admin" : "User"}
+                        </ModalBadge>
+                        <StatusChip user={user} />
+                    </>
+                }
+                right={
+                    <div className="stats hidden bg-transparent md:inline-grid">
+                        <HeaderMetric label="Devices" value={deviceCount} />
+                        <HeaderMetric label="Last seen" value={lastMs ? fmtRel(lastMs) : "—"} />
+                        <HeaderMetric label="Joined" value={user.createdAt ? fmtDate(user.createdAt) : "—"} />
+                    </div>
+                }
+                onClose={onClose}
+            />
+            <ModalTabs
+                value={tab}
+                onChange={setTab}
+                tabs={[
+                    { id: "overview", label: "Overview", icon: User },
+                    { id: "devices", label: "Devices", icon: Monitor, count: loading ? null : devices.length },
+                ]}
+            />
+            <PanelBody bordered={false}>
+                {tab === "overview" && (
+                    <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" className="flex min-h-0 flex-1 flex-col gap-2.5">
+                        {deleting && (
+                            <div className="card border rounded-md border-warning/40 bg-warning/10">
+                                <div className="card-body gap-1 px-3.5 py-2.5">
+                                    <div className="flex items-center gap-2.5">
+                                        <Trash2 size={16} className="shrink-0 text-warning" />
+                                        <span className="text-[13px] font-medium text-base-content">Scheduled for deletion</span>
+                                        <progress
+                                            className="progress progress-warning mx-1 flex-1 rounded-full [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-moz-progress-bar]:rounded-full"
+                                            value={delPct}
+                                            max={100}
+                                            aria-label="Recovery window used"
+                                        />
+                                        <span className="shrink-0 text-xs text-base-content/70">
+                                            {daysLeft != null ? `${daysLeft} day${daysLeft === 1 ? "" : "s"} left` : ""}
+                                            {user.purgeAt ? ` · purge ${fmtDateShort(user.purgeAt)}` : ""}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-base-content/70">Revoked {fmtDate(user.deletedAt)}. Only the account owner can recover it, by verifying their email.</p>
+                                    {user.purgeError && <p className="text-xs text-error">Last purge attempt failed: {user.purgeError}</p>}
+                                </div>
+                            </div>
+                        )}
+                        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2">
+                            <DetailCard icon={User} title="Account">
+                                <DetailRow icon={Mail} tone="text-info" label="Email">
+                                    <span className="truncate" title={user.email}>
+                                        {user.email}
+                                    </span>
+                                    <CopyButton text={user.email} label="email" />
+                                </DetailRow>
+                                <DetailRow icon={Check} tone="text-success" label="Email status">
+                                    {user.emailVerified ? (
+                                        <ModalBadge tone="success" icon={Check}>
+                                            Verified
+                                        </ModalBadge>
+                                    ) : (
+                                        <ModalBadge tone="warning" icon={AlertTriangle}>
+                                            Not verified
+                                        </ModalBadge>
+                                    )}
+                                </DetailRow>
+                                <DetailRow icon={Shield} tone="text-primary" label="Role">
+                                    <ModalBadge tone={user.role === "admin" ? "primary" : "info"} icon={user.role === "admin" ? Crown : User}>
+                                        {user.role === "admin" ? "Admin" : "User"}
+                                    </ModalBadge>
+                                </DetailRow>
+                                <DetailRow icon={Calendar} label="Joined">
+                                    {user.createdAt ? fmtDate(user.createdAt) : "—"}
+                                </DetailRow>
+                            </DetailCard>
+
+                            <DetailCard icon={Activity} title="Access & activity">
+                                <DetailRow icon={Clock} tone="text-warning" label="Access">
+                                    {expired ? (
+                                        <ModalBadge tone="error" icon={Clock}>
+                                            Expired {fmtDate(user.accessExpiresAt)}
+                                        </ModalBadge>
+                                    ) : user.accessType === "temporary" ? (
+                                        <ModalBadge tone="warning" icon={Clock}>
+                                            Until {fmtDate(user.accessExpiresAt)}
+                                        </ModalBadge>
+                                    ) : (
+                                        <ModalBadge tone="neutral">Permanent</ModalBadge>
+                                    )}
+                                </DetailRow>
+                                <DetailRow icon={LogOut} label="Last sign-in">
+                                    <span>{user.lastLoginAt ? fmtRel(user.lastLoginAt) : "—"}</span>
+                                    {user.lastLoginAt && <span className="hidden font-normal text-base-content/50 sm:inline">· {fmtDate(user.lastLoginAt)}</span>}
+                                </DetailRow>
+                                <DetailRow icon={Globe} tone="text-info" label="Last IP">
+                                    <span className="truncate font-mono">{lastIp || "—"}</span>
+                                    {lastIp && <CopyButton text={lastIp} label="IP address" />}
+                                </DetailRow>
+                                <DetailRow icon={Monitor} label="Devices">
+                                    <span className="tabular-nums">{deviceCount}</span>
+                                    {!loading && summary.activeSessions > 0 && <span className="font-normal text-base-content/50">· {summary.activeSessions} active</span>}
+                                </DetailRow>
+                            </DetailCard>
+                        </div>
+                    </div>
+                )}
+
+                {tab === "devices" && (
+                    <div role="tabpanel" id="panel-devices" aria-labelledby="tab-devices" className="flex min-h-0 flex-1 flex-col gap-2">
+                        {loading ? (
+                            <div className="flex flex-col gap-2">
+                                {[0, 1, 2].map((i) => (
+                                    <div key={i} className="skeleton h-11 w-full rounded-md" />
+                                ))}
+                            </div>
+                        ) : failed ? (
+                            <ModalNote tone="error" icon={WifiOff}>
+                                Couldn’t load devices. Close and reopen this dialog to retry.
+                            </ModalNote>
+                        ) : devices.length === 0 ? (
+                            <p className="rounded-md border border-dashed border-base-content/10 px-4 py-8 text-center text-sm text-base-content/70">No signed-in devices</p>
+                        ) : (
+                            <ul className="list min-h-0 overflow-y-auto rounded-md border border-base-content/10 bg-base-100">
+                                {devices.map((d, i) => {
+                                    const activeNow = d.lastActiveAt && Date.now() - new Date(d.lastActiveAt).getTime() < 5 * 60 * 1000;
+                                    return (
+                                        <li key={`${d.label}-${d.ip}-${i}`} className="list-row items-center px-4 py-3">
+                                            <span className="grid h-9 w-9 place-items-center rounded-full bg-info/10 text-info">{deviceIcon(d.deviceType ?? "")}</span>
+                                            <div className="min-w-0">
+                                                <p className="truncate text-[13px] font-medium text-base-content">{d.label || "Unknown device"}</p>
+                                                <p className="truncate text-xs text-base-content/70">
+                                                    <span className="font-mono">{d.ip || "IP not recorded"}</span> · first seen {fmtDateShort(d.firstSeenAt)}
+                                                </p>
+                                            </div>
+                                            {activeNow ? (
+                                                <ModalBadge tone="success" icon={Activity}>
+                                                    Active now
+                                                </ModalBadge>
+                                            ) : (
+                                                <span className="text-xs text-base-content/70">{fmtRel(d.lastActiveAt)}</span>
+                                            )}
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        )}
+                        <p className="flex items-center gap-1.5 text-xs text-base-content/70">
+                            <Info size={12} className="shrink-0 text-info" />
+                            Same browser and IP count once; one IP can be the same device in another browser. View only.
+                        </p>
+                    </div>
+                )}
+            </PanelBody>
+            <ModalFooter>
+                <ModalButton onClick={onClose}>Close</ModalButton>
+            </ModalFooter>
+        </ModalShell>
+    );
+}
+
+// ─── MANAGE ACCESS ────────────────────────────────────────────────────────────
+// Two states, decided by the SAVED status:
+//   not approved → decision only (approve / reject / block / back to pending)
+//   approved     → role + access time limit, with a small status switch in the footer
 
 const DURATION_OPTS = [
-    { label: "7d", days: 7 },
-    { label: "30d", days: 30 },
-    { label: "90d", days: 90 },
-    { label: "1 yr", days: 365 },
+    { label: "7 days", days: 7 },
+    { label: "30 days", days: 30 },
+    { label: "90 days", days: 90 },
+    { label: "1 year", days: 365 },
 ];
+
+const DECISIONS = {
+    approved: {
+        icon: CheckCircle,
+        tone: "text-success",
+        border: "border-success/50",
+        title: "Approve",
+        desc: "Let them in",
+        cta: "Approve user",
+        btn: "primary",
+        note: "They can browse and watch what you allow. Role and access time limit appear right after approval.",
+        noteTone: "info",
+    },
+    rejected: {
+        icon: XCircle,
+        tone: "text-error",
+        border: "border-error/50",
+        title: "Reject",
+        desc: "Decline the request",
+        cta: "Reject request",
+        btn: "danger",
+        note: "Rejected users can’t browse or stream. Their devices stay signed in, but every request is refused.",
+        noteTone: "warning",
+    },
+    blocked: {
+        icon: Ban,
+        tone: "text-error",
+        border: "border-error/50",
+        title: "Block",
+        desc: "Suspend access",
+        cta: "Block user",
+        btn: "danger",
+        note: "Blocked users can’t browse or stream. Their devices stay signed in, but every request is refused.",
+        noteTone: "warning",
+    },
+    pending: {
+        icon: Clock,
+        tone: "text-warning",
+        border: "border-warning/50",
+        title: "Back to pending",
+        desc: "Wait for review",
+        cta: "Move to pending",
+        btn: "primary",
+        note: "They can’t browse or stream until approved.",
+        noteTone: "info",
+    },
+};
 
 function RequestModal({ user, onClose, onSave }) {
     const [role, setRole] = useState("user");
@@ -661,8 +824,10 @@ function RequestModal({ user, onClose, onSave }) {
     const [accessType, setAccessType] = useState("permanent");
     const [duration, setDuration] = useState(30);
     const [durationTouched, setDurationTouched] = useState(false);
+    const [pick, setPick] = useState(null);
     const [saving, setSaving] = useState(false);
-    const [dirty, setDirty] = useState(false);
+    const [hint, setHint] = useState("");
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         if (!user) return;
@@ -671,225 +836,303 @@ function RequestModal({ user, onClose, onSave }) {
         setAccessType(user.accessType || "permanent");
         setDuration(30);
         setDurationTouched(false);
-        setDirty(false);
-    }, [user?.id]);
+        setPick(null);
+        setHint("");
+        setError(null);
+    }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!user) return null;
 
-    const mark = (fn) => {
-        fn();
-        setDirty(true);
-    };
+    const deleting = !!user.deletedAt;
+    const origStatus = user.status || "pending";
+    const origRole = user.role || "user";
+    const origAccess = user.accessType || "permanent";
+    const approvedView = origStatus === "approved";
     const expired = isExpired(user);
+    const editing = approvedView && status === "approved";
+
+    // Preview of the expiry that will be written. An existing expiry is only replaced when access just became
+    // temporary or a new duration was picked, so role/status edits never silently extend or shorten it.
+    const newExpiry = (() => {
+        const d = new Date();
+        d.setDate(d.getDate() + duration);
+        return d.toISOString();
+    })();
+    const expiryIsNew = accessType === "temporary" && (durationTouched || origAccess !== "temporary");
+    const shownExpiry = accessType === "temporary" ? (expiryIsNew ? newExpiry : user.accessExpiresAt) : null;
+    const durationLabel = accessType === "temporary" && expiryIsNew ? `Temporary · ${DURATION_OPTS.find((o) => o.days === duration)?.label}` : cap(accessType);
+
+    const changes = approvedView
+        ? [
+              status !== origStatus && { name: "Status", from: cap(origStatus), to: cap(status) },
+              editing && role !== origRole && { name: "Role", from: cap(origRole), to: cap(role) },
+              editing && (accessType !== origAccess || (accessType === "temporary" && durationTouched)) && { name: "Access", from: cap(origAccess), to: durationLabel },
+          ].filter(Boolean)
+        : pick
+          ? [{ name: "Status", from: cap(origStatus), to: cap(pick) }]
+          : [];
+    const dirty = changes.length > 0;
 
     async function handleSave() {
+        if (deleting || saving) return;
+        const nextStatus = approvedView ? status : pick;
+        if (!nextStatus) {
+            setHint("Pick an outcome first.");
+            return;
+        }
+        if (!dirty) return;
         setSaving(true);
+        setError(null);
         try {
-            const originalAccessType = user.accessType || "permanent";
-            const changedToTemporary = accessType === "temporary" && originalAccessType !== "temporary";
-
+            const nextRole = editing ? role : origRole;
+            const nextType = editing ? accessType : origAccess;
+            const touched = editing && durationTouched;
             let accessExpiresAt = user.accessExpiresAt ?? null;
-            if (accessType === "temporary") {
-                // Only recompute the expiry if access just became temporary, or the
-                // user explicitly picked a new duration — otherwise leave the
-                // existing expiry untouched so unrelated edits (role/status) don't
-                // silently extend/shorten it.
-                if (changedToTemporary || durationTouched) {
-                    const d = new Date();
-                    d.setDate(d.getDate() + duration);
-                    accessExpiresAt = d.toISOString();
-                }
+            if (nextType === "temporary") {
+                if (origAccess !== "temporary" || touched) accessExpiresAt = newExpiry;
             } else {
                 accessExpiresAt = null;
             }
-            await onSave(user, { role, status, accessType, accessExpiresAt });
+            await onSave(user, { role: nextRole, status: nextStatus, accessType: nextType, accessExpiresAt });
             onClose();
-        } catch {
-            /* parent toast handles */
+        } catch (e) {
+            setError(e?.message || "Couldn’t save changes. Try again.");
         } finally {
             setSaving(false);
         }
     }
 
-    const STATUS_CFG2 = {
-        approved: { active: "bg-success/15 text-success border-success/25", inactive: "bg-white/4 text-white/45 border-white/6 hover:text-white" },
-        pending: { active: "bg-warning/15 text-warning border-warning/25", inactive: "bg-white/4 text-white/45 border-white/6 hover:text-white" },
-        rejected: { active: "bg-error/15   text-error   border-error/25", inactive: "bg-white/4 text-white/45 border-white/6 hover:text-white" },
-        blocked: { active: "bg-error/10   text-error/80 border-error/20", inactive: "bg-white/4 text-white/45 border-white/6 hover:text-white" },
-    };
+    const cur = STATUS_META[status] ?? STATUS_META.pending;
+    const decisionKeys = ["approved", "rejected", "blocked", "pending"].filter((k) => k !== origStatus);
+    const picked = pick ? DECISIONS[pick] : null;
+    const saveLabel = approvedView ? (dirty ? `Save ${changes.length} change${changes.length > 1 ? "s" : ""}` : "Save changes") : (picked?.cta ?? "Save changes");
+    const saveVariant = !approvedView ? (picked?.btn ?? "primary") : status === "approved" || status === "pending" ? "primary" : "danger";
+    const closeMenu = () => document.activeElement?.blur?.();
 
     return (
-        <Modal onClose={onClose} maxW="max-w-md">
+        <ModalShell onClose={onClose} busy={saving} labelledBy="um-req-t">
             <ModalHeader
-                title="Manage Access"
-                subtitle={user.name || user.email}
-                icon={UserCheck}
+                id="um-req-t"
+                avatar={<ModalAvatar name={user.name || user.email} src={user.avatar} className="w-10" ring="border-primary/40" />}
+                title={user.name || "Unnamed"}
+                subtitle={user.email}
+                right={<StatusChip user={user} />}
                 onClose={onClose}
-                badge={
-                    dirty && (
-                        <span className="text-[10px] font-black uppercase tracking-wide text-warning/80 bg-warning/8 px-2 py-0.5 rounded border border-warning/20 animate-pulse mr-1">Unsaved</span>
-                    )
-                }
+                busy={saving}
             />
+            <PanelBody>
+                {deleting && (
+                    <ModalNote tone="warning" icon={Trash2}>
+                        This account is scheduled for deletion and can’t be edited.
+                    </ModalNote>
+                )}
 
-            {/* scrollable body */}
-            <div className="hs overflow-y-auto" style={{ maxHeight: "calc(min(65vh, 440px))" }}>
-                {/* user identity */}
-                <div className="flex items-center gap-3 mx-4 mt-4 px-3 py-2.5 rounded-md bg-base-200 border border-white/[0.07]">
-                    <Avatar user={user} size="sm" />
-                    <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white truncate">{user.name || "Unnamed"}</p>
-                        <p className="text-[10px] text-white/40 font-mono truncate">{user.email}</p>
-                    </div>
-                    <StatusBadge status={user.status} />
-                </div>
-
-                <div className="px-4 pt-4 pb-4 space-y-3">
-                    {/* Status dropdown — FIRST */}
-                    <div className="space-y-1.5">
-                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-white/40">
-                            <Shield size={10} strokeWidth={2.5} className="text-accent/55" /> Status
-                            <div className="flex-1 h-px bg-white/5" />
-                        </label>
-                        <div className="relative">
-                            <select
-                                value={status}
-                                onChange={(e) => mark(() => setStatus(e.target.value))}
-                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200 border border-white/9
-                                    text-sm font-semibold text-white cursor-pointer
-                                    focus:outline-none focus:border-primary/40 transition-colors
-                                    hover:border-white/15">
-                                <option value="approved" className="bg-base-300 text-white">
-                                    Approved
-                                </option>
-                                <option value="pending" className="bg-base-300 text-white">
-                                    Pending
-                                </option>
-                                <option value="rejected" className="bg-base-300 text-white">
-                                    Rejected
-                                </option>
-                                <option value="blocked" className="bg-base-300 text-white">
-                                    Blocked
-                                </option>
-                            </select>
-                            <ChevronRight size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 rotate-90 pointer-events-none" />
-                            {/* colored dot indicator */}
-                            <span
-                                className={`absolute left-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full pointer-events-none
-                                ${status === "approved" ? "bg-success" : status === "pending" ? "bg-warning" : "bg-error"}`}
-                                style={{ left: "unset", right: "2.5rem" }}
-                            />
+                {!approvedView ? (
+                    <div className="flex flex-1 flex-col justify-center gap-4">
+                        <div>
+                            <h3 className="flex items-center gap-2 text-base font-semibold text-base-content">
+                                <span className="h-4 w-1 rounded-full bg-primary" />
+                                Decide on this request
+                            </h3>
+                            <p className="text-xs text-base-content/70">Pick one outcome. You can change it later.</p>
                         </div>
-                    </div>
-
-                    {/* Role dropdown — SECOND */}
-                    <div className="space-y-1.5">
-                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-white/40">
-                            <Crown size={10} strokeWidth={2.5} className="text-primary/55" /> Role
-                            <div className="flex-1 h-px bg-white/5" />
-                        </label>
-                        <div className="relative">
-                            <select
-                                value={role}
-                                onChange={(e) => mark(() => setRole(e.target.value))}
-                                className="w-full appearance-none px-3 py-2.5 rounded-md bg-base-200 border border-white/9
-                                    text-sm font-semibold text-white cursor-pointer
-                                    focus:outline-none focus:border-primary/40 transition-colors
-                                    hover:border-white/15">
-                                <option value="user" className="bg-base-300 text-white">
-                                    User
-                                </option>
-                                <option value="admin" className="bg-base-300 text-white">
-                                    Admin
-                                </option>
-                            </select>
-                            <ChevronRight size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 rotate-90 pointer-events-none" />
+                        <div role="radiogroup" aria-label="Outcome" className="grid gap-3 sm:grid-cols-3">
+                            {decisionKeys.map((k) => {
+                                const d = DECISIONS[k];
+                                return (
+                                    <ChoiceCard
+                                        key={k}
+                                        vertical
+                                        on={pick === k}
+                                        icon={d.icon}
+                                        tone={d.tone}
+                                        border={d.border}
+                                        title={d.title}
+                                        desc={d.desc}
+                                        disabled={deleting}
+                                        onClick={() => {
+                                            setPick(k);
+                                            setHint("");
+                                            setError(null);
+                                        }}
+                                    />
+                                );
+                            })}
                         </div>
+                        <ModalNote tone={picked ? picked.noteTone : "info"} icon={picked ? (picked.noteTone === "warning" ? AlertTriangle : Info) : Info}>
+                            <span aria-live="polite">{picked ? picked.note : "Pick an outcome to see what happens next."}</span>
+                        </ModalNote>
                     </div>
+                ) : !editing ? (
+                    <ModalNote tone="warning" icon={AlertTriangle}>
+                        {status === "pending"
+                            ? "Pending users can’t browse or stream until approved."
+                            : `${cap(status)} users can’t browse or stream. Their devices stay signed in, but every request is refused.`}
+                    </ModalNote>
+                ) : (
+                    <>
+                        <SettingRow
+                            icon={Shield}
+                            tone="text-primary"
+                            title="Role"
+                            desc={role === "admin" ? "Manages users, libraries, and server. Can’t manage others’ devices." : "Watches what permissions allow."}
+                            right={
+                                <ModalSegmented
+                                    label="Role"
+                                    className="w-52 shrink-0"
+                                    value={role}
+                                    onChange={(r) => !deleting && setRole(r)}
+                                    options={[
+                                        { value: "user", label: "User", icon: User },
+                                        { value: "admin", label: "Admin", icon: Crown },
+                                    ]}
+                                />
+                            }
+                        />
+                        <SettingRow
+                            icon={Clock}
+                            tone="text-warning"
+                            title="Access time limit"
+                            desc={
+                                accessType !== "temporary"
+                                    ? "Never expires. Turn on to set an end date."
+                                    : expiryIsNew
+                                      ? `Access ends ${fmtDate(newExpiry)} if saved now`
+                                      : expired
+                                        ? `Expired ${fmtDate(user.accessExpiresAt)}`
+                                        : `Access ends ${fmtDate(user.accessExpiresAt)}`
+                            }
+                            right={
+                                <label className="flex items-center gap-2 text-xs text-base-content/70">
+                                    {accessType === "temporary" ? "On" : "Off"}
+                                    <ModalToggle value={accessType === "temporary"} onChange={(v) => setAccessType(v ? "temporary" : "permanent")} disabled={deleting} label="Access time limit" />
+                                </label>
+                            }>
+                            {accessType === "temporary" && (
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                                    <ModalSegmented
+                                        split
+                                        label="Duration"
+                                        className="flex-1"
+                                        value={expiryIsNew ? duration : null}
+                                        onChange={(d) => {
+                                            if (deleting) return;
+                                            setDuration(d);
+                                            setDurationTouched(true);
+                                        }}
+                                        options={DURATION_OPTS.map((o) => ({ value: o.days, label: o.label }))}
+                                    />
+                                    <div className="flex min-w-32 flex-col justify-center rounded-md border border-base-content/10 bg-base-100 px-3 py-0.5">
+                                        <p className="text-xs text-base-content/70">{expired && !expiryIsNew ? "Expired" : "Expires"}</p>
+                                        <p className="text-[13px] font-semibold text-base-content">{shownExpiry ? fmtDate(shownExpiry) : "—"}</p>
+                                    </div>
+                                </div>
+                            )}
+                        </SettingRow>
+                    </>
+                )}
 
-                    {/* Access Duration — THIRD */}
-                    <div className="space-y-1.5">
-                        <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-white/40">
-                            <Clock size={10} strokeWidth={2.5} className="text-info/55" /> Access Duration
-                            <div className="flex-1 h-px bg-white/5" />
-                        </label>
-                        <div className="flex p-0.5 bg-base-200 rounded-md border border-white/9 gap-0.5">
-                            {["permanent", "temporary"].map((t) => (
+                {error && (
+                    <ModalNote tone="error" icon={AlertTriangle}>
+                        {error}
+                    </ModalNote>
+                )}
+            </PanelBody>
+            <ModalFooter
+                note={
+                    <div className="flex min-w-0 items-center gap-3">
+                        {approvedView && (
+                            <div className="dropdown dropdown-top shrink-0">
                                 <button
-                                    key={t}
                                     type="button"
-                                    onClick={() => mark(() => setAccessType(t))}
-                                    className={`flex-1 py-2 rounded text-xs font-bold capitalize transition-all border-none cursor-pointer
-                                        ${accessType === t ? "bg-accent text-accent-content shadow-sm" : "text-white/40 hover:text-white"}`}>
-                                    {t}
+                                    tabIndex={0}
+                                    aria-haspopup="menu"
+                                    disabled={deleting || saving}
+                                    className="btn btn-sm gap-1.5 rounded-md border border-base-content/20 bg-transparent font-medium text-base-content/85 hover:bg-base-content/10 [--depth:0] [--noise:0]">
+                                    <cur.icon size={13} className={TONE[cur.tone]} />
+                                    Status: {cur.label}
+                                    <ChevronUp size={12} />
                                 </button>
-                            ))}
-                        </div>
-                        {accessType === "temporary" && (
-                            <div className="grid grid-cols-4 gap-1 mt-1">
-                                {DURATION_OPTS.map(({ label, days }) => (
-                                    <button
-                                        key={days}
-                                        type="button"
-                                        onClick={() =>
-                                            mark(() => {
-                                                setDuration(days);
-                                                setDurationTouched(true);
-                                            })
-                                        }
-                                        className={`py-2 rounded text-xs font-bold transition-all border cursor-pointer
-                                            ${duration === days ? "bg-accent/15 text-accent border-accent/30" : "bg-base-200 text-white/40 border-white/8 hover:text-white"}`}>
-                                        {label}
-                                    </button>
-                                ))}
+                                <ul
+                                    tabIndex={0}
+                                    role="menu"
+                                    aria-label="Change status"
+                                    className="dropdown-content menu menu-sm z-20 mb-2 w-44 rounded-md border border-base-content/10 bg-base-200 p-1 shadow-2xl">
+                                    {Object.entries(STATUS_META).map(([k, mm]) => (
+                                        <li key={k}>
+                                            <button
+                                                type="button"
+                                                role="menuitemradio"
+                                                aria-checked={status === k}
+                                                className={status === k ? "menu-active" : ""}
+                                                onClick={() => {
+                                                    setStatus(k);
+                                                    setError(null);
+                                                    closeMenu();
+                                                }}>
+                                                <mm.icon size={14} className={TONE[mm.tone]} />
+                                                {mm.label}
+                                                {status === k && <Check size={12} className="ml-auto" />}
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
                             </div>
                         )}
-                        {user.accessExpiresAt && (
-                            <p className={`text-[10px] flex items-center gap-1 mt-1 ${expired ? "text-error" : "text-white/35"}`}>
-                                {expired ? <XCircle size={10} /> : <Clock size={10} />}
-                                {expired ? "Expired:" : "Expires:"} {fmtDate(user.accessExpiresAt)}
-                            </p>
-                        )}
+                        {dirty ? (
+                            <>
+                                <span className="inline-flex shrink-0 items-center gap-1.5 text-warning">
+                                    <span className="size-2 shrink-0 rounded-full bg-warning" />
+                                    Unsaved
+                                </span>
+                                <ul className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" aria-live="polite" aria-label="Pending changes">
+                                    {changes.map((c) => (
+                                        <ModalChange key={c.name} {...c} />
+                                    ))}
+                                </ul>
+                            </>
+                        ) : hint ? (
+                            <span className="text-warning">{hint}</span>
+                        ) : approvedView ? (
+                            <span className="text-base-content/60">No changes yet</span>
+                        ) : null}
                     </div>
-                </div>
-            </div>
-
-            {/* footer */}
-            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200">
-                <button
-                    type="button"
-                    onClick={onClose}
-                    className="flex-1 py-2 rounded-md text-xs font-bold text-white/60
-                        bg-white/6 hover:bg-white/9 hover:text-white transition-all border-none cursor-pointer">
+                }>
+                <ModalButton onClick={onClose} disabled={saving}>
                     Cancel
-                </button>
-                <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving || !dirty}
-                    className={`flex-1 py-2 rounded-md text-xs font-bold transition-all border-none
-                        ${dirty && !saving ? "bg-primary text-white hover:opacity-90 cursor-pointer" : "bg-white/4 text-white/25 cursor-not-allowed"}`}>
-                    {saving ? (
-                        <span className="flex items-center justify-center gap-1.5">
-                            <span className="loading loading-spinner loading-xs" /> Saving…
-                        </span>
-                    ) : (
-                        "Save Changes"
-                    )}
-                </button>
-            </div>
-        </Modal>
+                </ModalButton>
+                <ModalButton variant={saveVariant} onClick={handleSave} loading={saving} loadingText="Saving…" disabled={deleting || (!approvedView && !pick)}>
+                    {saveLabel}
+                </ModalButton>
+            </ModalFooter>
+        </ModalShell>
     );
 }
 
-// ─── PERMISSION MODAL ─────────────────────────────────────────────────────────
+// ─── PERMISSIONS ──────────────────────────────────────────────────────────────
+
+// Library icon by kind: movies → Film, series → Tv, anime → Sparkles, anything else → Library.
+// Uses lib.type / lib.category / lib.kind when the API sends one, otherwise guesses from the label, then the path.
+const LIB_ICON = { movie: Film, series: Tv, anime: Sparkles };
+function libKind(lib) {
+    const guess = (t) => {
+        t = String(t || "").toLowerCase();
+        if (/anime/.test(t)) return "anime";
+        if (/series|\btv\b|shows?|episodes?/.test(t)) return "series";
+        if (/movie|film/.test(t)) return "movie";
+        return null;
+    };
+    return guess(lib.type || lib.category || lib.kind) ?? guess(lib.label) ?? guess(lib.path);
+}
 
 function PermissionModal({ user, onClose, onSave, libraries = [] }) {
     const [allowAdult, setAllowAdult] = useState(false);
+    const [origAdult, setOrigAdult] = useState(false);
     const [libPerms, setLibPerms] = useState({});
+    const [origPerms, setOrigPerms] = useState({});
     const [libSearch, setLibSearch] = useState("");
     const [saving, setSaving] = useState(false);
-    const [dirty, setDirty] = useState(false);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         if (!user) return;
@@ -900,199 +1143,185 @@ function PermissionModal({ user, onClose, onSave, libraries = [] }) {
         } catch {
             /* ignore */
         }
-        setAllowAdult(parsed?.allowAdult ?? false);
-        // Backend contract: parsed.libraries is an array of granted library IDs
-        // (an empty/missing array means no access). Default missing entries to
-        // false — explicit grants only.
+        const adult = parsed?.allowAdult ?? false;
+        setAllowAdult(adult);
+        setOrigAdult(adult);
+        // Backend contract: parsed.libraries is an array of granted library IDs (empty/missing = no access).
         const grantedIds = Array.isArray(parsed?.libraries) ? parsed.libraries : [];
         const map = {};
         libraries.forEach((l) => {
             map[l.id] = grantedIds.includes(l.id);
         });
         setLibPerms(map);
-        setDirty(false);
-    }, [user?.id, libraries]);
+        setOrigPerms(map);
+        setLibSearch("");
+        setError(null);
+    }, [user?.id, libraries]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!user) return null;
 
-    const mark = (fn) => {
-        fn();
-        setDirty(true);
-    };
     const filteredLibs = libraries.filter((l) => !libSearch || (l.label + l.path).toLowerCase().includes(libSearch.toLowerCase()));
     const enabledCount = Object.values(libPerms).filter(Boolean).length;
+    const deleting = !!user.deletedAt;
+    const yn = (v) => (v ? "Allowed" : "Blocked");
+    const changes = [
+        allowAdult !== origAdult && { name: "18+", from: yn(origAdult), to: yn(allowAdult) },
+        ...libraries.filter((l) => (libPerms[l.id] ?? false) !== (origPerms[l.id] ?? false)).map((l) => ({ name: l.label || l.path, from: yn(origPerms[l.id]), to: yn(libPerms[l.id]) })),
+    ].filter(Boolean);
+    const dirty = changes.length > 0;
+    const setAll = (v) => !deleting && setLibPerms(Object.fromEntries(libraries.map((l) => [l.id, v])));
 
     async function handleSave() {
+        if (!dirty || deleting || saving) return;
         setSaving(true);
+        setError(null);
         try {
-            // Convert the internal {id: bool} toggle map into the array
-            // contract the backend expects — only the granted IDs.
             const libraryIds = Object.entries(libPerms)
                 .filter(([, granted]) => granted)
                 .map(([id]) => id);
             const permissions = { libraries: libraryIds, allowAdult };
-            const permissionsJson = JSON.stringify(permissions);
-            // keep role/status/accessType unchanged — only permissions updated here
-            await onSave(user, { allowAdult, permissions, permissionsJson });
+            // role / status / access stay untouched — only permissions are updated here
+            await onSave(user, { allowAdult, permissions, permissionsJson: JSON.stringify(permissions) });
             onClose();
-        } catch {
-            /* onSave shows toast */
+        } catch (e) {
+            setError(e?.message || "Couldn’t save permissions. Try again.");
         } finally {
             setSaving(false);
         }
     }
 
     return (
-        <Modal onClose={onClose} maxW="max-w-md">
+        <ModalShell onClose={onClose} busy={saving} labelledBy="um-perm-t">
             <ModalHeader
-                title="Content Permissions"
-                subtitle={user.name || user.email}
+                id="um-perm-t"
                 icon={KeyRound}
-                onClose={onClose}
-                badge={
-                    dirty && (
-                        <span className="text-[10px] font-black uppercase tracking-wide text-warning/80 bg-warning/8 px-2 py-0.5 rounded border border-warning/20 animate-pulse mr-1">Unsaved</span>
-                    )
-                }
-            />
-
-            {/* single universal scroll — no inner scroll */}
-            <div className="hs overflow-y-auto" style={{ maxHeight: "calc(min(65vh, 460px))" }}>
-                <div className="px-4 pt-4 pb-4 space-y-4">
-                    {/* user identity */}
-                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-md bg-base-200 border border-white/[0.07]">
-                        <Avatar user={user} size="sm" />
-                        <div className="flex-1 min-w-0">
-                            <p className="text-xs font-bold text-white truncate">{user.name || "Unnamed"}</p>
-                            <p className="text-[10px] text-white/40 font-mono truncate">{user.email}</p>
-                        </div>
-                        <RoleBadge role={user.role} />
-                    </div>
-
-                    {/* Restricted content toggle */}
-                    <div className="space-y-1.5">
-                        <div className="flex items-center gap-1.5">
-                            <EyeOff size={10} className="text-warning/55 shrink-0" strokeWidth={2.5} />
-                            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/40">Restricted Content</span>
-                            <div className="flex-1 h-px bg-white/5" />
-                        </div>
-                        <div
-                            className={`flex items-center justify-between px-3 py-3 rounded-md border transition-colors
-                            ${allowAdult ? "bg-warning/5 border-warning/20" : "bg-base-200 border-white/8"}`}>
-                            <div className="flex items-center gap-3">
-                                <div
-                                    className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0
-                                    ${allowAdult ? "bg-warning/15 text-warning" : "bg-white/5 text-white/30"}`}>
-                                    {allowAdult ? <Eye size={15} /> : <EyeOff size={15} />}
-                                </div>
-                                <div>
-                                    <p className="text-xs font-bold text-white">{allowAdult ? "Unrestricted" : "Restricted"}</p>
-                                    <p className="text-[10px] text-white/40 mt-0.5">{allowAdult ? "18+ content is accessible" : "18+ content is blocked"}</p>
-                                </div>
-                            </div>
-                            <Toggle value={allowAdult} onChange={(v) => mark(() => setAllowAdult(v))} />
-                        </div>
-                    </div>
-
-                    {/* Library access — all rendered, universal scroll handles overflow */}
-                    {libraries.length > 0 && (
-                        <div className="space-y-2">
-                            <div className="flex items-center gap-1.5">
-                                <Library size={10} className="text-primary/55 shrink-0" strokeWidth={2.5} />
-                                <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/40">
-                                    Libraries · {enabledCount}/{libraries.length}
-                                </span>
-                                <div className="flex-1 h-px bg-white/5" />
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        mark(() => {
-                                            const m = {};
-                                            libraries.forEach((l) => (m[l.id] = true));
-                                            setLibPerms(m);
-                                        })
-                                    }
-                                    className="text-[10px] font-bold text-primary hover:opacity-70 transition-opacity cursor-pointer border-none bg-transparent ml-1">
-                                    All
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        mark(() => {
-                                            const m = {};
-                                            libraries.forEach((l) => (m[l.id] = false));
-                                            setLibPerms(m);
-                                        })
-                                    }
-                                    className="text-[10px] font-bold text-white/35 hover:text-white transition-colors cursor-pointer border-none bg-transparent">
-                                    None
-                                </button>
-                            </div>
-
-                            {libraries.length > 5 && (
-                                <div className="flex items-center gap-2 bg-base-200 rounded-md px-2.5 py-2 border border-white/8">
-                                    <Search size={11} className="text-white/35 shrink-0" />
-                                    <input
-                                        value={libSearch}
-                                        onChange={(e) => setLibSearch(e.target.value)}
-                                        placeholder="Filter libraries…"
-                                        className="flex-1 bg-transparent text-xs text-white placeholder:text-white/35 focus:outline-none"
-                                    />
-                                </div>
-                            )}
-
-                            <div className="space-y-1">
-                                {filteredLibs.map((lib) => {
-                                    const on = libPerms[lib.id] ?? false;
-                                    return (
-                                        <div
-                                            key={lib.id}
-                                            className={`flex items-center gap-3 px-3 py-2.5 rounded-md border transition-colors
-                                                ${on ? "bg-primary/4 border-primary/12" : "bg-base-200 border-white/[0.07]"}`}>
-                                            <div
-                                                className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0
-                                                ${on ? "bg-primary/15 text-primary" : "bg-white/5 text-white/25"}`}>
-                                                <Library size={12} />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className={`text-xs font-semibold truncate ${on ? "text-white" : "text-white/35"}`}>{lib.label || lib.path}</p>
-                                                {lib.label && <p className="text-[10px] font-mono text-white/25 truncate">{lib.path}</p>}
-                                            </div>
-                                            <Toggle value={on} onChange={() => mark(() => setLibPerms((p) => ({ ...p, [lib.id]: !p[lib.id] })))} />
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* footer */}
-            <div className="flex gap-2 px-4 py-3 border-t border-white/[0.07] bg-base-200">
-                <button
-                    type="button"
-                    onClick={onClose}
-                    className="flex-1 py-2 rounded-md text-xs font-bold text-white/60
-                        bg-white/6 hover:bg-white/9 hover:text-white transition-all border-none cursor-pointer">
-                    Cancel
-                </button>
-                <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving || !dirty}
-                    className={`flex-1 py-2 rounded-md text-xs font-bold transition-all border-none
-                        ${dirty && !saving ? "bg-primary text-white hover:opacity-90 cursor-pointer" : "bg-white/4 text-white/25 cursor-not-allowed"}`}>
-                    {saving ? (
-                        <span className="flex items-center justify-center gap-1.5">
-                            <span className="loading loading-spinner loading-xs" /> Saving…
+                title="Content permissions"
+                subtitle={user.name || user.email}
+                right={
+                    libraries.length > 0 ? (
+                        <span className="hidden sm:block">
+                            <ModalBadge tone={enabledCount ? "primary" : "neutral"} icon={Library}>
+                                {enabledCount} of {libraries.length} libraries
+                            </ModalBadge>
                         </span>
+                    ) : null
+                }
+                onClose={onClose}
+                busy={saving}
+            />
+            <PanelBody className="gap-2">
+                {deleting && (
+                    <ModalNote tone="warning" icon={Trash2}>
+                        This account is scheduled for deletion and can’t be edited.
+                    </ModalNote>
+                )}
+
+                <label className="card border flex-row items-center gap-3 rounded-md border-base-content/10 bg-base-100 px-3.5 py-2 hover:bg-base-content/5">
+                    <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${allowAdult ? "bg-warning/10 text-warning" : "bg-error/10 text-error"}`}>
+                        {allowAdult ? <Eye size={18} /> : <EyeOff size={18} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-medium text-base-content">Allow 18+ content</span>
+                        <span className="block text-xs text-base-content/70">{allowAdult ? "Allowed. Titles marked for adults are visible." : "Blocked. Titles marked for adults stay hidden."}</span>
+                    </span>
+                    <ModalToggle value={allowAdult} onChange={setAllowAdult} disabled={deleting} label="Allow 18+ content" />
+                </label>
+
+                {libraries.length > 0 && (
+                    <>
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                            <label className="input input-sm w-full min-w-0 rounded-md sm:w-auto sm:flex-1">
+                                <Search size={14} className="shrink-0 text-base-content/70" />
+                                <input type="search" className="grow" value={libSearch} onChange={(e) => setLibSearch(e.target.value)} placeholder="Search libraries" aria-label="Search libraries" />
+                            </label>
+                            <ModalButton className="flex-1 sm:flex-none" onClick={() => setAll(true)} disabled={deleting}>
+                                Allow all
+                            </ModalButton>
+                            <ModalButton className="flex-1 sm:flex-none" onClick={() => setAll(false)} disabled={deleting}>
+                                None
+                            </ModalButton>
+                        </div>
+                        <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-base-content/10 bg-base-100">
+                            <table className="table table-xs">
+                                <thead className="sticky top-0 z-10 bg-base-200">
+                                    <tr className="text-[11px] uppercase tracking-wider text-base-content/50">
+                                        <th className="w-8"></th>
+                                        <th>Library</th>
+                                        <th className="hidden sm:table-cell">Path</th>
+                                        <th className="text-right">Access</th>
+                                        <th className="w-14 text-right">Allow</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredLibs.map((lib) => {
+                                        const on = libPerms[lib.id] ?? false;
+                                        const changed = on !== (origPerms[lib.id] ?? false);
+                                        const toggle = (v) => !deleting && setLibPerms((p) => ({ ...p, [lib.id]: v }));
+                                        const LibIcon = LIB_ICON[libKind(lib)] ?? Library;
+                                        return (
+                                            <tr key={lib.id} title={lib.path} onClick={() => toggle(!on)} className="h-10 cursor-pointer align-middle text-[12px] hover:bg-base-content/5">
+                                                <th className="w-8">
+                                                    <LibIcon size={16} className={on ? "text-primary" : "text-base-content/50"} />
+                                                </th>
+                                                <td className="font-medium text-base-content">{lib.label || lib.path}</td>
+                                                <td className="hidden max-w-64 truncate font-mono text-xs text-base-content/50 sm:table-cell">{lib.label ? lib.path : ""}</td>
+                                                <td className={`w-24 text-right font-medium ${on ? "text-success" : "text-base-content/60"}`}>
+                                                    {yn(on)}
+                                                    {changed && <span className="ml-1.5 inline-block size-1.5 rounded-full bg-warning align-middle" title="Changed" />}
+                                                </td>
+                                                <td className="w-14" onClick={(e) => e.stopPropagation()}>
+                                                    <div className="flex justify-end">
+                                                        <ModalToggle value={on} onChange={toggle} disabled={deleting} label={`Allow ${lib.label || lib.path}`} />
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {filteredLibs.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="py-6 text-center text-base-content/70">
+                                                No libraries match “{libSearch}”
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </>
+                )}
+
+                {error && (
+                    <ModalNote tone="error" icon={AlertTriangle}>
+                        {error}
+                    </ModalNote>
+                )}
+            </PanelBody>
+            <ModalFooter
+                note={
+                    dirty ? (
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-warning">
+                                <span className="size-2 shrink-0 rounded-full bg-warning" />
+                                Unsaved
+                            </span>
+                            <ul className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" aria-live="polite" aria-label="Pending changes">
+                                {changes.map((c) => (
+                                    <ModalChange key={c.name} {...c} />
+                                ))}
+                            </ul>
+                        </div>
                     ) : (
-                        "Save Changes"
-                    )}
-                </button>
-            </div>
-        </Modal>
+                        <span className="text-base-content/60">No changes yet</span>
+                    )
+                }>
+                <ModalButton onClick={onClose} disabled={saving}>
+                    Cancel
+                </ModalButton>
+                <ModalButton variant="primary" onClick={handleSave} loading={saving} loadingText="Saving…" disabled={deleting}>
+                    {dirty ? `Save ${changes.length} change${changes.length > 1 ? "s" : ""}` : "Save permissions"}
+                </ModalButton>
+            </ModalFooter>
+        </ModalShell>
     );
 }
 
@@ -1111,7 +1340,7 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                         <th className="py-3 px-3 text-left">Verified</th>
                         <th className="py-3 px-3 text-left">Access</th>
                         <th className="py-3 px-3 text-left hidden sm:table-cell">IP</th>
-                        <th className="py-3 px-3 text-center">Sessions</th>
+                        <th className="py-3 px-3 text-center">Devices</th>
                         <th className="py-3 px-3 text-left hidden sm:table-cell">Joined</th>
                         <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
@@ -1140,7 +1369,14 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                                     <span className={`text-base font-black flex justify-center ${u.emailVerified ? "text-success" : "text-white/30"}`}>{u.emailVerified ? <Check /> : <X />}</span>
                                 </td>
                                 <td className="py-3 px-3">
-                                    {exp ? (
+                                    {u.deletedAt ? (
+                                        <div>
+                                            <span className="text-xs font-bold text-warning">Purges</span>
+                                            <p className="text-xs text-white/40 mt-0.5 flex items-center gap-0.5">
+                                                <Calendar size={10} /> {fmtDateShort(u.purgeAt)}
+                                            </p>
+                                        </div>
+                                    ) : exp ? (
                                         <span className="text-xs font-bold text-error">Expired</span>
                                     ) : u.accessType === "temporary" ? (
                                         <div>
@@ -1160,23 +1396,27 @@ function UsersTable({ users, onInfo, onRequest, onPermission, onAction }) {
                                 </td>
                                 <td className="py-3 px-3 text-center">
                                     <div className="inline-flex items-center gap-1.5 bg-base-300/30 px-2 py-1 rounded-md">
-                                        {(u._count?.sessions ?? 0) > 0 && <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shrink-0" />}
-                                        <span className="text-sm text-white font-bold tabular-nums">{u._count?.sessions ?? 0}</span>
+                                        {(u._count?.devices ?? 0) > 0 && <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shrink-0" />}
+                                        <span className="text-sm text-white font-bold tabular-nums">{u._count?.devices ?? 0}</span>
                                     </div>
                                 </td>
                                 <td className="py-3 px-3 text-xs text-white/40 whitespace-nowrap hidden sm:table-cell">{u.createdAt ? fmtDateShort(u.createdAt) : "—"}</td>
                                 <td className="py-3 px-4">
                                     <div className="flex items-center justify-end gap-1">
                                         <ActionBtn icon={Info} label="Details" onClick={() => onInfo(u)} className="hover:bg-info/15 hover:text-info" />
-                                        <ActionBtn
-                                            icon={UserCheck}
-                                            label="Manage Access"
-                                            onClick={() => onRequest(u)}
-                                            className="hover:bg-success/15 hover:text-success"
-                                            pulse={u.status === "pending"}
-                                        />
-                                        <ActionBtn icon={KeyRound} label="Permissions" onClick={() => onPermission(u)} className="hover:bg-primary/15 hover:text-primary" />
-                                        <ActionMenu user={u} onAction={onAction} />
+                                        {!u.deletedAt && (
+                                            <>
+                                                <ActionBtn
+                                                    icon={UserCheck}
+                                                    label="Manage Access"
+                                                    onClick={() => onRequest(u)}
+                                                    className="hover:bg-success/15 hover:text-success"
+                                                    pulse={u.status === "pending"}
+                                                />
+                                                <ActionBtn icon={KeyRound} label="Permissions" onClick={() => onPermission(u)} className="hover:bg-primary/15 hover:text-primary" />
+                                                <ActionMenu user={u} onAction={onAction} />
+                                            </>
+                                        )}
                                     </div>
                                 </td>
                             </tr>
@@ -1293,10 +1533,17 @@ export default function DashUsers() {
         const statusMap = { approve: "approved", reject: "rejected", block: "blocked" };
         if (key === "delete") {
             setConfirm({
-                title: "Delete User",
-                message: `Permanently delete ${user.email}? This cannot be undone.`,
+                title: `Delete ${user.name || user.email}?`,
+                subtitle: user.email,
+                confirmIcon: Trash2,
+                timeline: [
+                    { icon: LogOut, tone: "error", title: "Right now", text: "They lose access immediately." },
+                    { icon: Archive, tone: "warning", title: "Next 30 days", text: "Profile, watch history and preferences are kept. The user can recover the account by verifying their email." },
+                    { icon: Flame, tone: "error", title: "After 30 days", text: "Everything retained is permanently purged." },
+                ],
+                note: "Admins can’t restore the account through recovery.",
                 variant: "danger",
-                confirmText: "Delete",
+                confirmText: "Delete user",
                 user,
             });
             return;
@@ -1305,6 +1552,10 @@ export default function DashUsers() {
             setConfirm({
                 title: { approve: "Approve User", reject: "Reject User", block: "Block User" }[key],
                 message: `${key.charAt(0).toUpperCase() + key.slice(1)} ${user.name || user.email}?`,
+                details:
+                    key === "approve"
+                        ? ["They can browse and watch what you allow.", "Role and access time limit become editable after approval."]
+                        : ["They can’t browse or stream.", "Their devices stay signed in, but every request is refused."],
                 variant: key === "approve" ? "info" : "warning",
                 confirmText: key.charAt(0).toUpperCase() + key.slice(1),
                 user,
@@ -1324,7 +1575,7 @@ export default function DashUsers() {
                 await dashApi.deleteUser(confirm.user.id);
                 setUsers((prev) => prev.filter((u) => u.id !== confirm.user.id));
             }
-            showToast(confirm.title + " done");
+            showToast(confirm.status ? `${confirm.title.replace("?", "")} done` : "Account scheduled for deletion");
             setConfirm(null);
             load(page);
             loadPendingCount();
@@ -1341,6 +1592,7 @@ export default function DashUsers() {
         { v: "approved", label: "Approved" },
         { v: "blocked", label: "Blocked" },
         { v: "rejected", label: "Rejected" },
+        { v: "deleted", label: "Pending deletion" },
     ];
 
     function handleRefresh() {
@@ -1439,35 +1691,35 @@ export default function DashUsers() {
             )}
 
             {/* ── Toolbar ─────────────────────────────────────────────────── */}
-            <div className="space-y-2">
+            <div className="flex w-full flex-col-reverse gap-3 xl:flex-row xl:justify-between xl:gap-10">
+                {/* Status tabs */}
+                <div className="flex h-10 w-full min-w-0 items-stretch justify-between gap-0.5 overflow-x-auto rounded-lg border border-white/5 bg-base-200 p-0.5" style={{ scrollbarWidth: "none" }}>
+                    {STATUS_TABS.map((t) => (
+                        <button
+                            key={t.v}
+                            onClick={() => setStatusFilter(t.v)}
+                            className={`px-3 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-none
+                                ${statusFilter === t.v ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white hover:bg-white/5"}`}>
+                            {t.label}
+                            {t.alert && pendingTotal > 0 && <span className="px-1.5 py-0.5 rounded-md bg-warning text-warning-content text-[10px] font-black tabular-nums">{pendingTotal}</span>}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Search */}
-                <div className="flex items-center gap-2 bg-base-200 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
+                <div className="flex h-10 w-full min-w-0 items-center gap-2 rounded-lg border border-white/8 bg-base-200 px-3.5 transition-colors focus-within:border-primary/30">
                     <Search size={15} className="text-white/35 shrink-0" />
                     <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search by name or email…"
-                        className="flex-1 bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
+                        className="min-w-0 flex-1 bg-transparent text-base text-white placeholder:text-white/35 focus:outline-none sm:text-sm"
                     />
                     {search && (
                         <button onClick={() => setSearch("")} className="text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer">
                             <X size={14} />
                         </button>
                     )}
-                </div>
-
-                {/* Status tabs */}
-                <div className="flex bg-base-200 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
-                    {STATUS_TABS.map((t) => (
-                        <button
-                            key={t.v}
-                            onClick={() => setStatusFilter(t.v)}
-                            className={`px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-none
-                                ${statusFilter === t.v ? "bg-primary text-primary-content shadow-sm" : "text-white/50 hover:text-white hover:bg-white/5"}`}>
-                            {t.label}
-                            {t.alert && pendingTotal > 0 && <span className="px-1.5 py-0.5 rounded-md bg-warning text-warning-content text-[10px] font-black tabular-nums">{pendingTotal}</span>}
-                        </button>
-                    ))}
                 </div>
             </div>
 
@@ -1494,7 +1746,12 @@ export default function DashUsers() {
                 onClose={() => !actionLoading && setConfirm(null)}
                 onConfirm={executeAction}
                 title={confirm?.title}
+                subtitle={confirm?.subtitle}
+                confirmIcon={confirm?.confirmIcon}
                 message={confirm?.message}
+                details={confirm?.details}
+                timeline={confirm?.timeline}
+                note={confirm?.note}
                 variant={confirm?.variant || "danger"}
                 confirmText={confirm?.confirmText}
                 loading={actionLoading}

@@ -694,8 +694,10 @@ function SearchGrid({ q, enabled, mode, workingOnly }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function Live() {
-    const { isAuthenticated, isApproved, loading: authLoading } = useAuth();
-    const enabled = !authLoading && isAuthenticated && isApproved;
+    // Listings are browsable by any VERIFIED account (pending approval included); the server strips the
+    // stream address unless the account may actually watch.
+    const { isAuthenticated, isEmailVerified, loading: authLoading } = useAuth();
+    const enabled = !authLoading && isAuthenticated && isEmailVerified;
 
     // Page-level toggle — reactive (unlike a plain localStorage read, this
     // actually re-renders + refetches the moment it's flipped). Seeded from

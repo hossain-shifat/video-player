@@ -1,155 +1,209 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
+import { User, Mail, Lock, ChevronLeft } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
+import { authApi } from "../../api/auth";
+import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, GoogleButton, OrDivider, StepBar, StepTransition } from "../../Components/auth/AuthUI";
+import { useMediaQuery } from "../../Components/auth/useMediaQuery";
+
+// Phones and short windows get a TWO-STEP sign-up (email first, then name + password): each screen has
+// 2–3 controls, so nothing is cramped and nothing needs scrolling. Roomy screens keep the single form.
+const COMPACT_QUERY = "(max-width: 767px), (max-height: 640px)";
+
+function TermsNote() {
+    return (
+        <p className="text-center text-xs leading-relaxed text-base-content/50">
+            By creating an account you agree to the{" "}
+            <Link to="/terms" className="underline decoration-base-content/30 underline-offset-2 hover:text-base-content/80">
+                Terms
+            </Link>{" "}
+            and{" "}
+            <Link to="/privacy" className="underline decoration-base-content/30 underline-offset-2 hover:text-base-content/80">
+                Privacy Policy
+            </Link>
+            .
+        </p>
+    );
+}
 
 export default function RegisterPage() {
     const { register } = useAuth();
     const navigate = useNavigate();
+    const compact = useMediaQuery(COMPACT_QUERY);
 
+    const [step, setStep] = useState(1); // only meaningful when `compact`
+    const [dir, setDir] = useState("fwd"); // slide direction of the step change
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const [confirmPassword, setConfirmPassword] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+
+    const showStep = compact ? step : 0; // 0 = everything on one screen
+    const nameRef = useRef(null);
+    const emailRef = useRef(null);
+
+    // Move focus to the first field of the step the user just entered (keyboard / screen-reader friendly).
+    useEffect(() => {
+        if (!compact) return;
+        (step === 2 ? nameRef : emailRef).current?.focus();
+    }, [step, compact]);
+
+    function goToStep2(e) {
+        e.preventDefault();
+        setError(null);
+        setDir("fwd");
+        setStep(2);
+    }
 
     async function handleSubmit(e) {
         e.preventDefault();
         setError(null);
 
-        if (password !== confirmPassword) {
-            setError("Passwords do not match");
-            return;
-        }
-
-        if (password.length < 8) {
-            setError("Password must be at least 8 characters");
+        if (password.length < 8 || password.length > 128) {
+            setError("Use a password between 8 and 128 characters.");
             return;
         }
 
         setLoading(true);
-
         try {
             const data = await register(email, password, name);
-            // Navigate to verify email page with userId
-            navigate("/verify-email", { state: { userId: data.userId, email }, replace: true });
+            // The server issued a restricted session, so /verify-email works after a refresh too —
+            // nothing is passed through router state any more.
+            navigate(data.requiresVerification === false ? "/" : "/verify-email", { replace: true, state: { codeSent: data.emailSent !== false, emailFailed: data.emailSent === false } });
         } catch (err) {
-            setError(err.message || "Registration failed");
+            setError(err.message || "Couldn’t create your account. Try again.");
+            // e.g. "Email already registered" → send them back to the field that needs fixing
+            if (compact && /email/i.test(err.message || "")) {
+                setDir("back");
+                setStep(1);
+            }
         } finally {
             setLoading(false);
         }
     }
 
-    return (
-        <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-            <div className="w-full max-w-md">
-                {/* Logo */}
-                <div className="text-center mb-8">
-                    <div className="inline-flex items-center gap-3 mb-2">
-                        <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-content font-bold text-lg">🎬</div>
-                        <span className="text-2xl font-bold text-base-content tracking-tight">FLUX</span>
+    const emailField = (
+        <AuthField
+            id="register-email"
+            ref={emailRef}
+            label="Email"
+            icon={Mail}
+            type="email"
+            autoComplete="email"
+            inputMode="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+        />
+    );
+    const nameField = (
+        <AuthField id="register-name" ref={nameRef} label="Full name" icon={User} autoComplete="name" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} required />
+    );
+    const passwordField = (
+        <AuthField
+            id="register-password"
+            label="Password"
+            icon={Lock}
+            type="password"
+            autoComplete="new-password"
+            placeholder="Create a password"
+            hint="Use at least 8 characters."
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+            maxLength={128}
+        />
+    );
+
+    const social = (
+        <>
+            <OrDivider />
+            <GoogleButton id="register-google" onClick={() => (window.location.href = authApi.googleLoginUrl())} />
+        </>
+    );
+    const signInLink = (
+        <p className="mt-[var(--auth-gap-lg)] text-center text-sm text-base-content/60">
+            Already have an account?{" "}
+            <Link to="/login" className="font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary">
+                Sign in
+            </Link>
+        </p>
+    );
+
+    // ── Step 1 (compact): email ─────────────────────────────────────────────
+    if (showStep === 1) {
+        return (
+            <AuthPanel>
+                <StepTransition stepKey="s1" dir={dir}>
+                <StepBar step={1} />
+                <AuthHeading title="Create your account" subtitle="Start with your email. It takes a minute." />
+                {error && <AuthAlert>{error}</AuthAlert>}
+                <form onSubmit={goToStep2} className="flex flex-col gap-[var(--auth-gap)]">
+                    {emailField}
+                    <AuthSubmit id="register-continue">Continue</AuthSubmit>
+                </form>
+                {social}
+                {signInLink}
+                </StepTransition>
+            </AuthPanel>
+        );
+    }
+
+    // ── Step 2 (compact): name + password ───────────────────────────────────
+    if (showStep === 2) {
+        return (
+            <AuthPanel>
+                <StepTransition stepKey="s2" dir={dir}>
+                <StepBar step={2} />
+                <button
+                    type="button"
+                    id="register-back"
+                    onClick={() => {
+                        setDir("back");
+                        setStep(1);
+                    }}
+                    className="-ml-1 mb-[var(--auth-gap)] inline-flex max-w-full items-center gap-1 rounded-md py-1 pr-2 text-[13px] text-base-content/60 hover:text-base-content focus-visible:outline-2 focus-visible:outline-primary">
+                    <ChevronLeft size={16} aria-hidden="true" className="shrink-0" />
+                    <span className="truncate">{email || "Back"}</span>
+                </button>
+                <AuthHeading title="Almost there" subtitle="Add your name and choose a password." />
+                {error && <AuthAlert>{error}</AuthAlert>}
+                <form onSubmit={handleSubmit} className="flex flex-col gap-[var(--auth-gap)]">
+                    {nameField}
+                    {passwordField}
+                    <div className="mt-1">
+                        <AuthSubmit id="register-submit" loading={loading} loadingText="Creating account…">
+                            Create account
+                        </AuthSubmit>
                     </div>
-                    <p className="text-base-content/50 text-sm">Create your account</p>
+                    <TermsNote />
+                </form>
+                </StepTransition>
+            </AuthPanel>
+        );
+    }
+
+    // ── Roomy screens: one form ─────────────────────────────────────────────
+    return (
+        <AuthPanel>
+            <AuthHeading title="Create your account" subtitle="Browse the library right after you verify your email." />
+            {error && <AuthAlert>{error}</AuthAlert>}
+            <form onSubmit={handleSubmit} className="flex flex-col gap-[var(--auth-gap)]">
+                {nameField}
+                {emailField}
+                {passwordField}
+                <div className="mt-1">
+                    <AuthSubmit id="register-submit" loading={loading} loadingText="Creating account…">
+                        Create account
+                    </AuthSubmit>
                 </div>
-
-                <div className="bg-base-200 rounded-2xl p-8 shadow-xl border border-base-300">
-                    {error && (
-                        <div className="alert alert-error mb-6 text-sm py-3">
-                            <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
-                            </svg>
-                            {error}
-                        </div>
-                    )}
-
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <div className="form-control">
-                            <label htmlFor="register-name" className="label pb-1">
-                                <span className="label-text text-sm font-medium">Full name</span>
-                            </label>
-                            <input
-                                id="register-name"
-                                name="name"
-                                type="text"
-                                className="input input-bordered w-full bg-base-100"
-                                placeholder="Your name"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                required
-                                autoComplete="name"
-                            />
-                        </div>
-
-                        <div className="form-control">
-                            <label htmlFor="register-email" className="label pb-1">
-                                <span className="label-text text-sm font-medium">Email</span>
-                            </label>
-                            <input
-                                id="register-email"
-                                name="email"
-                                type="email"
-                                className="input input-bordered w-full bg-base-100"
-                                placeholder="you@example.com"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                required
-                                autoComplete="email"
-                            />
-                        </div>
-
-                        <div className="form-control">
-                            <label htmlFor="register-password" className="label pb-1">
-                                <span className="label-text text-sm font-medium">Password</span>
-                            </label>
-                            <input
-                                id="register-password"
-                                name="password"
-                                type="password"
-                                className="input input-bordered w-full bg-base-100"
-                                placeholder="Min. 8 characters"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                required
-                                minLength={8}
-                                autoComplete="new-password"
-                            />
-                        </div>
-
-                        <div className="form-control">
-                            <label htmlFor="register-confirm-password" className="label pb-1">
-                                <span className="label-text text-sm font-medium">Confirm password</span>
-                            </label>
-                            <input
-                                id="register-confirm-password"
-                                name="confirmPassword"
-                                type="password"
-                                className="input input-bordered w-full bg-base-100"
-                                placeholder="Repeat password"
-                                value={confirmPassword}
-                                onChange={(e) => setConfirmPassword(e.target.value)}
-                                required
-                                autoComplete="new-password"
-                            />
-                        </div>
-
-                        <button
-                            id="register-submit"
-                            type="submit"
-                            className="btn btn-primary w-full mt-2"
-                            disabled={loading}
-                        >
-                            {loading ? <span className="loading loading-spinner loading-sm"></span> : "Create account"}
-                        </button>
-                    </form>
-
-                    <p className="text-center text-sm text-base-content/50 mt-6">
-                        Already have an account?{" "}
-                        <Link to="/login" className="text-primary hover:underline font-medium">
-                            Sign in
-                        </Link>
-                    </p>
-                </div>
-            </div>
-        </div>
+                <TermsNote />
+            </form>
+            {social}
+            {signInLink}
+        </AuthPanel>
     );
 }

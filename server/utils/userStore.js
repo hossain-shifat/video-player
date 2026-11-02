@@ -426,6 +426,212 @@ function removeFromFavourites(id) {
     return true;
 }
 
+
+// ─── Account lifecycle: recoverable deletion (30 days) + permanent purge ──────
+//
+// Retention policy (what survives the 30-day window, what does not):
+//   KEPT  (recoverable) : User row (profile, name, username, avatar, email), history.json block
+//                         (resume progress / watch history), notification preferences, notifications,
+//                         push preference rows (deactivated), anything registered via registerUserPurgeHook.
+//   DROPPED immediately : sessions (revoked), stream tokens, OTP codes, push registrations (deactivated).
+//   RESET on recovery   : role → "user" (or admin if ADMIN_EMAIL), status → "pending" (or approved for
+//                         ADMIN_EMAIL), permissions → defaults. Authorization is NOT personal data, so
+//                         stale permissions never come back; an admin re-approves the returning user.
+//   PURGED at deadline  : the User row (cascades devices, sessions, otps, stream tokens, notifications,
+//                         push devices, preferences) + history.json block + registered hooks.
+//   NEVER deleted       : shared media files / libraries, other users, AuditEvent rows (no secrets, masked email).
+//   KNOWN GAP           : watchlist/favourites live in data/userdata.json which is GLOBAL (not per user) in the
+//                         current code, so they cannot be retained or purged per account.
+
+const DELETION_GRACE_DAYS = parseInt(process.env.ACCOUNT_DELETION_GRACE_DAYS || "30", 10);
+const DAY_MS = 86_400_000;
+
+function maskEmail(email = "") {
+    const [local = "", domain = ""] = String(email).split("@");
+    if (!domain) return "";
+    const head = local.slice(0, 1);
+    const tail = local.length > 2 ? local.slice(-1) : "";
+    return `${head}***${tail}@${domain}`;
+}
+
+/** Append-only audit trail. Never pass tokens, OTPs, passwords. Failures are logged, never thrown. */
+async function recordAudit({ action, actorId = null, targetUserId = null, targetEmail = "", detail = {} }) {
+    try {
+        const prisma = require("../auth/prismaClient");
+        await prisma.auditEvent.create({
+            data: { action, actorId, targetUserId, targetLabel: maskEmail(targetEmail), detailJson: JSON.stringify(detail || {}) },
+        });
+    } catch (err) {
+        console.error(`[Audit] could not record "${action}":`, err.message);
+    }
+}
+
+// Extra per-user data owners (e.g. watch-time store) register an idempotent purge function here.
+const purgeHooks = [];
+function registerUserPurgeHook(fn) {
+    if (typeof fn === "function") purgeHooks.push(fn);
+}
+
+/** Removes this account's block from history.json. Idempotent. */
+function deleteUserHistory(userId) {
+    if (!isValidClientId(userId)) return false;
+    const store = loadStore();
+    if (!Object.prototype.hasOwnProperty.call(store, userId)) return false;
+    delete store[userId];
+    saveStore(store);
+    return true;
+}
+
+async function otherActiveAdminCount(excludeId) {
+    const prisma = require("../auth/prismaClient");
+    return prisma.user.count({ where: { role: "admin", status: "approved", deletedAt: null, id: { not: excludeId } } });
+}
+
+/**
+ * Admin-initiated deletion. Immediately: status "deleted", every session revoked, stream tokens /
+ * OTPs removed, push deactivated. Data is retained until purgeAt. Safe against double-click / races
+ * (conditional update on deletedAt: null).
+ * Returns { ok:true, user } or { ok:false, code } with code ∈ NOT_FOUND | SELF | LAST_ADMIN | ALREADY_DELETED.
+ */
+async function softDeleteUser(targetId, actorId) {
+    const prisma = require("../auth/prismaClient");
+    const { revokeSessions } = require("../auth/services/tokenService");
+
+    const target = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!target) return { ok: false, code: "NOT_FOUND" };
+    if (target.deletedAt) return { ok: false, code: "ALREADY_DELETED" };
+    if (target.id === actorId) return { ok: false, code: "SELF" };
+    if (target.role === "admin" && (await otherActiveAdminCount(target.id)) === 0) return { ok: false, code: "LAST_ADMIN" };
+
+    const now = new Date();
+    const purgeAt = new Date(now.getTime() + DELETION_GRACE_DAYS * DAY_MS);
+
+    const res = await prisma.user.updateMany({
+        where: { id: targetId, deletedAt: null },
+        data: { status: "deleted", statusBeforeDeletion: target.status, deletedAt: now, purgeAt, deletedById: actorId, purgeError: null },
+    });
+    if (res.count === 0) return { ok: false, code: "ALREADY_DELETED" };
+
+    await revokeSessions({ userId: targetId }, "account_deleted");
+    await prisma.streamToken.deleteMany({ where: { userId: targetId } }).catch(() => {});
+    await prisma.oTP.deleteMany({ where: { userId: targetId } }).catch(() => {});
+    await prisma.pushDevice.updateMany({ where: { userId: targetId }, data: { isActive: false } }).catch(() => {});
+
+    await recordAudit({
+        action: "account_deleted",
+        actorId,
+        targetUserId: targetId,
+        targetEmail: target.email,
+        detail: { purgeAt: purgeAt.toISOString(), previousStatus: target.status, role: target.role },
+    });
+
+    return { ok: true, user: { id: targetId, deletedAt: now, purgeAt } };
+}
+
+/**
+ * Restore a pending-deletion account. CALLER MUST HAVE VERIFIED OWNERSHIP (emailed OTP or
+ * Google-verified email). Conditional on deletedAt set AND purgeAt still in the future, so a
+ * second concurrent recovery, or one after the deadline, changes nothing (returns null).
+ */
+async function recoverAccount(userId, { isAdminEmail = false } = {}) {
+    const prisma = require("../auth/prismaClient");
+    const { DEFAULT_PERMISSIONS, serializePermissions } = require("../auth/services/permissionService");
+    const { revokeSessions } = require("../auth/services/tokenService");
+
+    const res = await prisma.user.updateMany({
+        where: { id: userId, deletedAt: { not: null }, purgeAt: { gt: new Date() } },
+        data: {
+            status: isAdminEmail ? "approved" : "pending",
+            role: isAdminEmail ? "admin" : "user",
+            accessType: "permanent",
+            accessExpiresAt: null,
+            permissionsJson: serializePermissions(DEFAULT_PERMISSIONS),
+            emailVerified: true,
+            deletedAt: null,
+            purgeAt: null,
+            deletedById: null,
+            statusBeforeDeletion: null,
+            purgeError: null,
+        },
+    });
+    if (res.count === 0) return null;
+
+    // belt and braces: nothing from before deletion may survive
+    await revokeSessions({ userId }, "account_deleted");
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    await recordAudit({ action: "account_recovered", actorId: userId, targetUserId: userId, targetEmail: user?.email, detail: { newStatus: user?.status } });
+    return user;
+}
+
+let purgeRunning = false;
+
+/**
+ * Permanently remove accounts whose recovery window has passed. Idempotent, bounded per run,
+ * failures are recorded on the user row (purgeError) + audit log and retried next cycle.
+ * Order: per-user JSON data first, DB row last — a crash in between just means a harmless retry.
+ */
+async function purgeExpiredAccounts({ limit = 25 } = {}) {
+    if (purgeRunning) return { purged: 0, failed: 0, skipped: true };
+    purgeRunning = true;
+    const prisma = require("../auth/prismaClient");
+    let purged = 0;
+    let failed = 0;
+    try {
+        const due = await prisma.user.findMany({
+            where: { deletedAt: { not: null }, purgeAt: { lte: new Date() } },
+            take: limit,
+            select: { id: true, email: true },
+        });
+
+        for (const u of due) {
+            try {
+                // re-check right before destroying: a recovery before the deadline clears deletedAt
+                const still = await prisma.user.findFirst({ where: { id: u.id, deletedAt: { not: null }, purgeAt: { lte: new Date() } }, select: { id: true } });
+                if (!still) continue;
+
+                for (const hook of purgeHooks) await hook(u.id);
+                deleteUserHistory(u.id);
+
+                const del = await prisma.user.deleteMany({ where: { id: u.id, deletedAt: { not: null }, purgeAt: { lte: new Date() } } });
+                if (del.count) {
+                    purged++;
+                    await recordAudit({ action: "account_purged", targetUserId: u.id, targetEmail: u.email, detail: {} });
+                }
+            } catch (err) {
+                failed++;
+                console.error(`[Purge] failed for user ${u.id}:`, err.message);
+                await prisma.user.updateMany({ where: { id: u.id }, data: { purgeError: String(err.message).slice(0, 300) } }).catch(() => {});
+                await recordAudit({ action: "account_purge_failed", targetUserId: u.id, targetEmail: u.email, detail: { error: String(err.message).slice(0, 200) } });
+            }
+        }
+        if (purged || failed) console.log(`[Purge] permanently removed ${purged} account(s), ${failed} failure(s)`);
+    } finally {
+        purgeRunning = false;
+    }
+    return { purged, failed };
+}
+
+let _purgeBoot = null;
+let _purgeTimer = null;
+/** DB-backed (purgeAt column), so it survives restarts; the timer is only the trigger. unref'd like the other daemons. */
+function startAccountPurgeScheduler() {
+    const every = parseInt(process.env.ACCOUNT_PURGE_INTERVAL_MS || String(60 * 60 * 1000), 10);
+    const tick = () => {
+        purgeExpiredAccounts().catch((e) => console.error("[Purge]", e.message));
+        // sign out sessions unused for 30 days (accounts untouched)
+        require("../auth/services/tokenService").expireInactiveSessions().catch((e) => console.error("[Sessions]", e.message));
+    };
+    _purgeBoot = setTimeout(tick, 60 * 1000);
+    _purgeBoot.unref();
+    _purgeTimer = setInterval(tick, every);
+    _purgeTimer.unref();
+}
+function stopAccountPurgeScheduler() {
+    if (_purgeBoot) clearTimeout(_purgeBoot);
+    if (_purgeTimer) clearInterval(_purgeTimer);
+    _purgeBoot = _purgeTimer = null;
+}
+
 module.exports = {
     getHistory,
     getHistoryEntry,
@@ -440,4 +646,15 @@ module.exports = {
     removeFromWatchlist,
     addToFavourites,
     removeFromFavourites,
+    // account lifecycle
+    recordAudit,
+    maskEmail,
+    softDeleteUser,
+    recoverAccount,
+    purgeExpiredAccounts,
+    startAccountPurgeScheduler,
+    stopAccountPurgeScheduler,
+    registerUserPurgeHook,
+    otherActiveAdminCount,
+    DELETION_GRACE_DAYS,
 };
