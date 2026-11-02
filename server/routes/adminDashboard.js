@@ -19,9 +19,14 @@ const { requireApprovedUser } = require("../auth/middleware/requireApprovedUser"
 const { requireRole } = require("../auth/middleware/requireRole");
 const { getSessionStats } = require("../utils/transcoderService");
 const { setPermission } = require("../utils/permissionsStore");
+const { syncPlaybackAccess } = require("../auth/services/playbackRevocation");
 const { invalidateAll, invalidateFolder } = require("../utils/mediaCache");
 const { getSysInfoRoute, getLiveMetrics } = require("../utils/hwAccel");
 const { readFolders } = require("../controllers/libraryController");
+const notificationService = require("../services/notificationService");
+const { notifyApproved } = require("../auth/services/emailService");
+const { summarizeDevicesForAdmin, groupClients, sessionCutoff } = require("../auth/services/tokenService");
+const { softDeleteUser, otherActiveAdminCount, getHistory, DELETION_GRACE_DAYS } = require("../utils/userStore");
 
 // All dashboard routes require: authenticated + approved + admin
 router.use(authenticateJWT, requireApprovedUser, requireRole("admin"));
@@ -117,18 +122,29 @@ console.error = (...args) => {
 // ─── GET /api/admin-dashboard/stats ───────────────────────────────────────────
 router.get("/stats", async (req, res) => {
     try {
-        const [totalUsers, approvedUsers, pendingUsers, adminUsers] = await Promise.all([
-            prisma.user.count(),
-            prisma.user.count({ where: { status: "approved" } }),
-            prisma.user.count({ where: { status: "pending" } }),
-            prisma.user.count({ where: { role: "admin" } }),
+        const now = new Date();
+        const [totalUsers, approvedUsers, pendingUsers, adminUsers, suspendedUsers, pendingDeletion] = await Promise.all([
+            prisma.user.count({ where: { deletedAt: null } }),
+            prisma.user.count({ where: { status: "approved", deletedAt: null } }),
+            prisma.user.count({ where: { status: "pending", deletedAt: null } }),
+            prisma.user.count({ where: { role: "admin", deletedAt: null } }),
+            prisma.user.count({ where: { status: { in: ["blocked", "rejected"] }, deletedAt: null } }),
+            prisma.user.count({ where: { deletedAt: { not: null } } }),
         ]);
 
-        const uniqueSessions = await prisma.session.groupBy({
-            by: ["deviceFingerprint"],
-            where: { isActive: true },
-        });
-        const activeSessions = uniqueSessions.length;
+        // Definitions: active session = isActive AND not past expiresAt (legacy rows without expiresAt count until
+        // their first refresh); registered device = a Device with at least one active session.
+        const liveSessionWhere = { isActive: true, lastSeenAt: { gt: sessionCutoff() }, user: { deletedAt: null }, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] };
+        const liveRows = await prisma.session.findMany({ where: liveSessionWhere, orderBy: { lastSeenAt: "desc" }, select: { userId: true, os: true, deviceType: true, browser: true, ip: true } });
+        let activeSessions = 0; // distinct browser clients (same browser + IP = one)
+        // registered devices = actual machines per account (same OS + type + IP collapse), summed across accounts
+        const perUser = new Map();
+        for (const r of liveRows) (perUser.get(r.userId) || perUser.set(r.userId, []).get(r.userId)).push(r);
+        let registeredDevices = 0;
+        for (const rows of perUser.values()) {
+            registeredDevices += groupClients(rows).length;
+            activeSessions += groupClients(rows, { byBrowser: true }).length;
+        }
 
         // Active streams
         const streams = getSessionStats ? getSessionStats() : [];
@@ -167,8 +183,9 @@ router.get("/stats", async (req, res) => {
         }
 
         res.json({
-            users: { total: totalUsers, approved: approvedUsers, pending: pendingUsers, admins: adminUsers },
+            users: { total: totalUsers, approved: approvedUsers, pending: pendingUsers, admins: adminUsers, suspended: suspendedUsers, pendingDeletion },
             sessions: { active: activeSessions },
+            devices: { registered: registeredDevices },
             streams: { active: activeStreams },
             media: { total: totalMedia },
             storage: { usedBytes: storageBytes, used: fmtBytes(storageBytes) },
@@ -202,22 +219,57 @@ router.get("/streams", (req, res) => {
     }
 });
 
+// ─── Account helpers ──────────────────────────────────────────────────────────
+const USER_STATUSES = ["pending", "approved", "blocked", "rejected"]; // "deleted" is reachable ONLY through DELETE
+const USER_ROLES = ["user", "admin"];
+const ACCESS_TYPES = ["permanent", "temporary"];
+const SORTABLE = { createdAt: "createdAt", name: "name", email: "email", lastLoginAt: "lastLoginAt", status: "status", role: "role" };
+
+function safePerms(json) {
+    try {
+        return JSON.parse(json || "{}");
+    } catch {
+        return {};
+    }
+}
+
 // ─── GET /api/admin-dashboard/users ───────────────────────────────────────────
+// ?search=&status=pending|approved|blocked|rejected|deleted&role=&sort=&dir=asc|desc&page=&limit=
+// status=deleted lists accounts inside their 30-day recovery window. Deleted accounts are
+// excluded from every other view.
 router.get("/users", async (req, res) => {
     try {
-        const { search, status, role, page = 1, limit = 20 } = req.query;
-        const where = {};
-        if (status) where.status = status;
-        if (role) where.role = role;
-        if (search) where.OR = [{ email: { contains: search } }, { name: { contains: search } }];
+        const { search, status, role, sort = "createdAt", dir = "desc" } = req.query;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
 
-        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+        const where = {};
+        if (status === "deleted") where.deletedAt = { not: null };
+        else {
+            where.deletedAt = null;
+            if (status) {
+                if (!USER_STATUSES.includes(status)) return res.status(400).json({ error: "Invalid status filter" });
+                where.status = status;
+            }
+        }
+        if (role) {
+            if (!USER_ROLES.includes(role)) return res.status(400).json({ error: "Invalid role filter" });
+            where.role = role;
+        }
+        if (search) {
+            const q = String(search).slice(0, 100);
+            where.OR = [{ email: { contains: q } }, { name: { contains: q } }];
+        }
+
+        const sortField = SORTABLE[sort] || "createdAt";
+        const sortDir = dir === "asc" ? "asc" : "desc";
+
         const [users, total] = await Promise.all([
             prisma.user.findMany({
                 where,
-                skip,
-                take: parseInt(limit, 10),
-                orderBy: { createdAt: "desc" },
+                skip: (page - 1) * limit,
+                take: limit,
+                orderBy: [{ [sortField]: sortDir }, { createdAt: "desc" }],
                 select: {
                     id: true,
                     email: true,
@@ -232,49 +284,137 @@ router.get("/users", async (req, res) => {
                     permissionsJson: true,
                     createdAt: true,
                     updatedAt: true,
-                    _count: { select: { sessions: true } },
-                    sessions: {
-                        orderBy: { lastSeenAt: "desc" },
-                        take: 1,
-                        select: { ip: true },
-                    },
+                    lastLoginAt: true,
+                    deletedAt: true,
+                    purgeAt: true,
+                    purgeError: true,
                 },
             }),
             prisma.user.count({ where }),
         ]);
 
+        // Live session / device counts + last-login IP for just this page of users (support view)
+        const ids = users.map((u) => u.id);
+        const nowD = new Date();
+        const liveWhere = { userId: { in: ids }, isActive: true, lastSeenAt: { gt: sessionCutoff() }, OR: [{ expiresAt: null }, { expiresAt: { gt: nowD } }] };
+        const [liveSessions, recentIps] = ids.length
+            ? await Promise.all([
+                  prisma.session.findMany({ where: liveWhere, orderBy: { lastSeenAt: "desc" }, select: { userId: true, os: true, deviceType: true, browser: true, ip: true } }),
+                  prisma.session.findMany({ where: { userId: { in: ids }, ip: { not: "" } }, orderBy: { lastSeenAt: "desc" }, select: { userId: true, ip: true } }),
+              ])
+            : [[], []];
+        // sessions per user, then collapse to actual devices (same OS + type + IP = one machine)
+        const byUser = new Map();
+        for (const x of liveSessions) {
+            if (!byUser.has(x.userId)) byUser.set(x.userId, []);
+            byUser.get(x.userId).push(x);
+        }
+        const counts = new Map();
+        for (const [uid, rows] of byUser) counts.set(uid, { sessions: groupClients(rows, { byBrowser: true }).length, devices: groupClients(rows).length });
+        const ipByUser = new Map();
+        for (const r of recentIps) if (!ipByUser.has(r.userId)) ipByUser.set(r.userId, r.ip);
+
         const result = users.map((u) => ({
             ...u,
+            _count: { sessions: counts.get(u.id)?.sessions ?? 0, devices: counts.get(u.id)?.devices ?? 0 },
+            lastIp: ipByUser.get(u.id) || "",
             avatar: u.avarter,
             avarter: undefined,
-            permissions: (() => {
-                try {
-                    return JSON.parse(u.permissionsJson);
-                } catch {
-                    return {};
-                }
-            })(),
+            permissions: safePerms(u.permissionsJson),
             permissionsJson: undefined,
-            lastIp: u.sessions?.[0]?.ip || "—",
-            sessions: undefined,
+            recoveryStatus: u.deletedAt ? (u.purgeAt && u.purgeAt > new Date() ? "recoverable" : "awaiting_purge") : null,
         }));
 
-        res.json({ users: result, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
+        res.json({ users: result, total, page, pages: Math.ceil(total / limit) });
     } catch (err) {
         console.error("[AdminDash] users error:", err);
         res.status(500).json({ error: "Failed to list users" });
     }
 });
 
+// ─── GET /api/admin-dashboard/users/:id ───────────────────────────────────────
+// Permitted detail view: account, profile, role/permissions, status, activity, device SUMMARY, deletion status.
+// No password hash, tokens, IPs, user agents, session/device ids.
+router.get("/users/:id", async (req, res) => {
+    try {
+        const u = await prisma.user.findUnique({ where: { id: req.params.id } });
+        if (!u) return res.status(404).json({ error: "User not found" });
+
+        const devices = await summarizeDevicesForAdmin(u.id);
+        let history = { count: 0, lastWatchedAt: null };
+        try {
+            const entries = Object.values(getHistory(u.id));
+            history = { count: entries.length, lastWatchedAt: entries.reduce((m, e) => (e.watchedAt && (!m || e.watchedAt > m) ? e.watchedAt : m), null) };
+        } catch {
+            /* history store unreadable — leave zeros */
+        }
+
+        res.json({
+            user: {
+                id: u.id,
+                email: u.email,
+                name: u.name,
+                username: u.username,
+                avatar: u.avarter,
+                role: u.role,
+                status: u.status,
+                emailVerified: u.emailVerified,
+                hasPassword: !!u.passwordHash,
+                hasGoogle: !!u.googleId,
+                accessType: u.accessType,
+                accessExpiresAt: u.accessExpiresAt,
+                permissions: safePerms(u.permissionsJson),
+                createdAt: u.createdAt,
+                updatedAt: u.updatedAt,
+                lastLoginAt: u.lastLoginAt,
+                lastIp: devices.lastIp || "",
+            },
+            activity: { lastLoginAt: u.lastLoginAt, history },
+            devices,
+            deletion: u.deletedAt
+                ? {
+                      deletedAt: u.deletedAt,
+                      purgeAt: u.purgeAt,
+                      graceDays: DELETION_GRACE_DAYS,
+                      previousStatus: u.statusBeforeDeletion,
+                      recoveryStatus: u.purgeAt && u.purgeAt > new Date() ? "recoverable" : "awaiting_purge",
+                      purgeError: u.purgeError,
+                  }
+                : null,
+        });
+    } catch (err) {
+        console.error("[AdminDash] user detail error:", err);
+        res.status(500).json({ error: "Failed to load user" });
+    }
+});
+
 // ─── PATCH /api/admin-dashboard/users/:id ─────────────────────────────────────
 router.patch("/users/:id", async (req, res) => {
     try {
-        const { status, role, accessType, accessExpiresAt, permissions, permissionsJson, allowAdult } = req.body;
+        const { status, role, accessType, accessExpiresAt, permissions, permissionsJson, allowAdult } = req.body || {};
         const data = {};
 
-        if (status !== undefined) data.status = status;
-        if (role !== undefined) data.role = role;
-        if (accessType !== undefined) data.accessType = accessType;
+        const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+        if (!target) return res.status(404).json({ error: "User not found" });
+        if (target.deletedAt) return res.status(409).json({ error: "Account is scheduled for deletion and cannot be edited", code: "ACCOUNT_DELETED" });
+
+        if (status !== undefined) {
+            if (!USER_STATUSES.includes(status)) return res.status(400).json({ error: `status must be one of: ${USER_STATUSES.join(", ")}` });
+            // "pending" is only a signup state. An admin can never move an account back to pending
+            // (approved / blocked / rejected → pending). Re-sending "pending" for an account that is already pending is a no-op.
+            if (status === "pending" && target.status !== "pending") {
+                return res.status(400).json({ error: "An account cannot be set back to pending", code: "STATUS_PENDING_NOT_ALLOWED" });
+            }
+            if (status !== target.status) data.status = status;
+        }
+        if (role !== undefined) {
+            if (!USER_ROLES.includes(role)) return res.status(400).json({ error: `role must be one of: ${USER_ROLES.join(", ")}` });
+            data.role = role;
+        }
+        if (accessType !== undefined) {
+            if (!ACCESS_TYPES.includes(accessType)) return res.status(400).json({ error: `accessType must be one of: ${ACCESS_TYPES.join(", ")}` });
+            data.accessType = accessType;
+        }
         if (accessExpiresAt !== undefined) {
             if (!accessExpiresAt) {
                 data.accessExpiresAt = null;
@@ -285,31 +425,63 @@ router.patch("/users/:id", async (req, res) => {
             }
         }
 
+        // Never leave the server without an approved admin, and never let an admin lock themselves out.
+        const losingAdmin = target.role === "admin" && ((data.role && data.role !== "admin") || (data.status && data.status !== "approved"));
+        if (losingAdmin) {
+            if (target.id === req.user.id) return res.status(400).json({ error: "You cannot demote or block your own account" });
+            if ((await otherActiveAdminCount(target.id)) === 0) return res.status(400).json({ error: "This is the last active administrator", code: "LAST_ADMIN" });
+        }
+
         // permissions — store as JSON string in permissionsJson column
         if (permissionsJson !== undefined) {
+            if (typeof permissionsJson !== "string") return res.status(400).json({ error: "permissionsJson must be a JSON string" });
+            try {
+                JSON.parse(permissionsJson);
+            } catch {
+                return res.status(400).json({ error: "permissionsJson is not valid JSON" });
+            }
             data.permissionsJson = permissionsJson;
         } else if (permissions !== undefined) {
+            if (permissions === null || typeof permissions !== "object" || Array.isArray(permissions)) return res.status(400).json({ error: "permissions must be an object" });
             data.permissionsJson = JSON.stringify(permissions);
         }
 
         // allowAdult — merge into existing permissionsJson if only this field changed
         if (allowAdult !== undefined && permissionsJson === undefined && permissions === undefined) {
-            const existing = await prisma.user.findUnique({ where: { id: req.params.id }, select: { permissionsJson: true } });
-            let parsed = {};
-            try {
-                parsed = JSON.parse(existing?.permissionsJson || "{}");
-            } catch {}
-            parsed.allowAdult = allowAdult;
+            const parsed = safePerms(target.permissionsJson);
+            parsed.allowAdult = !!allowAdult;
             data.permissionsJson = JSON.stringify(parsed);
         }
 
-        const user = await prisma.user.update({ where: { id: req.params.id }, data });
+        if (!Object.keys(data).length) return res.status(400).json({ error: "Nothing to update" });
 
-        // Parse permissionsJson back to object for response
-        let parsedPerms = {};
-        try {
-            parsedPerms = JSON.parse(user.permissionsJson || "{}");
-        } catch {}
+        // deletedAt: null guards against a deletion landing between the read above and this write
+        const user = await prisma.user.update({ where: { id: req.params.id, deletedAt: null }, data });
+
+        // Apply status / role / access-window changes to playback immediately (tokens + caches).
+        await syncPlaybackAccess(user);
+
+        // Admin just approved this account → send the "You're in" e-mail (fire-and-forget, never blocks the response).
+        if (data.status === "approved" && target.status !== "approved") {
+            notifyApproved(user).catch(() => {});
+        }
+
+        // Tell that user what changed (status and/or access duration) — one notification, even if both changed.
+        if (data.status !== undefined || data.accessType !== undefined || data.accessExpiresAt !== undefined) {
+            notificationService.notifyAccountChange({ userId: user.id, before: target, after: user }).catch(() => {});
+        }
+        if (data.role !== undefined && data.role !== target.role) {
+            require("../utils/userStore").recordAudit({ action: "role_changed", actorId: req.user.id, targetUserId: user.id, targetEmail: user.email, detail: { from: target.role, to: user.role } });
+        }
+        if (data.status !== undefined && data.status !== target.status) {
+            require("../utils/userStore").recordAudit({
+                action: "status_changed",
+                actorId: req.user.id,
+                targetUserId: user.id,
+                targetEmail: user.email,
+                detail: { from: target.status, to: user.status },
+            });
+        }
 
         res.json({
             user: {
@@ -318,88 +490,110 @@ router.patch("/users/:id", async (req, res) => {
                 role: user.role,
                 accessType: user.accessType,
                 accessExpiresAt: user.accessExpiresAt,
-                permissions: parsedPerms,
+                permissions: safePerms(user.permissionsJson),
                 permissionsJson: user.permissionsJson,
             },
         });
     } catch (err) {
         if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
+        console.error("[AdminDash] update user error:", err);
         res.status(500).json({ error: "Failed to update user" });
     }
 });
 
 // ─── DELETE /api/admin-dashboard/users/:id ────────────────────────────────────
+// Recoverable deletion: access revoked NOW, data kept DELETION_GRACE_DAYS (30) days, then purged by the
+// scheduler (utils/userStore.js). This is account deletion — NOT a general "log this user out" tool.
 router.delete("/users/:id", async (req, res) => {
     try {
-        if (req.params.id === req.user.id) {
-            return res.status(400).json({ error: "Cannot delete your own account" });
+        // Pending (never-approved) accounts hold no library/watch data worth protecting → remove them from the
+        // database right now, NO 30-day recovery window. Every other status keeps the recoverable 30-day deletion below.
+        const pendingTarget = await prisma.user.findUnique({ where: { id: req.params.id } });
+        if (pendingTarget && pendingTarget.status === "pending") {
+            const uid = pendingTarget.id;
+
+            // 1) Child rows first. Discovered from the Prisma schema itself (every model that has a foreign key to User),
+            //    so nothing blocks the user delete even if you add tables later. Falls back to the known list.
+            let children = [];
+            try {
+                const { Prisma } = require("@prisma/client");
+                const models = Prisma?.dmmf?.datamodel?.models || [];
+                for (const m of models) {
+                    for (const f of m.fields) {
+                        if (f.kind === "object" && f.type === "User" && Array.isArray(f.relationFromFields) && f.relationFromFields.length) {
+                            children.push({ model: m.name, field: f.relationFromFields[0] });
+                        }
+                    }
+                }
+            } catch {}
+            if (!children.length) {
+                children = ["streamToken", "session", "device", "pushDevice", "oTP"].map((model) => ({ model, field: "userId" }));
+            }
+            for (const { model, field } of children) {
+                const delegate = prisma[model.charAt(0).toLowerCase() + model.slice(1)] || prisma[model] || prisma[model.replace(/^OTP/, "oTP")];
+                if (!delegate?.deleteMany) continue;
+                try {
+                    await delegate.deleteMany({ where: { [field]: uid } });
+                } catch (e) {
+                    console.warn(`[AdminDash] pending delete: could not clear ${model}.${field}:`, e?.message);
+                }
+            }
+
+            // 2) The user row itself — then CONFIRM it is really gone from the database.
+            try {
+                await prisma.user.delete({ where: { id: uid } });
+            } catch (e) {
+                if (e.code !== "P2025") {
+                    console.error("[AdminDash] pending delete: prisma.user.delete failed:", e);
+                    return res.status(500).json({ error: "Could not remove the user from the database", code: "DB_DELETE_FAILED", detail: e?.message });
+                }
+            }
+            const still = await prisma.user.findUnique({ where: { id: uid } });
+            if (still) return res.status(500).json({ error: "User row is still in the database", code: "DB_DELETE_FAILED" });
+
+            try {
+                await syncPlaybackAccess({ ...pendingTarget, status: "deleted" });
+            } catch {}
+            try {
+                require("../utils/userStore").recordAudit({ action: "pending_user_deleted", actorId: req.user.id, targetUserId: uid, targetEmail: pendingTarget.email, detail: { immediate: true } });
+            } catch {}
+            console.log(`[AdminDash] Pending user ${pendingTarget.email} permanently removed from the database`);
+            return res.json({ message: "Pending user deleted", id: uid, immediate: true, removedFromDatabase: true, graceDays: 0 });
         }
-        await prisma.user.delete({ where: { id: req.params.id } });
-        res.json({ message: "User deleted" });
+
+        const r = await softDeleteUser(req.params.id, req.user.id);
+        if (!r.ok) {
+            const map = {
+                NOT_FOUND: [404, "User not found"],
+                SELF: [400, "Cannot delete your own account"],
+                LAST_ADMIN: [400, "Cannot delete the last active administrator"],
+                ALREADY_DELETED: [409, "Account is already scheduled for deletion"],
+            };
+            const [code, error] = map[r.code] || [500, "Failed to delete user"];
+            return res.status(code).json({ error, code: r.code });
+        }
+        res.json({ message: "User scheduled for deletion", id: req.params.id, deletedAt: r.user.deletedAt, purgeAt: r.user.purgeAt, graceDays: DELETION_GRACE_DAYS });
     } catch (err) {
-        if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
+        console.error("[AdminDash] delete user error:", err);
         res.status(500).json({ error: "Failed to delete user" });
     }
 });
 
 // ─── GET /api/admin-dashboard/users/:id/sessions ──────────────────────────────
+// Kept for compatibility; now a privacy-safe DEVICE SUMMARY (see summarizeDevicesForAdmin).
 router.get("/users/:id/sessions", async (req, res) => {
     try {
-        const sessions = await prisma.session.findMany({
-            where: { userId: req.params.id },
-            orderBy: { lastSeenAt: "desc" },
-            select: {
-                id: true,
-                deviceFingerprint: true,
-                deviceName: true,
-                deviceType: true,
-                deviceModel: true,
-                deviceVendor: true,
-                browser: true,
-                browserVersion: true,
-                os: true,
-                osVersion: true,
-                userAgent: true,
-                ip: true,
-                isActive: true,
-                createdAt: true,
-                lastSeenAt: true,
-            },
-        });
-
-        // Deduplicate by deviceFingerprint
-        const seenDevices = new Set();
-        const uniqueSessions = [];
-        for (const s of sessions) {
-            if (!seenDevices.has(s.deviceFingerprint)) {
-                seenDevices.add(s.deviceFingerprint);
-                uniqueSessions.push(s);
-            }
-        }
-
-        // Strip deviceFingerprint before sending
-        const mappedSessions = uniqueSessions.map((s) => {
-            const copy = { ...s };
-            delete copy.deviceFingerprint;
-            return copy;
-        });
-
-        res.json({ sessions: mappedSessions, total: mappedSessions.length });
+        const exists = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+        if (!exists) return res.status(404).json({ error: "User not found" });
+        res.json(await summarizeDevicesForAdmin(req.params.id));
     } catch (err) {
-        res.status(500).json({ error: "Failed to get sessions" });
+        console.error("[AdminDash] devices error:", err);
+        res.status(500).json({ error: "Failed to get devices" });
     }
 });
 
-// ─── DELETE /api/admin-dashboard/sessions/:id ─────────────────────────────────
-router.delete("/sessions/:id", async (req, res) => {
-    try {
-        await prisma.session.update({ where: { id: req.params.id }, data: { isActive: false } });
-        res.json({ message: "Session revoked" });
-    } catch (err) {
-        if (err.code === "P2025") return res.status(404).json({ error: "Session not found" });
-        res.status(500).json({ error: "Failed to revoke session" });
-    }
-});
+// NOTE: there is intentionally NO DELETE /sessions/:id here. Administrators cannot revoke another
+// user's sessions or log their devices out; owners do that themselves via /api/sessions.
 
 // ─── GET /api/admin-dashboard/libraries ───────────────────────────────────────
 router.get("/libraries", (req, res) => {
@@ -512,6 +706,16 @@ router.post("/upload", uploadTemp.single("file"), async (req, res) => {
 
         pushLog("info", "upload", `Uploaded "${safeName}" to library "${folder.label}"`);
 
+        notificationService
+            .notify({
+                userIds: [req.user.id],
+                type: notificationService.TYPES.UPLOAD,
+                title: "Upload complete",
+                body: `${safeName} was added to ${folder.label}.`,
+                meta: { fileName: safeName, libraryId: folder.id, libraryLabel: folder.label },
+            })
+            .catch(() => {});
+
         return res.status(201).json({ uploaded: { path: destPath, size: req.file.size, name: safeName, folderId: folder.id } });
     } catch (err) {
         console.error("[AdminDash] upload error:", err);
@@ -564,21 +768,20 @@ router.get("/activity", async (req, res) => {
     try {
         const recentUsers = await prisma.user.findMany({
             take: 5,
+            where: { deletedAt: null },
             orderBy: { createdAt: "desc" },
             select: { id: true, name: true, email: true, status: true, role: true, createdAt: true },
         });
 
         const recentSessions = await prisma.session.findMany({
             take: 5,
-            where: { isActive: true },
+            where: { isActive: true, user: { deletedAt: null }, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
             orderBy: { lastSeenAt: "desc" },
             select: {
                 id: true,
                 deviceName: true,
                 browser: true,
                 os: true,
-                ip: true,
-                userAgent: true,
                 isActive: true,
                 createdAt: true,
                 lastSeenAt: true,
@@ -590,14 +793,15 @@ router.get("/activity", async (req, res) => {
 
         res.json({
             recentUsers,
+            // IP / user-agent intentionally omitted (not needed for support; privacy)
             recentSessions: recentSessions.map((s) => ({
                 id: s.id,
                 user: s.user,
                 device: s.deviceName,
                 browser: s.browser,
                 os: s.os,
-                ip: s.ip,
-                userAgent: s.userAgent,
+                ip: null,
+                userAgent: null,
                 lastSeen: s.lastSeenAt,
             })),
             activeStreams: streams.slice(0, 5),

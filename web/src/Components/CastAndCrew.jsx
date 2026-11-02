@@ -86,7 +86,7 @@ function PersonCarousel({ people, onPersonClick }) {
                 <button
                     onClick={() => scroll(-1)}
                     className="absolute -left-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full cursor-pointer
-                               bg-base-300/90 hover:bg-base-200 border border-white/10
+                               bg-base-300/90 hover:bg-base-200
                                flex items-center justify-center shadow-lg transition-colors"
                     aria-label="Scroll left">
                     <ChevronLeft size={16} className="text-base-content/70" />
@@ -101,7 +101,7 @@ function PersonCarousel({ people, onPersonClick }) {
                 <button
                     onClick={() => scroll(1)}
                     className="absolute -right-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full cursor-pointer
-                               bg-base-300/90 hover:bg-base-200 border border-white/10
+                               bg-base-300/90 hover:bg-base-200
                                flex items-center justify-center shadow-lg transition-colors"
                     aria-label="Scroll right">
                     <ChevronRight size={16} className="text-base-content/70" />

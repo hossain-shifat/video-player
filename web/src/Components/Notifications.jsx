@@ -1,24 +1,85 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Bell, BellOff, CheckCheck, X } from "lucide-react";
-
 // Same focus ring as Navbar
-const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60";
 
-// TODO: replace with real API data. Pass `initialItems` prop or lift state to context.
-const SAMPLE_ITEMS = [
-    { id: "n1", title: "Library scan finished", body: "Test Movies — new titles added.", time: "2m ago", read: false },
-    { id: "n2", title: "Metadata updated", body: "Posters refreshed from TMDB.", time: "1h ago", read: false },
-    { id: "n3", title: "New trailers available", body: "Fresh trailers for studios you own.", time: "Yesterday", read: false },
-];
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useNavigate, useSearchParams, Link } from "react-router";
+import { Bell, BellOff, CheckCheck, X, BellRing } from "lucide-react";
+import { useNotifications, usePushLifecycle, usePushState } from "../Hooks/useNotifications";
+import { enablePush } from "../utils/push";
+import { NotificationModal, FOCUS_RING, TONES, Visual, fmtDate, metaFor, timeAgo, useResolvedMedia } from "./Modal";
 
-const Notifications = ({ initialItems = SAMPLE_ITEMS }) => {
+// Primary / secondary lines for a list row. Falls back to the stored (generic) text whenever media can't be resolved.
+function describeRow(n, media) {
+    const ok = media?.filter((m) => m.found) ?? [];
+    if (n.type === "new_media" && ok.length) {
+        const total = Math.max(n.media?.count ?? ok.length, ok.length);
+        const where = n.media?.library ? `Added to ${n.media.library}` : "Added to your library";
+        // Episodes of one series → "Severance" + "S01E02 · Added to Series" (or "3 new episodes").
+        const sameShow = ok.every((m) => m.isShow && m.bare === ok[0].bare);
+        if (sameShow) {
+            const what = total === 1 ? ok[0].code : `${total} new episodes${ok.length <= 3 && ok.every((m) => m.code) ? ` (${ok.map((m) => m.code).join(", ")})` : ""}`;
+            return { heading: ok[0].bare, summary: [what, where].filter(Boolean).join(" · "), poster: ok[0].poster };
+        }
+        const heading = total > 1 ? `${ok[0].title} and ${total - 1} more` : ok[0].title;
+        return { heading, summary: ok[0].subtitle && total === 1 ? `${ok[0].subtitle} · ${where}` : where, poster: ok[0].poster };
+    }
+    return { heading: n.title, summary: n.body, poster: null };
+}
+
+function NotificationRow({ n, onOpen, onDismiss }) {
+    const { items } = useResolvedMedia(n.media?.ids, { serverItems: n.media?.items });
+    const d = describeRow(n, items);
+    const tone = TONES[metaFor(n.type).tone];
+
+    return (
+        <li className="group relative">
+            <button
+                onClick={() => onOpen(n)}
+                className={`w-full flex items-start gap-3 px-3 py-2.5 pr-9 rounded-lg text-left transition-colors duration-150 hover:bg-white/5 focus-visible:bg-white/5 cursor-pointer ${FOCUS_RING}`}>
+                <Visual poster={d.poster} type={n.type} size={d.poster ? 52 : 38} />
+                <span className="min-w-0 flex-1">
+                    <span className={`block text-sm leading-snug truncate ${n.read ? "text-white/60" : "text-white font-medium"}`}>
+                        {!n.read && <span className="sr-only">Unread: </span>}
+                        {d.heading}
+                    </span>
+                    {d.summary && <span className="block text-xs leading-snug mt-0.5 line-clamp-2 text-[oklch(66%_0.015_260)]">{d.summary}</span>}
+                    <span className="mt-1 flex items-center gap-1.5 text-[10px] text-[oklch(56%_0.015_260)]">
+                        <span className="font-semibold uppercase tracking-wider" style={{ color: tone.fg }}>
+                            {n.category}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <time dateTime={n.createdAt} title={fmtDate(n.createdAt)}>
+                            {timeAgo(n.createdAt)}
+                        </time>
+                    </span>
+                </span>
+                {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: "oklch(58% 0.22 20)" }} aria-hidden="true" />}
+            </button>
+            <button
+                onClick={() => onDismiss(n.id)}
+                className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-md text-[oklch(62%_0.015_260)] hover:text-white hover:bg-white/10 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-all duration-150 cursor-pointer ${FOCUS_RING}`}
+                aria-label={`Dismiss: ${d.heading}`}>
+                <X size={13} strokeWidth={2.2} />
+            </button>
+        </li>
+    );
+}
+
+const Notifications = () => {
     const [open, setOpen] = useState(false);
-    const [items, setItems] = useState(initialItems);
+    const [pushBusy, setPushBusy] = useState(false);
+    const [pushError, setPushError] = useState("");
 
     const btnRef = useRef(null);
     const panelRef = useRef(null);
+    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [selectedId, setSelectedId] = useState(null);
 
-    const unread = useMemo(() => items.filter((n) => !n.read).length, [items]);
+    // Data comes from the backend now; this hook polls + updates optimistically.
+    const { items, unreadCount: unread, isAuthenticated, markRead, markAllRead, remove, clearAll } = useNotifications();
+    usePushLifecycle(); // re-attach push token on sign-in, refresh on incoming push, route on click
+    const push = usePushState();
+    const canOfferPush = isAuthenticated && push.support.supported && push.configured && !push.enabledHere && push.permission !== "denied";
 
     const close = useCallback((restoreFocus = false) => {
         setOpen(false);
@@ -44,10 +105,47 @@ const Notifications = ({ initialItems = SAMPLE_ITEMS }) => {
         };
     }, [open, close]);
 
-    const markRead = (id) => setItems((p) => p.map((n) => (n.id === id ? { ...n, read: true } : n)));
-    const markAllRead = () => setItems((p) => p.map((n) => ({ ...n, read: true })));
-    const dismiss = (id) => setItems((p) => p.filter((n) => n.id !== id));
-    const clearAll = () => setItems([]);
+    const dismiss = remove;
+
+    // Clicking a notification opens its details modal (it does not navigate by itself).
+    const openItem = (n) => {
+        setOpen(false);
+        setSelectedId(n.id);
+    };
+
+    const closeModal = useCallback(() => setSelectedId(null), []);
+
+    // Modal action button → close, then go to the destination the SERVER verified.
+    const goTo = useCallback(
+        (path) => {
+            setSelectedId(null);
+            navigate(path);
+        },
+        [navigate],
+    );
+
+    // Arrived from a system (push) notification: /?n=<id> opens its modal, then the param is removed.
+    useEffect(() => {
+        const id = searchParams.get("n");
+        if (!id || !isAuthenticated) return;
+        setSelectedId(id);
+        const next = new URLSearchParams(searchParams);
+        next.delete("n");
+        setSearchParams(next, { replace: true });
+    }, [searchParams, isAuthenticated, setSearchParams]);
+
+    // enablePush() shows the permission prompt, so it has to run inside this click.
+    const turnOnPush = async () => {
+        setPushBusy(true);
+        setPushError("");
+        try {
+            await enablePush();
+        } catch (err) {
+            setPushError(err.message || "Couldn't enable push.");
+        } finally {
+            setPushBusy(false);
+        }
+    };
 
     return (
         // `contents` wrapper → button stays a direct flex child of .nav-act, so
@@ -114,46 +212,53 @@ const Notifications = ({ initialItems = SAMPLE_ITEMS }) => {
                     {items.length === 0 ? (
                         <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-[oklch(62%_0.015_260)]">
                             <BellOff size={26} strokeWidth={1.6} />
-                            <p className="text-sm">You're all caught up</p>
+                            <p className="text-sm">{isAuthenticated ? "You're all caught up" : "Sign in to see notifications"}</p>
                         </div>
                     ) : (
                         <ul className="max-h-[min(24rem,60dvh)] overflow-y-auto overscroll-contain px-1 pb-1" style={{ scrollbarWidth: "none" }}>
                             {items.map((n) => (
-                                <li key={n.id} className="group relative">
-                                    <button
-                                        onClick={() => markRead(n.id)}
-                                        className={`w-full flex items-start gap-3 px-3 py-2.5 pr-9 rounded-lg text-left transition-colors duration-150 hover:bg-white/5 focus-visible:bg-white/5 cursor-pointer ${FOCUS_RING}`}>
-                                        <span className="mt-1.5 shrink-0 w-2 h-2 rounded-full" style={{ background: n.read ? "transparent" : "oklch(58% 0.22 20)" }} aria-hidden="true" />
-                                        <span className="min-w-0 flex-1">
-                                            <span className={`block text-sm leading-snug truncate ${n.read ? "text-white/60" : "text-white font-medium"}`}>{n.title}</span>
-                                            {n.body && <span className="block text-xs leading-snug mt-0.5 line-clamp-2 text-[oklch(62%_0.015_260)]">{n.body}</span>}
-                                            <span className="block text-[10px] mt-1 text-[oklch(52%_0.015_260)]">{n.time}</span>
-                                        </span>
-                                    </button>
-                                    <button
-                                        onClick={() => dismiss(n.id)}
-                                        className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-md text-[oklch(62%_0.015_260)] hover:text-white hover:bg-white/10 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-all duration-150 cursor-pointer ${FOCUS_RING}`}
-                                        aria-label={`Dismiss ${n.title}`}>
-                                        <X size={13} strokeWidth={2.2} />
-                                    </button>
-                                </li>
+                                <NotificationRow key={n.id} n={n} onOpen={openItem} onDismiss={dismiss} />
                             ))}
                         </ul>
                     )}
 
                     {/* Footer */}
-                    {items.length > 0 && (
+                    {isAuthenticated && (
                         <div className="px-2 pb-2">
                             <div className="h-px mb-2 mx-1" style={{ background: "oklch(100% 0 0 / 0.07)" }} />
-                            <button
-                                onClick={clearAll}
-                                className={`w-full px-3 py-2 rounded-lg text-xs font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
-                                Clear all
-                            </button>
+                            {canOfferPush && (
+                                <div className="px-1 pb-1">
+                                    <button
+                                        onClick={turnOnPush}
+                                        disabled={pushBusy}
+                                        className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-white/10 hover:bg-white/15 disabled:opacity-50 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
+                                        <BellRing size={13} strokeWidth={2} />
+                                        {pushBusy ? "Enabling…" : "Get alerts outside the browser"}
+                                    </button>
+                                    {pushError && <p className="mt-1.5 px-1 text-[11px] leading-snug text-[oklch(70%_0.15_25)]">{pushError}</p>}
+                                </div>
+                            )}
+                            <div className="flex items-center gap-1">
+                                {items.length > 0 && (
+                                    <button
+                                        onClick={clearAll}
+                                        className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
+                                        Clear all
+                                    </button>
+                                )}
+                                <Link
+                                    to="/settings?tab=notifications"
+                                    onClick={() => setOpen(false)}
+                                    className={`flex-1 px-3 py-2 rounded-lg text-center text-xs font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 ${FOCUS_RING}`}>
+                                    Settings
+                                </Link>
+                            </div>
                         </div>
                     )}
                 </div>
             )}
+
+            {selectedId && <NotificationModal id={selectedId} onClose={closeModal} onAction={goTo} markRead={markRead} />}
         </div>
     );
 };

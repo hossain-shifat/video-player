@@ -30,7 +30,12 @@ const liveRouter = require("./routes/live");
 const mediaInfoRouter = require("./routes/mediainfo");
 const permissionsRouter = require("./routes/permissions");
 const trailersRouter = require("./routes/trailers");
+const notificationsRouter = require("./routes/notifications");
 const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailerScheduler");
+const { startStorageMonitor, stopStorageMonitor } = require("./utils/storageMonitor");
+const notificationService = require("./services/notificationService");
+const { startAccountPurgeScheduler, stopAccountPurgeScheduler } = require("./utils/userStore");
+const pushService = require("./services/pushService");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
 const authRouter = require("./auth/routes/authRoutes");
@@ -46,6 +51,7 @@ const { detect: detectHW, getSysInfoRoute } = require("./utils/hwAccel");
 const { authenticateJWT } = require("./auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("./auth/middleware/requireApprovedUser");
 const { requireRole } = require("./auth/middleware/requireRole");
+const { enforceEmailVerified } = require("./auth/middleware/enforceEmailVerified");
 
 const subtitleStore = require("./utils/subtitleStore");
 const subtitleWorker = require("./utils/subtitleWorker");
@@ -64,8 +70,11 @@ app.use(
             if (!origin || allowedOrigins.includes(origin)) callback(null, true);
             else callback(null, false);
         },
+        // Needed so the browser stores/sends the HttpOnly device cookie (flux_did). Origins are an
+        // explicit allow-list (never "*"), which is what makes credentials safe.
+        credentials: true,
         methods: ["GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Range", "X-Flux-Client", "X-Flux-Profile", "Authorization"],
+        allowedHeaders: ["Content-Type", "Range", "X-Flux-Client", "X-Flux-Profile", "X-Flux-Device", "Authorization", "X-Flux-Stream-Token"],
         exposedHeaders: ["Content-Range", "Accept-Ranges", "Content-Length", "X-Content-Duration", "ETag"],
     }),
 );
@@ -84,6 +93,12 @@ app.use((req, res, next) => {
     });
     next();
 });
+
+// ─── Email-verification gate (soft, app-wide) ─────────────────────────────────
+// A token whose account has NOT verified its e-mail is refused everywhere except /auth/* (the
+// verification flow itself) and /health. Anonymous requests and verified users pass untouched;
+// approval is NOT checked here — pending users may browse. Playback is gated in routes/stream.js.
+app.use(enforceEmailVerified);
 
 // ─── Auth routes (public — no middleware applied here) ────────────────────────
 app.use("/auth", authRouter);
@@ -105,6 +120,7 @@ app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/live", liveRouter);
 app.use("/api/trailers", trailersRouter);
+app.use("/api/notifications", notificationsRouter);
 app.use("/stream", streamRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -158,7 +174,9 @@ app.use((req, res) => res.status(404).json({ error: "Not found" }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
     console.error("[Server] Unhandled error:", err);
-    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+    const status = err.status || err.statusCode || 500;
+    // Never leak internal error text (paths, SQL, library messages) on 5xx.
+    res.status(status).json({ error: status >= 500 ? "Internal server error" : err.message || "Request failed" });
 });
 
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
@@ -166,6 +184,9 @@ async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
     stopTrailerScheduler();
+    stopStorageMonitor();
+    stopAccountPurgeScheduler();
+    notificationService.stopMaintenance();
     subtitleWorker.stop();
     await transcoderService.killAllSessions();
     console.log("[Server] All transcoding sessions terminated. Bye.");
@@ -209,6 +230,16 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     // Keeps data/trailers.json fresh daily without any frontend request
     startTrailerScheduler();
 
+    // FCM push (no-op + log line if Firebase credentials aren't configured),
+    // disk-space alerts, and daily pruning of old notifications / stale devices.
+    pushService.init();
+    startStorageMonitor();
+    notificationService.startMaintenance();
+
+    // Permanently removes accounts whose 30-day recovery window has passed. DB-backed (users.purgeAt),
+    // so it survives restarts; the timer is only the trigger. Idempotent.
+    startAccountPurgeScheduler();
+
     // Pre-warm hardware detection + FFmpeg path resolution at startup.
     // Without this, the first transcode session would block for 3-36s while
     // QSV/NVENC/VAAPI test encodes run sequentially.
@@ -234,6 +265,11 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
         if (folders.length > 0) {
             const { allMedia } = await getAllCached(folders);
             console.log(`[Subtitle] Total media files found: ${allMedia.length}`);
+
+            // Live folder watching. watchAllFolders() exists in libraryController but was never called, so
+            // files added to EXISTING libraries were never detected (no cache refresh, no "new media"
+            // notification). Done after the first scan so the baseline of known files is warm.
+            require("./controllers/libraryController").watchAllFolders(folders);
 
             const allMediaIds = new Set(allMedia.map((f) => f.id));
 

@@ -13,12 +13,17 @@ function requireApprovedUser(req, res, next) {
 
     const { status } = req.user;
 
-    if (status === "pending") {
+    // Verification and approval are separate requirements: approved never implies verified.
+    if (!req.user.emailVerified) {
+        return res.status(403).json({ error: "Email not verified", code: "EMAIL_NOT_VERIFIED" });
+    }
+
+    if (status === "pending" || status === "blocked") {
         return res.status(403).json({ error: "Account pending approval", code: "PENDING_APPROVAL" });
     }
 
-    if (status === "blocked") {
-        return res.status(403).json({ error: "Account blocked", code: "ACCOUNT_BLOCKED" });
+    if (status === "deleted") {
+        return res.status(403).json({ error: "Account pending deletion", code: "ACCOUNT_DELETED" });
     }
 
     if (status === "rejected") {

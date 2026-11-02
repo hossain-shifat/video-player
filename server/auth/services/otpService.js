@@ -17,7 +17,7 @@ const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
  */
 function generateOTP() {
     // Cryptographically random 6-digit code
-    const code = String(crypto.randomInt(100000, 999999));
+    const code = String(crypto.randomInt(100000, 1000000));
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
     return { code, expiresAt };
 }

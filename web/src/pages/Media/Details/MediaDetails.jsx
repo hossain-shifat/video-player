@@ -1,50 +1,19 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
-import { useParams, useNavigate, Link } from "react-router";
-import {
-    Play,
-    Star,
-    Film,
-    Tv,
-    Clock,
-    Calendar,
-    Globe,
-    Award,
-    Users,
-    ChevronDown,
-    ChevronUp,
-    ChevronLeft,
-    ChevronRight,
-    Layers,
-    Info,
-    Hash,
-    Clapperboard,
-    Volume2,
-    BarChart2,
-    MessageSquare,
-    PlayCircle,
-    ThumbsUp,
-    MoreVertical,
-    Link2,
-    Languages,
-    MapPin,
-    DollarSign,
-    CalendarClock,
-    RefreshCw,
-} from "lucide-react";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router";
+import { Play, Star, Film, Tv, Clock, Calendar, Globe, Award, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Layers, Info, Hash, Clapperboard, Volume2, BarChart2, PlayCircle, MoreVertical, Link2, Languages, MapPin, DollarSign, CalendarClock, RefreshCw, Plus, BellRing } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
 import { useSeasonDetail } from "../../../Hooks/useMedia";
 import { useHistory } from "../../../Hooks/useHistory";
 import { getMediaById } from "../../../api";
 import { api } from "../../../api/client";
 import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
-import MediaRow from "../../../Components/MediaRow";
 import MediaCard, { useCountdown } from "../../../Components/MediaCard";
 import RelatedSections from "../../../Components/RelatedSections";
 import { assets } from "../../../assets/assets";
 import CastAndCrew from "../../../Components/CastAndCrew";
 import Reviews from "../../../Components/Reviews";
 import FloatingActionMenu from "../../../Components/FloatingActionMenu";
+import { TrailerModal, NotInLibraryModal, RemindMe } from "../../../Components/Modal";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -311,97 +280,6 @@ function SeasonsPanel({ seasons, onPlayEpisode }) {
                 );
             })}
         </div>
-    );
-}
-
-// ─── Trailer modal ────────────────────────────────────────────────────────────
-function TrailerModal({ trailerKey, onClose }) {
-    useEffect(() => {
-        const onKey = (e) => {
-            if (e.key === "Escape") onClose();
-        };
-        document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
-    }, [onClose]);
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={onClose}>
-            <div className="w-full max-w-3xl aspect-video rounded-2xl overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
-                <iframe src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1`} title="Trailer" className="w-full h-full" allow="autoplay; fullscreen" allowFullScreen />
-            </div>
-        </div>
-    );
-}
-
-// ─── Not-in-library modal ─────────────────────────────────────────────────────
-// Opened from the "Not in library" button on titles reached via the person page.
-// Portal → body with max z-index so it sits above the sticky navbar.
-function NotInLibraryModal({ title, poster, isSeries, onClose, onOpenSettings }) {
-    const kind = isSeries ? "series" : "movie";
-
-    useEffect(() => {
-        const onKey = (e) => {
-            if (e.key === "Escape") onClose();
-        };
-        document.addEventListener("keydown", onKey);
-        const prev = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        return () => {
-            document.removeEventListener("keydown", onKey);
-            document.body.style.overflow = prev;
-        };
-    }, [onClose]);
-
-    return createPortal(
-        <div
-            className="fixed inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-            style={{ zIndex: 2147483647 }}
-            onClick={onClose}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="nil-title">
-            <div className="w-full max-w-md rounded-2xl bg-base-200 border border-white/10 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-start gap-4 p-5 sm:p-6">
-                    {poster ? (
-                        <img src={poster} alt="" className="w-16 sm:w-20 aspect-2/3 rounded-lg object-cover shrink-0 ring-1 ring-white/10" />
-                    ) : (
-                        <div className="w-16 sm:w-20 aspect-2/3 rounded-lg bg-base-300 flex items-center justify-center shrink-0">
-                            <Film size={22} className="text-base-content/30" />
-                        </div>
-                    )}
-                    <div className="min-w-0">
-                        <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-warning mb-1.5">
-                            <Info size={12} /> Not available
-                        </div>
-                        <h3 id="nil-title" className="text-base sm:text-lg font-bold text-base-content leading-snug wrap-break-word">
-                            {title}
-                        </h3>
-                        <p className="text-sm text-base-content/70 mt-2 leading-relaxed">
-                            This {kind} isn&apos;t in your FLUX library yet, so there&apos;s no file to play. You&apos;re seeing it for reference only — details come from TMDB.
-                        </p>
-                    </div>
-                </div>
-
-                <div className="px-5 sm:px-6 pb-5 sm:pb-6">
-                    <p className="text-xs font-semibold text-base-content/50 uppercase tracking-wider mb-2">How to get it here</p>
-                    <ol className="text-[13px] text-base-content/70 space-y-1.5 list-decimal pl-4 marker:text-base-content/35">
-                        <li>Put the {kind} file in a folder your server already scans, or add its folder under Settings → Library.</li>
-                        <li>Let FLUX rescan. It matches by file name, so keep the title and year in it.</li>
-                        <li>Come back — this page will switch to the Play button.</li>
-                    </ol>
-
-                    <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-5">
-                        <button onClick={onOpenSettings} className="btn btn-sm sm:btn-md btn-ghost rounded-[999px] border border-white/10 cursor-pointer">
-                            Library settings
-                        </button>
-                        <button onClick={onClose} className="btn btn-sm sm:btn-md btn-primary rounded-[999px] px-6 cursor-pointer">
-                            Got it
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>,
-        document.body,
     );
 }
 
@@ -761,6 +639,17 @@ async function fetchTmdbItem(fullId) {
 export default function MediaDetails() {
     const { id } = useParams();
     const navigate = useNavigate();
+    // Opened from a banner's "Remind me" button (?remind=1) → the reminder dialog opens by itself, once.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const wantsRemind = searchParams.get("remind") === "1";
+    const clearRemindParam = () =>
+        setSearchParams(
+            (p) => {
+                p.delete("remind");
+                return p;
+            },
+            { replace: true },
+        );
 
     const { movies, series, anime } = useApi();
 
@@ -864,6 +753,7 @@ export default function MediaDetails() {
     const upcomingIso = item?.notInLibrary ? m?.releaseDate || m?.firstAirDate || null : null;
     const releaseCountdown = useCountdown(upcomingIso);
     const isUpcoming = Boolean(releaseCountdown && !releaseCountdown.done);
+
     const seasons = isSeries ? item?.seasons : null;
 
     // ── Selected season logic ──────────────────────────────────────────────────
@@ -1031,7 +921,7 @@ export default function MediaDetails() {
             {/* ── Backdrop + Hero ──────────────────────────────────────────── */}
             <div className="relative">
                 {/* Backdrop */}
-                <div className="absolute inset-x-0 top-0 h-[42vh] min-h-[280px] max-h-[520px] sm:h-[48vh] sm:max-h-[560px] pointer-events-none" style={{ zIndex: 0 }}>
+                <div className="absolute inset-x-0 top-0 h-[70dvh] min-h-[80dvh] max-h-[90dvh] sm:h-[48vh] sm:max-h-140 pointer-events-none" style={{ zIndex: 0 }}>
                     {backdrop && !imgError ? (
                         <img src={backdrop} alt={title} className="w-full h-full object-cover object-top" onError={() => setImgError(true)} />
                     ) : (
@@ -1216,6 +1106,29 @@ export default function MediaDetails() {
                                     </button>
                                 )}
 
+                                {/* Remind Me + — upcoming (unreleased, not-in-library) titles only. Opens a confirm dialog. */}
+                                {item.notInLibrary && isUpcoming && (
+                                    <RemindMe mediaId={decodedId} title={m?.title || item.title} poster={m?.poster || null} releaseDate={upcomingIso} isSeries={isSeries} autoOpen={wantsRemind} onAutoOpen={clearRemindParam}>
+                                        {({ reminded, open }) => (
+                                            <button
+                                                type="button"
+                                                onClick={open}
+                                                aria-haspopup="dialog"
+                                                className={`btn btn-sm sm:btn-md btn-outline gap-2 rounded-[999px] shrink-0 cursor-pointer ${reminded ? "border-primary text-primary" : ""}`}>
+                                                {reminded ? (
+                                                    <>
+                                                        Reminder on <BellRing size={14} />
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Remind Me <Plus size={14} />
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
+                                    </RemindMe>
+                                )}
+
                                 <button
                                     ref={actionBtnRef}
                                     onClick={() => setShowActionMenu((v) => !v)}
@@ -1237,9 +1150,13 @@ export default function MediaDetails() {
                     </div>
                 </div>
             </div>
-
             {/* ── Page body ────────────────────────────────────────────────── */}
-            <div className="space-y-8 px-4 sm:px-8 lg:px-12 pb-20">
+            <div className="relative z-1 space-y-8 px-4 sm:px-8 lg:px-12 pb-20">
+                <Divider />
+                <div className="mt-6">
+                    <CastAndCrew metadata={item.notInLibrary ? m : undefined} />
+                </div>
+
                 {/* ── Seasons (card grid using MediaCard) ──────────────────── */}
                 {isSeries && seasonEntries.length > 0 && (
                     <section className="w-full">
@@ -1331,10 +1248,6 @@ export default function MediaDetails() {
                         <EpisodesAccordion season={activeSeason} seasonNum={selectedSeasonNum} onPlay={handlePlayEpisode} />
                     </section>
                 )}
-
-                {/* cast and crew */}
-
-                <CastAndCrew metadata={item.notInLibrary ? m : undefined} />
 
                 {/* ── Reviews ──────────────────────────────────────────────── */}
                 {reviews.length > 0 && (

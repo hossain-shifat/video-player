@@ -21,7 +21,7 @@ function isGoogleEnabled() {
  * Build the Google OAuth authorization URL.
  * Returns null if Google OAuth is not configured.
  */
-function getAuthUrl() {
+function getAuthUrl(state) {
     if (!isGoogleEnabled()) return null;
 
     const params = new URLSearchParams({
@@ -31,6 +31,7 @@ function getAuthUrl() {
         scope: "openid email profile",
         access_type: "offline",
         prompt: "select_account",
+        state: String(state || ""), // CSRF: callback must echo the value stored in the flux_oauth_state cookie
     });
 
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
@@ -38,7 +39,7 @@ function getAuthUrl() {
 
 /**
  * Exchange an authorization code for Google user info.
- * Returns { googleId, email, name, avatar } or throws.
+ * Returns { googleId, email, name, avatar, emailVerified } or throws.
  */
 async function exchangeCode(code) {
     if (!isGoogleEnabled()) {
@@ -82,6 +83,7 @@ async function exchangeCode(code) {
         email: profile.email,
         name: profile.name || profile.email,
         avatar: profile.picture || null,
+        emailVerified: profile.email_verified === true || profile.email_verified === "true" ? true : profile.email_verified === false ? false : undefined,
     };
 }
 

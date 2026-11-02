@@ -16,7 +16,31 @@
 
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const ENV_API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+// Opened over HTTPS (Tailscale / ngrok / reverse proxy)? Then a plain-http LAN API URL
+// is blocked as mixed content and isn't reachable from outside anyway, so call the API
+// on the SAME origin with relative URLs and let the proxy forward /api, /auth, /stream.
+// Opened over plain http (LAN) → behaves exactly as before.
+const PAGE_IS_HTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
+const BASE_URL = PAGE_IS_HTTPS && !ENV_API_URL.startsWith("https://") ? "" : ENV_API_URL;
+
+// ─── Stream token (issued by POST /stream/start/:id) ──────────────────────────
+// <video>, <track> and <img> requests cannot send an Authorization header, so URLs for the
+// protected /stream/* routes carry the short-lived token as ?st=. The server re-validates it
+// against the live account on every request.
+let _streamToken = null;
+export function setStreamToken(token) {
+    _streamToken = token || null;
+}
+export function getStreamToken() {
+    return _streamToken;
+}
+export function withStreamToken(url, token = _streamToken) {
+    if (!token || !url || /[?&]st=/.test(url)) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}st=${encodeURIComponent(token)}`;
+}
+export { BASE_URL as API_BASE_URL };
 
 // ─── Auth provider registration ───────────────────────────────────────────────
 let _getToken = null;
@@ -46,9 +70,31 @@ export function getAuthToken() {
 
 // ─── Axios instance ───────────────────────────────────────────────────────────
 
+// Random per-browser device secret (NOT an auth secret, NOT a fingerprint). The server hashes it and
+// uses it — together with an HttpOnly cookie — to recognise "this browser" so repeat logins reuse one
+// device record. Key deliberately has no "flux-" prefix so "Clear all local data" doesn't reset it.
+const DEVICE_KEY = "did.v1";
+function getDeviceSecret() {
+    try {
+        let v = localStorage.getItem(DEVICE_KEY);
+        if (!v || !/^[A-Za-z0-9_-]{32,64}$/.test(v)) {
+            const bytes = crypto.getRandomValues(new Uint8Array(32));
+            v = btoa(String.fromCharCode(...bytes))
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=+$/, "");
+            localStorage.setItem(DEVICE_KEY, v);
+        }
+        return v;
+    } catch {
+        return null;
+    }
+}
+
 export const axiosInstance = axios.create({
     baseURL: BASE_URL,
     timeout: 30_000,
+    withCredentials: true, // lets the browser keep/send the HttpOnly device cookie (CORS allows credentials)
     headers: {
         "Content-Type": "application/json",
     },
@@ -59,6 +105,8 @@ axiosInstance.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
+    const did = getDeviceSecret();
+    if (did) config.headers["X-Flux-Device"] = did;
     return config;
 });
 
@@ -72,6 +120,12 @@ axiosInstance.interceptors.response.use(
             const body = error.response.data;
             if (body?.error) {
                 error.message = body.error;
+            }
+            if (body?.code) error.apiCode = body.code; // e.g. EMAIL_NOT_VERIFIED, PENDING_APPROVAL, OTP_LOCKED, RATE_LIMITED
+            if (body?.retryAfterSec) error.retryAfterSec = body.retryAfterSec;
+            // The account state changed under us (verification lost / approval revoked): let AuthContext re-read it.
+            if (error.status === 403 && (body?.code === "EMAIL_NOT_VERIFIED" || body?.code === "PENDING_APPROVAL" || body?.code === "ACCESS_EXPIRED" || body?.code === "ACCOUNT_BLOCKED")) {
+                window.dispatchEvent(new CustomEvent("flux:account-state-changed", { detail: { code: body.code } }));
             }
         } else if (error.code === "ECONNABORTED") {
             error.status = 408;
@@ -139,7 +193,7 @@ export const api = {
     delete: (path, opts = {}) => request(path, { method: "delete" }, opts),
 
     streamUrl: (id) => `${BASE_URL}/stream/video/${id}`,
-    subtitleUrl: (encoded) => `${BASE_URL}/stream/subtitle/${encoded}`,
+    subtitleUrl: (encoded) => withStreamToken(`${BASE_URL}/stream/subtitle/${encoded}`),
     streamStartUrl: (id) => `${BASE_URL}/stream/start/${id}`,
 
     /**

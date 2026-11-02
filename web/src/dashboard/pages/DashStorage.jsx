@@ -4,26 +4,68 @@
 // Local libraries are untouched — still managed from the existing Libraries page.
 
 import { useState, useEffect, useCallback } from "react";
-import { Cloud, HardDrive, X, FolderOpen, ChevronRight, Trash2, Plug, Loader2, FolderPlus, AlertTriangle, CheckCircle, Info, Settings2, Inbox, Search } from "lucide-react";
+import { Cloud, HardDrive, FolderOpen, ChevronRight, Trash2, Plug, Loader2, FolderPlus, AlertTriangle, CheckCircle, Info, Settings2, Inbox, Search, Unlink, Layers, RefreshCw, Check, Folder } from "lucide-react";
 import { storageApi } from "../api/storageApi";
+import ConfirmModal, { ModalShell, ModalHeader, ModalContent, ModalSection, ModalRows, ModalKV, ModalCallout, ModalBullets, PANEL, ModalFooter, ModalBadge, ModalButton, MODAL_INPUT } from "../components/ConfirmModal";
 
 // ─── Inline modal (replaces native alert()/confirm()) ──────────────────────
-function useAppModal() {
-    const [modal, setModal] = useState(null); // { type: 'confirm' | 'notice' | 'prompt', message, tone, resolve, inputValue }
 
-    const confirm = useCallback((message) => {
-        return new Promise((resolve) => setModal({ type: "confirm", message, resolve }));
+// Copy for the three notice tones. `steps` can be overridden per call through ctx.steps.
+const NOTICE = {
+    error: {
+        icon: AlertTriangle,
+        tone: "error",
+        text: "text-error",
+        title: "Something went wrong",
+        badge: "Error",
+        rowsLabel: "What you were doing",
+        msgLabel: "What happened",
+        stepsLabel: "What you can do",
+        steps: ["Close this notice and try the action again.", "If it keeps failing, check the provider connection on this page."],
+    },
+    success: {
+        icon: CheckCircle,
+        tone: "success",
+        text: "text-success",
+        title: "Done",
+        badge: "Success",
+        rowsLabel: "What you did",
+        msgLabel: "Result",
+        stepsLabel: "What you can do next",
+        steps: ["Close this notice to carry on.", "Open the Libraries page to see the result."],
+    },
+    info: {
+        icon: Info,
+        tone: "info",
+        text: "text-info",
+        title: "Heads up",
+        badge: "Info",
+        rowsLabel: "Where this came from",
+        msgLabel: "Information",
+        stepsLabel: "What you can do",
+        steps: ["Read the information, then close this notice.", "Nothing is needed unless the message says so."],
+    },
+};
+
+function useAppModal() {
+    // { type: 'confirm' | 'notice' | 'prompt', message, tone, ctx, resolve, inputValue }
+    // ctx is optional context shown in the dialog: { action, provider, location, steps, subtitle, facts, timeline, note, confirmIcon }
+    const [modal, setModal] = useState(null);
+
+    // variant: 'warning' (default) | 'danger' — colours the dialog and its confirm button.
+    const confirm = useCallback((message, variant = "warning", ctx = {}) => {
+        return new Promise((resolve) => setModal({ type: "confirm", message, variant, ctx, resolve }));
     }, []);
 
     // tone: 'error' (default) | 'success' | 'info'
-    const notify = useCallback((message, tone = "error") => {
-        return new Promise((resolve) => setModal({ type: "notice", message, tone, resolve }));
+    const notify = useCallback((message, tone = "error", ctx = {}) => {
+        return new Promise((resolve) => setModal({ type: "notice", message, tone, ctx, resolve }));
     }, []);
 
     // Resolves to the entered string, or null if cancelled — text-input
     // replacement for native window.prompt().
-    const promptText = useCallback((message, defaultValue = "") => {
-        return new Promise((resolve) => setModal({ type: "prompt", message, resolve, inputValue: defaultValue }));
+    const promptText = useCallback((message, defaultValue = "", ctx = {}) => {
+        return new Promise((resolve) => setModal({ type: "prompt", message, ctx, resolve, inputValue: defaultValue }));
     }, []);
 
     function close(result) {
@@ -35,47 +77,116 @@ function useAppModal() {
         setModal((m) => (m ? { ...m, inputValue: value } : m));
     }
 
-    const ToneIcon = modal?.tone === "success" ? CheckCircle : modal?.tone === "info" ? Info : AlertTriangle;
-    const toneClass = modal?.tone === "success" ? "text-success" : modal?.tone === "info" ? "text-primary" : "text-error";
-
-    const modalElement = modal ? (
-        <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/50 p-4" onClick={() => close(modal.type === "prompt" ? null : false)}>
-            <div className="bg-base-200 rounded-md shadow-xl w-full max-w-sm border border-base-content/10" onClick={(e) => e.stopPropagation()}>
-                <div className="p-5 space-y-4">
-                    <div className="flex items-start gap-3">
-                        {modal.type === "notice" && <ToneIcon size={20} className={`${toneClass} shrink-0 mt-0.5`} />}
-                        <p className="text-sm text-base-content/100 leading-relaxed">{modal.message}</p>
-                    </div>
-                    {modal.type === "prompt" && (
+    let modalElement = null;
+    if (modal?.type === "confirm") {
+        const c = modal.ctx || {};
+        modalElement = (
+            <ConfirmModal
+                open
+                onClose={() => close(false)}
+                onConfirm={() => close(true)}
+                variant={modal.variant || "warning"}
+                title="Please confirm"
+                subtitle={c.subtitle}
+                factsLabel={c.factsLabel}
+                facts={c.facts}
+                message={modal.message}
+                messageIcon={c.messageIcon}
+                timeline={c.timeline}
+                note={c.note}
+                noteTone={c.noteTone}
+                confirmIcon={c.confirmIcon}
+                confirmText="Confirm"
+            />
+        );
+    } else if (modal?.type === "notice") {
+        const n = NOTICE[modal.tone] || NOTICE.error;
+        const c = modal.ctx || {};
+        const rows = [
+            ["Action", c.action],
+            ["Provider", c.provider],
+            ["Location", c.location],
+        ].filter(([, v]) => v);
+        const steps = (c.steps || n.steps).map((text) => ({ text }));
+        modalElement = (
+            <ModalShell onClose={() => close(false)} labelledBy="storage-app-modal-t">
+                <ModalHeader id="storage-app-modal-t" icon={n.icon} tone={n.text} title={n.title} subtitle="Notice" badges={<ModalBadge tone={n.tone}>{n.badge}</ModalBadge>} onClose={() => close(false)} />
+                <ModalContent>
+                    {rows.length > 0 && (
+                        <ModalSection label={n.rowsLabel}>
+                            <ModalRows>
+                                {rows.map(([k, v]) => (
+                                    <ModalKV key={k} label={k}>
+                                        {v}
+                                    </ModalKV>
+                                ))}
+                            </ModalRows>
+                        </ModalSection>
+                    )}
+                    <ModalSection label={n.msgLabel}>
+                        <ModalCallout tone={n.tone} icon={n.icon}>
+                            {modal.message}
+                        </ModalCallout>
+                    </ModalSection>
+                    <ModalSection label={n.stepsLabel} grow>
+                        <ModalBullets items={steps} fill />
+                    </ModalSection>
+                </ModalContent>
+                <ModalFooter note="Press Esc or OK to dismiss">
+                    <ModalButton data-autofocus onClick={() => close(true)}>
+                        OK
+                    </ModalButton>
+                </ModalFooter>
+            </ModalShell>
+        );
+    } else if (modal?.type === "prompt") {
+        const c = modal.ctx || {};
+        const name = modal.inputValue.trim();
+        modalElement = (
+            <ModalShell onClose={() => close(null)} labelledBy="storage-app-modal-t">
+                <ModalHeader id="storage-app-modal-t" icon={FolderPlus} tone="text-primary" title="New folder" subtitle="Created in the folder you have open" onClose={() => close(null)} />
+                <ModalContent>
+                    <ModalSection label="Where it will be created">
+                        <ModalRows>
+                            <ModalKV label="Provider" icon={Cloud} tone="text-info">
+                                {c.provider || "Cloud storage"}
+                            </ModalKV>
+                            <ModalKV label="Inside">{c.location || "Root"}</ModalKV>
+                        </ModalRows>
+                    </ModalSection>
+                    <ModalSection label={modal.message}>
                         <input
-                            autoFocus
+                            id="storage-prompt-input"
+                            data-autofocus
                             type="text"
+                            placeholder="Folder name"
                             value={modal.inputValue}
                             onChange={(e) => updateInputValue(e.target.value)}
                             onKeyDown={(e) => {
-                                if (e.key === "Enter" && modal.inputValue.trim()) close(modal.inputValue.trim());
-                                if (e.key === "Escape") close(null);
+                                if (e.key === "Enter" && name) close(name);
                             }}
-                            className="input input-sm input-bordered bg-base-300 w-full rounded-md"
+                            className={`${MODAL_INPUT} !h-11 !border-primary/60`}
                         />
-                    )}
-                    <div className="flex justify-end gap-2">
-                        {(modal.type === "confirm" || modal.type === "prompt") && (
-                            <button onClick={() => close(modal.type === "prompt" ? null : false)} className="btn btn-sm btn-ghost rounded-md border-none outline-none focus:outline-none">
-                                Cancel
-                            </button>
-                        )}
-                        <button
-                            onClick={() => close(modal.type === "prompt" ? modal.inputValue.trim() || null : true)}
-                            disabled={modal.type === "prompt" && !modal.inputValue.trim()}
-                            className={`btn btn-sm rounded-md border-none outline-none focus:outline-none disabled:opacity-40 ${modal.type === "notice" ? "btn-neutral" : "btn-primary"}`}>
-                            {modal.type === "notice" ? "OK" : "Confirm"}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    ) : null;
+                    </ModalSection>
+                    <ModalSection label="How it will look in the list">
+                        <div className={`${PANEL} flex h-12 items-center gap-3 px-4`}>
+                            <Folder size={16} className="shrink-0 text-info" />
+                            <span className={`min-w-0 truncate text-[13px] ${name ? "text-base-content" : "text-base-content/40"}`}>{name || "Folder name"}</span>
+                        </div>
+                    </ModalSection>
+                    <ModalCallout tone="info" compact className="mt-auto">
+                        Press Enter to create. Create becomes available once a name is typed.
+                    </ModalCallout>
+                </ModalContent>
+                <ModalFooter note={name ? `Creating “${name}” in ${c.location || "Root"}` : "Type a name to continue"}>
+                    <ModalButton onClick={() => close(null)}>Cancel</ModalButton>
+                    <ModalButton variant="primary" className="gap-1.5" onClick={() => close(name || null)} disabled={!name}>
+                        <FolderPlus size={14} /> Create folder
+                    </ModalButton>
+                </ModalFooter>
+            </ModalShell>
+        );
+    }
 
     return { modalElement, confirm, notify, promptText };
 }
@@ -142,18 +253,20 @@ function groupBySection(items) {
 // grouped root-level Google Drive sections below, so both render identically.
 function FolderRow({ item, onOpen, onDelete }) {
     return (
-        <li className="flex items-center group">
-            <button className="flex-1 flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-base-content/5 text-sm min-w-0 transition-colors" onClick={() => onOpen(item)}>
-                <FolderOpen size={14} className="text-primary/85 shrink-0" />
-                <span className="truncate text-base-content/92">{item.name}</span>
-                {item.shared && <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-semibold">Shared</span>}
-                {item.writable === false && <span className="shrink-0 px-1.5 py-0.5 rounded bg-base-content/8 text-base-content/60 text-[10px] font-semibold">Read-only</span>}
+        <li className="group flex items-center">
+            <button className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 px-4 py-3 text-left text-[13px] transition-colors hover:bg-base-content/5" onClick={() => onOpen(item)}>
+                <Folder size={16} className="shrink-0 text-info" />
+                <span className="truncate text-base-content">{item.name}</span>
+                {item.shared && <ModalBadge tone="primary">Shared</ModalBadge>}
+                {item.writable === false && <ModalBadge>Read-only</ModalBadge>}
+                <ChevronRight size={14} className="ml-auto shrink-0 text-base-content/35" />
             </button>
             <button
                 onClick={() => onDelete(item)}
                 title="Delete folder"
-                className="w-8 h-8 shrink-0 mr-1 rounded-md flex items-center justify-center text-base-content/54 border-none outline-none hover:bg-error/15 hover:text-error transition-colors opacity-0 group-hover:opacity-100">
-                <Trash2 size={13} />
+                aria-label={`Delete folder ${item.name}`}
+                className="mr-3 grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-base-content/50 transition-colors hover:bg-error/10 hover:text-error">
+                <Trash2 size={14} />
             </button>
         </li>
     );
@@ -184,6 +297,11 @@ export default function DashStorage() {
     const [browseItems, setBrowseItems] = useState([]);
     const [browsing, setBrowsing] = useState(false);
     const [importLabel, setImportLabel] = useState("");
+
+    // Context shown inside notice / confirm / prompt dialogs.
+    const providerName = (type) => (PROVIDER_META[type] || {}).name || type || "Storage";
+    const hereText = (crumbs = breadcrumbs) => (crumbs.length ? crumbs.map((b) => b.name).join(" › ") : "Root");
+    const hereCtx = (action, extra = {}) => ({ action, provider: providerName(browseProvider), location: hereText(), ...extra });
 
     // GoFile free-tier fallback — /contents/{id} (listFolders/browse) is
     // Premium-gated on GoFile's side ("error-notPremium"). Free accounts can
@@ -221,7 +339,7 @@ export default function DashStorage() {
             setGofileToken("");
             await loadAll();
         } catch (err) {
-            await notify(`GoFile connect failed: ${err.message || err}`);
+            await notify(`GoFile connect failed: ${err.message || err}`, "error", { action: "Connect GoFile", provider: "GoFile", location: "Storage page", steps: ["Check the API token and paste it again.", "Copy the token from your GoFile profile page."] });
         }
         setConnecting(null);
     }
@@ -232,13 +350,27 @@ export default function DashStorage() {
             const { authUrl } = await storageApi.getGoogleDriveAuthUrl();
             window.location.href = authUrl; // hand off to Google's consent screen
         } catch (err) {
-            await notify(`Google Drive isn't configured yet: ${err.message || err}`);
+            await notify(`Google Drive isn't configured yet: ${err.message || err}`, "error", { action: "Connect Google Drive", provider: "Google Drive", location: "Storage page", steps: ["Add the Google Drive client id, secret and redirect URI to server/.env.", "Restart the server, then press Connect again."] });
             setConnecting(null);
         }
     }
 
     async function disconnect(type) {
-        const ok = await confirmModal(`Disconnect ${type}? Imported libraries from it will stop working until reconnected.`);
+        const imported = cloudLibraries.filter((l) => l.provider === type).length;
+        const ok = await confirmModal(`Disconnect ${type}? Imported libraries from it will stop working until reconnected.`, "warning", {
+            subtitle: "Disconnect a provider",
+            factsLabel: "You are about to disconnect",
+            messageIcon: Unlink,
+            facts: [
+                { label: "Provider", icon: Cloud, tone: "text-info", value: type },
+                { label: "Status", value: "Connected", tone: "text-success" },
+                { label: "Libraries", value: `${imported} imported from it` },
+            ],
+            timeline: [
+                { icon: Layers, tone: "text-warning", title: "Libraries stop working", text: "Libraries imported from this provider are unavailable." },
+                { icon: RefreshCw, tone: "text-success", title: "Reconnect any time", text: "They work again once you reconnect." },
+            ],
+        });
         if (!ok) return;
         await storageApi.disconnectProvider(type);
         await loadAll();
@@ -253,7 +385,7 @@ export default function DashStorage() {
             const { items } = await storageApi.browse(type);
             setBrowseItems(items);
         } catch (err) {
-            await notify(`Browse failed: ${err.message || err}`);
+            await notify(`Browse failed: ${err.message || err}`, "error", { action: "Browse folder", provider: providerName(type), location: "Root" });
         }
         setBrowsing(false);
     }
@@ -266,7 +398,7 @@ export default function DashStorage() {
             setBrowseItems(items);
             setImportLabel(item.name);
         } catch (err) {
-            await notify(`Browse failed: ${err.message || err}`);
+            await notify(`Browse failed: ${err.message || err}`, "error", hereCtx("Browse folder", { location: hereText([...breadcrumbs, item]) }));
         }
         setBrowsing(false);
     }
@@ -287,7 +419,7 @@ export default function DashStorage() {
                 setImportLabel(target.name);
             }
         } catch (err) {
-            await notify(`Browse failed: ${err.message || err}`);
+            await notify(`Browse failed: ${err.message || err}`, "error", hereCtx("Browse folder"));
         }
         setBrowsing(false);
     }
@@ -303,7 +435,7 @@ export default function DashStorage() {
             const { items } = await storageApi.browse(browseProvider, ref || undefined);
             setBrowseItems(items);
         } catch (err) {
-            await notify(`Browse failed: ${err.message || err}`);
+            await notify(`Browse failed: ${err.message || err}`, "error", hereCtx("Refresh folder"));
         }
         setBrowsing(false);
     }
@@ -311,34 +443,49 @@ export default function DashStorage() {
     async function createFolderHere() {
         const parentRef = currentBrowseRef();
         if (!parentRef) {
-            await notify("Open a folder first — new folders need somewhere to go, they can't be created at this top level.");
+            await notify("Open a folder first — new folders need somewhere to go, they can't be created at this top level.", "error", hereCtx("Create folder", { steps: ["Close this notice and open a folder from the list.", "Choose New folder again."] }));
             return;
         }
-        const name = await promptText("New folder name:");
+        const name = await promptText("New folder name:", "", { provider: providerName(browseProvider), location: hereText() });
         if (!name) return;
         try {
             await storageApi.createCloudFolder(browseProvider, parentRef, name);
             await refreshBrowse();
         } catch (err) {
-            await notify(`Create folder failed: ${err.message || err}`);
+            await notify(`Create folder failed: ${err.message || err}`, "error", hereCtx("Create folder"));
         }
     }
 
     async function deleteBrowseFolder(item) {
-        const ok = await confirmModal(`Delete folder "${item.name}"? This deletes everything inside it too — permanently.`);
+        const ok = await confirmModal(`Delete folder "${item.name}"? This deletes everything inside it too — permanently.`, "danger", {
+            subtitle: "Delete a folder",
+            factsLabel: "You are about to delete",
+            confirmIcon: Trash2,
+            facts: [
+                { label: "Folder", icon: Folder, tone: "text-info", value: item.name },
+                { label: "Provider", value: providerName(browseProvider) },
+                { label: "Location", value: hereText() },
+            ],
+            timeline: [
+                { icon: FolderOpen, tone: "text-error", title: "Contents go too", text: `Everything inside “${item.name}” is deleted with it.` },
+                { icon: Trash2, tone: "text-error", title: "No way back", text: "The deletion is permanent." },
+            ],
+            note: "This action cannot be undone.",
+            noteTone: "error",
+        });
         if (!ok) return;
         try {
             await storageApi.deleteCloudFile(browseProvider, item.ref);
             await refreshBrowse();
         } catch (err) {
-            await notify(`Delete failed: ${err.message || err}`);
+            await notify(`Delete failed: ${err.message || err}`, "error", hereCtx("Delete folder"));
         }
     }
 
     async function importCurrentFolder() {
         const current = breadcrumbs[breadcrumbs.length - 1];
         if (!current) {
-            await notify("Open a folder first — the root itself can't be imported.");
+            await notify("Open a folder first — the root itself can't be imported.", "error", hereCtx("Import folder", { steps: ["Close this notice and open the folder you want.", "Press Import this folder again."] }));
             return;
         }
         try {
@@ -346,7 +493,7 @@ export default function DashStorage() {
             setBrowseProvider(null);
             await loadAll();
         } catch (err) {
-            await notify(`Import failed: ${err.message || err}`);
+            await notify(`Import failed: ${err.message || err}`, "error", hereCtx("Import folder"));
         }
     }
 
@@ -360,13 +507,29 @@ export default function DashStorage() {
             setManualLabel("");
             await loadAll();
         } catch (err) {
-            await notify(`Import failed: ${err.message || err}`);
+            await notify(`Import failed: ${err.message || err}`, "error", { action: "Import folder by ID", provider: providerName(provider), location: manualRef.trim() });
         }
         setManualImporting(false);
     }
 
     async function removeCloudLibrary(id) {
-        const ok = await confirmModal("Remove this cloud library? Files stay on the provider, only the Library link is removed.");
+        const lib = cloudLibraries.find((l) => l.id === id);
+        const ok = await confirmModal("Remove this cloud library? Files stay on the provider, only the Library link is removed.", "warning", {
+            subtitle: "Remove a cloud library",
+            factsLabel: "You are about to remove",
+            messageIcon: Cloud,
+            facts: [
+                { label: "Library", value: lib?.label || "Cloud library" },
+                { label: "Provider", icon: Cloud, tone: "text-info", value: providerName(lib?.provider) },
+                { label: "Type", value: "Cloud library" },
+            ],
+            timeline: [
+                { icon: Layers, tone: "text-warning", title: "Link removed", text: "The library link is removed from FLUX." },
+                { icon: Check, tone: "text-success", title: "Files stay put", text: `Files stay on ${providerName(lib?.provider)}.` },
+            ],
+            note: "Nothing on the provider is deleted.",
+            noteTone: "success",
+        });
         if (!ok) return;
         await storageApi.removeLibrary(id);
         await loadAll();
@@ -487,75 +650,67 @@ export default function DashStorage() {
 
             {/* Browse/import modal */}
             {browseProvider && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setBrowseProvider(null)}>
-                    <div className="card bg-base-200 shadow-2xl border border-base-content/10 w-full max-w-lg max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-                        <div className="card-body py-4 gap-3 overflow-hidden flex flex-col">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2.5">
-                                    <div className={`w-8 h-8 rounded-md flex items-center justify-center ${(PROVIDER_META[browseProvider] || PROVIDER_META.local).tint}`}>
-                                        <ProviderIcon type={browseProvider} size={15} />
-                                    </div>
-                                    <div>
-                                        <h3 className="font-semibold text-base-content/96 text-sm leading-tight">Browse {(PROVIDER_META[browseProvider] || {}).name || browseProvider}</h3>
-                                        <p className="text-[11px] text-base-content/66">Pick a folder to import as a library</p>
-                                    </div>
-                                </div>
-                                <button className="btn btn-ghost btn-xs btn-square rounded-md" onClick={() => setBrowseProvider(null)}>
-                                    <X size={14} />
-                                </button>
-                            </div>
-
-                            {/* Breadcrumbs */}
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <div className="flex items-center gap-1 text-xs text-base-content/78 flex-wrap">
-                                    <button className="px-1.5 py-0.5 rounded hover:text-primary hover:bg-primary/10 transition-colors" onClick={() => jumpTo(-1)}>
-                                        Root
-                                    </button>
-                                    {breadcrumbs.map((b, i) => (
-                                        <span key={b.ref} className="flex items-center gap-1">
-                                            <ChevronRight size={11} className="text-base-content/50" />
-                                            <button className="px-1.5 py-0.5 rounded hover:text-primary hover:bg-primary/10 transition-colors" onClick={() => jumpTo(i)}>
-                                                {b.name}
-                                            </button>
-                                        </span>
-                                    ))}
-                                </div>
+                <ModalShell onClose={() => setBrowseProvider(null)} labelledBy="storage-browse-t">
+                    <ModalHeader
+                        id="storage-browse-t"
+                        icon={browseProvider === "local" ? HardDrive : Cloud}
+                        tone={browseProvider === "gofile" ? "text-accent" : "text-info"}
+                        title={`Browse ${providerName(browseProvider)}`}
+                        subtitle="Pick a folder to import as a library"
+                        onClose={() => setBrowseProvider(null)}
+                    />
+                    <ModalContent>
+                        {/* Breadcrumbs + new folder */}
+                        <div className="flex shrink-0 items-stretch gap-3">
+                            <nav aria-label="Folder path" className={`${PANEL} flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-1 px-2 text-[13px]`}>
                                 <button
-                                    onClick={createFolderHere}
-                                    title={breadcrumbs.length === 0 ? "Open a folder first" : "New folder"}
-                                    className="btn btn-xs btn-ghost gap-1 rounded-md text-base-content/70 hover:text-primary">
-                                    <FolderPlus size={12} /> New Folder
+                                    className={`cursor-pointer rounded-md px-2.5 py-1.5 transition-colors ${breadcrumbs.length === 0 ? "bg-base-200 text-base-content" : "text-base-content/65 hover:bg-base-content/10 hover:text-base-content"}`}
+                                    onClick={() => jumpTo(-1)}>
+                                    Root
                                 </button>
-                            </div>
+                                {breadcrumbs.map((b, i) => (
+                                    <span key={b.ref} className="flex items-center gap-1">
+                                        <ChevronRight size={12} className="text-base-content/40" />
+                                        <button
+                                            className={`cursor-pointer rounded-md px-2.5 py-1.5 transition-colors ${i === breadcrumbs.length - 1 ? "bg-base-200 text-base-content" : "text-base-content/65 hover:bg-base-content/10 hover:text-base-content"}`}
+                                            onClick={() => jumpTo(i)}>
+                                            {b.name}
+                                        </button>
+                                    </span>
+                                ))}
+                            </nav>
+                            <ModalButton className="h-auto min-h-11 gap-2 px-4" onClick={createFolderHere} title={breadcrumbs.length === 0 ? "Open a folder first" : "New folder"}>
+                                <FolderPlus size={14} /> {breadcrumbs.length === 0 ? "Open a folder first" : "New folder"}
+                            </ModalButton>
+                        </div>
 
-                            <div className="flex-1 overflow-y-auto border border-base-content/10 rounded-md bg-base-300/30">
+                        <ModalSection label="Folders" hint={browsing ? "loading" : `${browseItems.length} here`} grow>
+                            <div className={`${PANEL} min-h-0 flex-1 overflow-y-auto`}>
                                 {browsing ? (
                                     <div className="space-y-1 p-2">
-                                        {[0, 1, 2].map((i) => (
-                                            <div key={i} className="h-9 rounded-md bg-base-content/5 animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
+                                        {[0, 1, 2, 3].map((i) => (
+                                            <div key={i} className="h-11 animate-pulse rounded-md bg-base-content/5" style={{ animationDelay: `${i * 100}ms` }} />
                                         ))}
                                     </div>
                                 ) : browseItems.length === 0 ? (
-                                    <EmptyState icon={Inbox} title="No subfolders here" />
+                                    <EmptyState icon={Inbox} title="No subfolders here" hint="Use New folder to make one, or import this folder as it is." />
                                 ) : browseProvider === "gdrive" && breadcrumbs.length === 0 ? (
                                     // Root of a Google Drive browse — group into My Drive / Shared with
-                                    // me / Shared drives per GDRIVE_SECTIONS. Any deeper level (inside
-                                    // My Drive, inside a shared folder, inside a Shared Drive) is a
-                                    // normal single folder listing and falls through to the flat branch
-                                    // below, same as before this change.
+                                    // me / Shared drives per GDRIVE_SECTIONS. Any deeper level is a
+                                    // normal single folder listing and falls through to the flat branch.
                                     (() => {
                                         const groups = groupBySection(browseItems);
                                         return (
-                                            <div className="divide-y divide-base-content/5">
+                                            <div className="divide-y divide-base-content/10">
                                                 {GDRIVE_SECTIONS.map(({ key, label }) => (
                                                     <div key={key}>
-                                                        <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide text-base-content/50">{label}</p>
+                                                        <p className="bg-base-content/5 px-4 py-2 text-xs text-base-content/65">{label}</p>
                                                         {groups[key].length === 0 ? (
-                                                            <p className="px-3 pb-2.5 text-xs text-base-content/50">
+                                                            <p className="px-4 py-3.5 text-[13px] text-base-content/50">
                                                                 {key === "shared_drive" ? "No Shared Drives available." : key === "shared_with_me" ? "No folders shared with you." : "Empty."}
                                                             </p>
                                                         ) : (
-                                                            <ul className="divide-y divide-base-content/5">
+                                                            <ul className="divide-y divide-base-content/10">
                                                                 {groups[key].map((item) => (
                                                                     <FolderRow key={item.ref} item={item} onOpen={openFolder} onDelete={deleteBrowseFolder} />
                                                                 ))}
@@ -567,35 +722,39 @@ export default function DashStorage() {
                                         );
                                     })()
                                 ) : (
-                                    <ul className="divide-y divide-base-content/5">
+                                    <ul className="divide-y divide-base-content/10">
                                         {browseItems.map((item) => (
                                             <FolderRow key={item.ref} item={item} onOpen={openFolder} onDelete={deleteBrowseFolder} />
                                         ))}
                                     </ul>
                                 )}
                             </div>
+                        </ModalSection>
 
-                            {breadcrumbs.length > 0 && breadcrumbs[breadcrumbs.length - 1]?.writable === false && (
-                                <p className="text-[11px] text-warning flex items-center gap-1.5">
-                                    <AlertTriangle size={12} className="shrink-0" /> Read-only — you can import this folder, but FLUX won't be able to upload into it.
-                                </p>
-                            )}
+                        {breadcrumbs.length > 0 && breadcrumbs[breadcrumbs.length - 1]?.writable === false && (
+                            <ModalCallout tone="warning" icon={AlertTriangle} compact>
+                                Read-only — you can import this folder, but FLUX won't be able to upload into it.
+                            </ModalCallout>
+                        )}
 
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    placeholder="Library label"
-                                    className="input input-sm input-bordered bg-base-300 rounded-md flex-1 focus:outline-none"
-                                    value={importLabel}
-                                    onChange={(e) => setImportLabel(e.target.value)}
-                                />
-                                <button className="btn btn-sm btn-primary gap-1.5 rounded-md" disabled={breadcrumbs.length === 0} onClick={importCurrentFolder}>
-                                    <FolderPlus size={13} /> Import this folder
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                        <ModalSection label="Library label">
+                            <input
+                                id="storage-import-label"
+                                type="text"
+                                placeholder="Library label"
+                                className={`${MODAL_INPUT} !h-11 ${importLabel ? "!border-primary/60" : ""}`}
+                                value={importLabel}
+                                onChange={(e) => setImportLabel(e.target.value)}
+                            />
+                        </ModalSection>
+                    </ModalContent>
+                    <ModalFooter note={breadcrumbs.length > 0 ? `Importing “${breadcrumbs[breadcrumbs.length - 1].name}”` : "Open a folder to enable import"}>
+                        <ModalButton onClick={() => setBrowseProvider(null)}>Cancel</ModalButton>
+                        <ModalButton variant="primary" className="gap-1.5" disabled={breadcrumbs.length === 0} onClick={importCurrentFolder}>
+                            <FolderPlus size={14} /> Import this folder
+                        </ModalButton>
+                    </ModalFooter>
+                </ModalShell>
             )}
 
             {/* Imported cloud libraries */}

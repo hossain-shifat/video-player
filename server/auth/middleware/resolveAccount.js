@@ -5,12 +5,14 @@
  * Shared by /api/history and /api/watchtime.
  *
  *  - resolveAccount   : JWT (Bearer header, or ?token= for sendBeacon) → req.historyUserId (+ req.historyEmail)
- *                       Signature check only — no DB hit per request; email is looked up once per user and cached.
+ *                       Signature + session-validity check (≤10 s in-process cache, cleared the instant a session is
+ *                       revoked) so revoked sessions / deleted accounts cannot keep writing history or watch time.
+ *                       Email is looked up once per user and cached.
  *  - beaconBodyParser : navigator.sendBeacon sends text/plain (CORS-exempt) — express.json() skips it,
  *                       so read the raw body and JSON.parse it.
  */
 
-const { verifyAccessToken } = require("../services/tokenService");
+const { verifyAccessToken, isSessionValid } = require("../services/tokenService");
 const prisma = require("../prismaClient");
 
 // userId → email (label only; never used as a key)
@@ -40,6 +42,11 @@ async function resolveAccount(req, res, next) {
             console.warn(`[Account] 401 token missing sub — ${req.method} ${req.originalUrl.split("?")[0]}`);
             return res.status(401).json({ error: "Invalid token" });
         }
+        if (!payload.sid || !(await isSessionValid(payload.sid, String(payload.sub)))) {
+            console.warn(`[Account] 401 session revoked — ${req.method} ${req.originalUrl.split("?")[0]}`);
+            return res.status(401).json({ error: "Session revoked", code: "SESSION_REVOKED" });
+        }
+        req.sessionId = payload.sid;
         req.historyUserId = String(payload.sub);
         req.historyEmail = await getEmail(req.historyUserId);
         return next();

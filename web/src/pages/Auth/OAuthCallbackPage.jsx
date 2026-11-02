@@ -1,62 +1,54 @@
 // web/src/Pages/Auth/OAuthCallbackPage.jsx
-// Handles redirect from Google OAuth callback.
-// Server redirects to /auth/callback?accessToken=...&refreshToken=...&sessionId=...
+// Landing page of the Google sign-in redirect: /auth/callback?code=<single-use code>
+// The server no longer puts tokens in the URL — this page trades the one-time code for the session.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "../../auth/AuthContext";
-import { authApi } from "../../api/auth";
+import { postAuthPath } from "../../auth/accountRouting";
+import { AuthPanel } from "../../Components/auth/AuthUI";
 
 export default function OAuthCallbackPage() {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
-    const { loginWithTokens } = useAuth();
+    const { loginWithOAuthCode } = useAuth();
+    const ran = useRef(false); // the code is single-use: StrictMode's double effect must not spend it twice
 
     useEffect(() => {
-        const accessToken = searchParams.get("accessToken");
-        const refreshToken = searchParams.get("refreshToken");
-        const sessionId = searchParams.get("sessionId");
+        if (ran.current) return;
+        ran.current = true;
+
+        const code = searchParams.get("code");
         const error = searchParams.get("error");
+        // Strip the one-time code from the address bar / history right away.
+        window.history.replaceState(null, "", window.location.pathname);
 
-        if (error) {
-            navigate("/", { replace: true });
+        if (error || !code) {
+            navigate(`/login?error=${encodeURIComponent(error || "oauth_failed")}`, { replace: true });
             return;
         }
 
-        if (!accessToken || !refreshToken || !sessionId) {
-            navigate("/", { replace: true });
-            return;
-        }
-
-        // Decode JWT payload to get user info
-        try {
-            const payload = JSON.parse(atob(accessToken.split(".")[1]));
-            const user = {
-                id: payload.sub,
-                email: payload.email,
-                name: payload.name,
-                role: payload.role,
-                status: payload.status,
-                permissions: payload.permissions || {},
-            };
-
-            loginWithTokens({ accessToken, refreshToken, sessionId, user });
-
-            // Return to previous route if saved, otherwise go home
-            const returnTo = sessionStorage.getItem("flux_return_to") || "/";
-            sessionStorage.removeItem("flux_return_to");
-            navigate(returnTo, { replace: true });
-        } catch {
-            navigate("/", { replace: true });
-        }
+        loginWithOAuthCode(code)
+            .then((user) => {
+                let returnTo = null;
+                try {
+                    returnTo = sessionStorage.getItem("flux_return_to");
+                    sessionStorage.removeItem("flux_return_to");
+                } catch {
+                    /* ignore */
+                }
+                navigate(postAuthPath(user, returnTo), { replace: true });
+            })
+            .catch(() => navigate("/login?error=oauth_failed", { replace: true }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return (
-        <div className="min-h-screen bg-base-100 flex items-center justify-center">
-            <div className="text-center">
-                <span className="loading loading-spinner loading-lg text-primary"></span>
-                <p className="text-base-content/50 text-sm mt-4">Completing sign in…</p>
+        <AuthPanel>
+            <div className="flex flex-col items-center py-6 text-center" role="status" aria-live="polite">
+                <span className="loading loading-spinner loading-lg text-primary" />
+                <p className="mt-4 text-sm text-base-content/60">Completing sign in…</p>
             </div>
-        </div>
+        </AuthPanel>
     );
 }

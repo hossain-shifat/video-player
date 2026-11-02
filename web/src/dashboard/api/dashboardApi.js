@@ -29,5 +29,4 @@ export const dashApi = {
     updateUser: (id, data) => api.patch(`${ADMIN}/users/${id}`, data),
     deleteUser: (id) => api.delete(`${ADMIN}/users/${id}`),
     userSessions: (id) => api.get(`${ADMIN}/users/${id}/sessions`),
-    revokeSession: (id) => api.delete(`${ADMIN}/sessions/${id}`),
 };

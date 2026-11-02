@@ -32,23 +32,80 @@ model User {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  // Activity (set on a real login, never on token refresh)
+  lastLoginAt    DateTime?
+
+  // Recoverable deletion lifecycle (30-day window). status becomes "deleted" while pending.
+  deletedAt            DateTime?
+  purgeAt              DateTime?   // permanent-cleanup deadline = deletedAt + 30 days
+  deletedById          String?     // admin that initiated deletion (plain id, no FK: survives purge)
+  statusBeforeDeletion String?
+  purgeError           String?     // last failed purge attempt, cleared on success
+
   sessions       Session[]
+  devices        Device[]
   otps           OTP[]
   streamTokens   StreamToken[]
 
+  notifications          Notification[]
+  pushDevices            PushDevice[]
+  notificationPreference NotificationPreference?
+
+  @@index([status, deletedAt, purgeAt])
   @@map("users")
 }
 
-// ─── Session (device tracking) ────────────────────────────────────────────────
+// ─── Device (a recognized browser/client identity, owned by one account) ──────
+// Identity = random secret kept in an HttpOnly cookie (or X-Flux-Device header for
+// non-cookie clients). Only its SHA-256 is stored. NOT a fingerprint, NOT the IP.
+model Device {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  secretHash     String   // sha256(hex) of the device secret
+  customName     String?  // user-defined name; null => derived "<browser> on <os>"
+
+  browser        String   @default("")
+  browserVersion String   @default("")
+  os             String   @default("")
+  osVersion      String   @default("")
+  deviceType     String   @default("desktop") // desktop | mobile | tablet
+
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sessions       Session[]
+
+  @@unique([userId, secretHash])
+  @@index([userId, lastSeenAt])
+  @@map("devices")
+}
+
+// ─── Session (one authenticated login; independently revocable) ───────────────
+// refreshTokenHash: "sha256:<hex>" for new sessions; legacy rows hold an argon2 hash
+// (verified once, then upgraded to sha256 on next refresh). Refresh tokens are NOT
+// rotated (deliberate: avoids multi-tab / StrictMode refresh races). Access JWTs carry
+// `sid` and are checked against this row on every request, so revoking = instant.
 model Session {
   id               String   @id @default(cuid())
   userId           String
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  refreshTokenHash String   // argon2 hash of refresh token
+  deviceId         String?  // null only for legacy sessions created before device tracking
+  device           Device?  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash String
+  authMethod       String   @default("password") // password | google | recovery
+  expiresAt        DateTime? // sliding (extended on refresh); null only for legacy rows until first refresh
+  revokedReason    String?  // logout | revoked_by_owner | superseded | account_deleted | expired
+
+  // Legacy per-session descriptive columns (kept for backward compatibility; new
+  // code writes device info to Device and leaves these as defaults). `ip` is no longer written.
   deviceName       String   @default("Unknown Device")
   deviceFingerprint String  @default("")
-  
   deviceType       String   @default("desktop")
   deviceModel      String   @default("")
   deviceVendor     String   @default("")
@@ -57,7 +114,6 @@ model Session {
   os               String   @default("")
   osVersion        String   @default("")
   userAgent        String   @default("")
-  
   ip               String   @default("")
   isActive         Boolean  @default(true)
 
@@ -66,7 +122,8 @@ model Session {
   lastSeenAt       DateTime @default(now())
   revokedAt        DateTime?
 
-  @@unique([userId, deviceFingerprint])
+  @@index([userId, isActive])
+  @@index([deviceId, isActive])
   @@map("sessions")
 }
 
@@ -77,6 +134,8 @@ model OTP {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   codeHash   String   // argon2 hash of 6-digit code
+  purpose    String   @default("verify") // verify | recover
+  attempts   Int      @default(0)        // wrong-guess counter (locks the code at 5)
   expiresAt  DateTime
   used       Boolean  @default(false)
 
@@ -95,9 +154,89 @@ model StreamToken {
 
   mediaId   String   // the media item ID being streamed
   token     String   @unique  // random secure token
+  sessionId String?  // login session that requested it; revoked session => token dies
   expiresAt DateTime
 
   createdAt DateTime @default(now())
 
+  @@index([sessionId])
   @@map("stream_tokens")
+}
+
+// ─── Notification (in-app history; always stored, push is best-effort) ─────────
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type       String    // "new_media" | "upload" | "storage" | "security" | "account" | "signup_pending" | "announcement" | "announcement_admin" | "system"
+  title      String
+  body       String    @default("")
+  url        String?   // announcements only: validated in-app path (other types get their destination computed server-side)
+  dedupeKey  String?   // optional: suppress repeats of the same alert within a window
+  metaJson   String?   // structured identifiers for the details modal (JSON; never secrets / file paths)
+
+  readAt     DateTime? // null = unread
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([userId, createdAt])
+  @@index([userId, dedupeKey, createdAt])
+  @@map("notifications")
+}
+
+// ─── Push device (one row per browser / installed-PWA FCM registration) ────────
+model PushDevice {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token        String   @unique  // FCM registration token
+  platform     String   @default("web")
+  deviceName   String   @default("")
+  userAgent    String   @default("")
+  sessionId    String?  // login session that registered it; revoked session => no push
+  isActive     Boolean  @default(true)
+  failureCount Int      @default(0)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastSeenAt   DateTime @default(now())
+
+  @@index([userId, isActive])
+  @@map("push_devices")
+}
+
+// ─── Per-user push preferences (history is stored regardless of these) ──────────
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  pushEnabled   Boolean  @default(true)   // master switch
+  newMedia      Boolean  @default(true)
+  uploads       Boolean  @default(true)
+  storage       Boolean  @default(true)
+  security      Boolean  @default(true)
+  account       Boolean  @default(true)
+  announcements Boolean  @default(true)
+
+  updatedAt     DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
+
+// ─── Audit event (admin/account lifecycle; no secrets, no FK so it outlives a purge) ──
+model AuditEvent {
+  id            String   @id @default(cuid())
+  action        String   // account_deleted | account_recovered | account_purged | account_purge_failed | role_changed | status_changed ...
+  actorId       String?  // user id of the actor (plain string)
+  targetUserId  String?
+  targetLabel   String   @default("") // masked email, e.g. "s***t@gmail.com"
+  detailJson    String   @default("{}") // small non-secret context
+  createdAt     DateTime @default(now())
+
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_events")
 }

@@ -1,36 +1,34 @@
 // web/src/auth/useRequireAuth.js
-// Hook for protecting actions (not routes).
-// If user is authenticated, runs the action immediately.
-// If not, opens auth modal and queues the action to run after login.
+// Gate for actions (not routes). Browsing never needs this; only things that need an account.
 //
-// Usage:
 //   const requireAuth = useRequireAuth();
-//   <button onClick={() => requireAuth(() => startPlayback(id))}>Watch</button>
+//   <button onClick={() => requireAuth(() => addToWatchlist(id))}>
+//
+// Not signed in  → sends the user to /login (and back afterwards).
+// Unverified     → /verify-email.
+// Otherwise      → runs the action (pending users included: approval only matters for playback).
 
 import { useCallback } from "react";
+import { useNavigate, useLocation } from "react-router";
 import { useAuth } from "./AuthContext";
-import { useAuthModal } from "./AuthModalContext";
+import { requiredPathFor } from "./accountRouting";
 
 export function useRequireAuth() {
-    const { isAuthenticated, isApproved, loading } = useAuth();
-    const { openAuthModal } = useAuthModal();
+    const { user, loading } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
 
     return useCallback(
-        (action, opts = {}) => {
-            // If auth is still initializing, don't open modal yet — session may still be restoring
-            if (loading) return;
-
-            if (isAuthenticated && isApproved) {
-                // Already good — run action immediately
-                if (typeof action === "function") action();
-                return;
+        (action) => {
+            if (loading) return false;
+            const target = requiredPathFor(user);
+            if (target) {
+                navigate(target, { state: target === "/login" ? { from: location } : undefined });
+                return false;
             }
-            // Not authenticated — open modal, action runs as onSuccess
-            openAuthModal({
-                view: opts.view || "login",
-                onSuccess: typeof action === "function" ? action : null,
-            });
+            action?.();
+            return true;
         },
-        [isAuthenticated, isApproved, loading, openAuthModal],
+        [user, loading, navigate, location],
     );
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router";
-import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck, Lock, Search, Check, CornerDownLeft, X } from "lucide-react";
+import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck, Lock, Search, Check, CornerDownLeft, X, Bell } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
 import { useAuth } from "../../auth/AuthContext";
 import { useAuthModal } from "../../auth/AuthModalContext";
@@ -12,7 +12,8 @@ import RestrictionsSection from "./RestrictionsSection";
 import PlaybackSection from "./PlaybackSection";
 import SubtitlesSection from "./SubtitlesSection";
 import ServerSection from "./ServerSection";
-import PrivacySection from "./PrivacySection";
+import PrivacySection, { DevicesSection } from "./PrivacySection";
+import NotificationsSection from "./NotificationsSection";
 import AboutSection from "./AboutSection";
 import AddFolderModal from "./AddFolderModal";
 import { FOCUS, PREFS_KEY, loadPrefs, savePrefs } from "./shared";
@@ -38,6 +39,7 @@ const GROUPS = [
     {
         label: "System",
         items: [
+            { id: "notifications", label: "Notifications", icon: Bell, desc: "Push alerts and devices" },
             { id: "server", label: "Server", icon: Server, desc: "Connection and streaming" },
             { id: "privacy", label: "Privacy", icon: ShieldCheck, desc: "Data, history and visibility" },
             { id: "about", label: "About", icon: Info, desc: "App info and reset" },
@@ -89,6 +91,11 @@ const INDEX = [
     ["restrictions", "Content rating limit", "r-limit", "restricted parental kids rated pg r tv-ma"],
     ["restrictions", "Hide unrated titles", "r-unrated", "restricted parental"],
     ["restrictions", "Restriction PIN", "r-pin", "lock parental code"],
+    ["notifications", "Push on this device", "n-device", "alerts push android pwa fcm enable"],
+    ["notifications", "Push notifications", "n-master", "master switch mute alerts"],
+    ["notifications", "New title alerts", "n-newMedia", "movies series anime added library"],
+    ["notifications", "Sign-in alerts", "n-security", "new device login security"],
+    ["notifications", "Your devices", null, "registered browsers phones remove"],
     ["server", "Connection status", "sv-conn", "online latency health uptime"],
     ["server", "Direct play", "sv-direct", "streaming"],
     ["server", "Prefer HLS", "sv-hls", "adaptive streaming ffmpeg transcode"],
@@ -518,7 +525,12 @@ export default function Settings() {
     const section = (() => {
         switch (active) {
             case "profile":
-                return <ProfileSection handleLogout={() => logout()} setLoginOpen={() => openAuthModal({ view: "login" })} />;
+                return (
+                    <div className="w-full space-y-6">
+                        <ProfileSection handleLogout={() => logout()} setLoginOpen={() => openAuthModal({ view: "login" })} />
+                        <DevicesSection />
+                    </div>
+                );
             case "appearance":
                 return <AppearanceSection />;
             case "library":
@@ -539,6 +551,8 @@ export default function Settings() {
                 return <PlaybackSection prefs={prefs} setPref={setPref} />;
             case "subtitles":
                 return <SubtitlesSection prefs={prefs} setPref={setPref} />;
+            case "notifications":
+                return <NotificationsSection />;
             case "server":
                 return <ServerSection prefs={prefs} setPref={setPref} />;
             case "privacy":
