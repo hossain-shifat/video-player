@@ -25,9 +25,9 @@ import ForgotPasswordPage from "../Pages/Auth/ForgotPasswordPage";
 import PendingPage from "../Pages/Auth/PendingPage";
 import ExpiredPage, { AccessDeniedPage } from "../Pages/Auth/ExpiredPage";
 import AuthLayout from "../Layout/AuthLayout";
-import AuthGate from "../auth/AuthGate";
-import PlaybackGate from "../auth/PlaybackGate";
-import GuestOnly from "../auth/GuestOnly";
+import AuthGate from "../Auth/AuthGate";
+import PlaybackGate from "../Auth/PlaybackGate";
+import GuestOnly from "../Auth/GuestOnly";
 import MyMedia from "../Pages/Media/MyMedia/MyMedia";
 
 // ─── Error Pages ────────────────────────────────────────────────────────────
@@ -35,19 +35,19 @@ import ErrorLayout from "../Layout/ErrorLayout";
 import { Error401, Error403, Error404, Error429, Error500, ErrorTimeout, ErrorNetwork } from "../Errors";
 
 // ── Admin Dashboard (lazy for code splitting) ──────────────────────────────
-import DashboardLayout from "../dashboard/DashboardLayout";
-import DashOverview from "../dashboard/pages/DashOverview";
-import DashUsers from "../dashboard/pages/DashUsers";
-import DashStreams from "../dashboard/pages/DashStreams";
-import DashHealth from "../dashboard/pages/DashHealth";
-import DashLogs from "../dashboard/pages/DashLogs";
-import DashLibraries from "../dashboard/pages/DashLibraries";
-import DashMedia from "../dashboard/pages/DashMedia";
-import DashJobs from "../dashboard/pages/DashJobs";
-import DashUploads from "../dashboard/pages/DashUploads";
-import DashStorage from "../dashboard/pages/DashStorage";
-import DashIPTV from "../dashboard/pages/DashIPTV";
-import DashAnnouncements from "../dashboard/pages/DashAnnouncements";
+import DashboardLayout from "../Dashboard/DashboardLayout";
+import DashOverview from "../Dashboard/Pages/DashOverview";
+import DashUsers from "../Dashboard/Pages/DashUsers";
+import DashStreams from "../Dashboard/Pages/DashStreams";
+import DashHealth from "../Dashboard/Pages/DashHealth";
+import DashLogs from "../Dashboard/Pages/DashLogs";
+import DashLibraries from "../Dashboard/Pages/DashLibraries";
+import DashMedia from "../Dashboard/Pages/DashMedia";
+import DashJobs from "../Dashboard/Pages/DashJobs";
+import DashUploads from "../Dashboard/Pages/DashUploads";
+import DashStorage from "../Dashboard/Pages/DashStorage";
+import DashIPTV from "../Dashboard/Pages/DashIPTV";
+import DashAnnouncements from "../Dashboard/Pages/DashAnnouncements";
 import ErrorPreview from "../Errors/ErrorPreview";
 import ErrorShowcase from "../Errors/ErrorShowcase";
 // import Live from "../Pages/Media/Live/Live";
@@ -62,11 +62,14 @@ export const router = createBrowserRouter([
     {
         Component: AuthLayout,
         children: [
-            { Component: GuestOnly, children: [
-                { path: "/login", Component: LoginPage },
-                { path: "/register", Component: RegisterPage },
-                { path: "/forgot-password", Component: ForgotPasswordPage },
-            ] },
+            {
+                Component: GuestOnly,
+                children: [
+                    { path: "/login", Component: LoginPage },
+                    { path: "/register", Component: RegisterPage },
+                    { path: "/forgot-password", Component: ForgotPasswordPage },
+                ],
+            },
             { path: "/verify-email", Component: VerifyEmailPage },
             { path: "/pending", Component: PendingPage }, // optional status page — pending users are NOT forced here
             { path: "/access-expired", Component: ExpiredPage },

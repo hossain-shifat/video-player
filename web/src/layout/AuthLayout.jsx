@@ -14,8 +14,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useOutlet } from "react-router";
-import PosterWall from "../Components/auth/PosterWall";
-import { nudge, staggerIn } from "../Components/auth/motion";
+import PosterWall from "../Components/Auth/PosterWall";
+import { nudge, staggerIn } from "../Components/Auth/motion";
 
 const CSS = `
 .auth-root{--auth-field:2.75rem;--auth-gap:.875rem;--auth-gap-lg:1.375rem}

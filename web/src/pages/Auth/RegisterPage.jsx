@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
 import { User, Mail, Lock, ChevronLeft } from "lucide-react";
-import { useAuth } from "../../auth/AuthContext";
-import { authApi } from "../../api/auth";
-import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, GoogleButton, OrDivider, StepBar, StepTransition } from "../../Components/auth/AuthUI";
-import { useMediaQuery } from "../../Components/auth/useMediaQuery";
+import { useAuth } from "../../Auth/AuthContext";
+import { authApi } from "../../Api/auth";
+import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, GoogleButton, OrDivider, StepBar, StepTransition } from "../../Components/Auth/AuthUI";
+import { useMediaQuery } from "../../Hooks/Ui/useMediaQuery";
 
 // Phones and short windows get a TWO-STEP sign-up (email first, then name + password): each screen has
 // 2–3 controls, so nothing is cramped and nothing needs scrolling. Roomy screens keep the single form.

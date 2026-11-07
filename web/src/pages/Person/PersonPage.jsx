@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useLocation, useSearchParams, Link } from "react-router";
 import { ChevronDown, ChevronUp, Minus, Plus, Share2, Check, Users, Search, X, Play, Eye, ArrowUpDown, CalendarDays, Star, Film, Tv, List, Library, GitCommitVertical } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
-import MediaRow from "../../Components/MediaRow";
+import MediaRow from "../../Components/Media/MediaRow";
+import SeeAllPage from "../../Components/Media/SeeAllPage";
 
 const TMDB_KEY = import.meta.env.VITE_TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -160,7 +162,9 @@ function cardItem(c, libIndex) {
         : { id: `tmdb-movie-${c.id}`, name: title, type: "movie", parsed: { type: "movie", title, year }, metadata, streamUrl: null };
 }
 
-function buildKnownFor(person, libIndex) {
+// cap = how many titles to return (owned ones are always all kept). The row shows the first
+// 20; "See all" gets the whole list, so the page calls this with Infinity.
+function buildKnownFor(person, libIndex, cap = 20) {
     const cc = person?.combined_credits;
     if (!cc) return [];
     const pool = person.known_for_department === "Acting" ? cc.cast || [] : cc.crew || [];
@@ -183,8 +187,8 @@ function buildKnownFor(person, libIndex) {
         (libIndex.has(creditKey(c)) ? owned : others).push(item);
     }
 
-    // owned first, then the rest — all owned kept, others fill up to 20 total
-    return [...owned, ...others].slice(0, Math.max(20, owned.length));
+    // owned first, then the rest — all owned kept, others fill up to `cap` total
+    return [...owned, ...others].slice(0, Math.max(cap, owned.length));
 }
 
 // ─── Insights (career stats, decades, genres) ────────────────────────────────
@@ -274,11 +278,10 @@ function buildInsights(person, libIndex, genreMap) {
     const movies = list.filter((c) => c.media_type === "movie").length;
     const owned = list.filter((c) => libIndex.has(creditKey(c))).length;
 
-    // announced / unreleased titles, soonest first
+    // announced / unreleased titles, soonest first (the row shows the first 8; "See all" shows every one)
     const upcoming = list
         .filter((c) => creditDate(c) && creditDate(c) > today)
         .sort((a, b) => (creditDate(a) < creditDate(b) ? -1 : 1))
-        .slice(0, 8)
         .map((c) => ({ ...cardItem(c, libIndex), _badge: "Upcoming", _badgeTone: "glass", _badgeDot: true, _release: creditDate(c) }));
 
     return { total: list.length, movies, tv: list.length - movies, first, last, byYear, peakDecade, genres, avg, best, owned, upcoming };
@@ -364,6 +367,42 @@ const XIcon = ({ size = 18 }) => (
 // Plain heading — same weight, size and left edge as the MediaRow headings
 function SectionTitle({ children, className = "mb-3" }) {
     return <h2 className={`text-base sm:text-lg font-semibold text-base-content ${className}`}>{children}</h2>;
+}
+
+// MediaRow + "See all". The row shows the first `limit` titles; "See all" opens the shared
+// SeeAllPage full-screen with the whole list. Close button / Esc closes it, and it closes by
+// itself when the page moves to another person.
+function RowWithSeeAll({ title, all, limit = 24, resetKey }) {
+    const [showAll, setShowAll] = useState(false);
+
+    useEffect(() => {
+        setShowAll(false);
+    }, [resetKey]);
+
+    useEffect(() => {
+        if (!showAll) return;
+        const onKey = (e) => e.key === "Escape" && setShowAll(false);
+        document.addEventListener("keydown", onKey);
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            document.body.style.overflow = prev;
+        };
+    }, [showAll]);
+
+    return (
+        <>
+            <MediaRow title={title} items={all.slice(0, limit)} onViewAll={all.length ? () => setShowAll(true) : undefined} />
+            {showAll &&
+                createPortal(
+                    <div className="fixed inset-0 z-50 overflow-y-auto bg-base-100">
+                        <SeeAllPage fullscreen title={title} items={all} onBack={() => setShowAll(false)} emptyText="Nothing here yet." />
+                    </div>,
+                    document.body,
+                )}
+        </>
+    );
 }
 
 function StatCard({ label, value, sub, to }) {
@@ -1028,7 +1067,8 @@ const PersonPage = () => {
 
     const filmography = useMemo(() => (person ? buildFilmography(person.combined_credits, libIndex) : []), [person, libIndex]);
 
-    const knownFor = useMemo(() => (person ? buildKnownFor(person, libIndex) : []), [person, libIndex]);
+    // full list — the "Known For" row shows the first 20, "See all" shows every title
+    const knownFor = useMemo(() => (person ? buildKnownFor(person, libIndex, Infinity) : []), [person, libIndex]);
 
     // Everything this person is in that the user owns — de-duped by library id
     const libraryItems = useMemo(() => {
@@ -1250,13 +1290,13 @@ const PersonPage = () => {
                 )}
 
                 {/* ── In your library ──────────────────────────────────────────── */}
-                <MediaRow title="Movies & Shows in Your Library" items={libraryItems} />
+                <RowWithSeeAll title="Movies & Shows in Your Library" all={libraryItems} limit={24} resetKey={personId} />
 
                 {/* ── Known For ─────────────────────────────────────────────────── */}
-                <MediaRow title="Known For" items={knownFor} />
+                <RowWithSeeAll title="Known For" all={knownFor} limit={20} resetKey={personId} />
 
-                {/* ── Coming up ─────────────────────────────────────────────────── */}
-                <MediaRow title="Coming Up" items={insights?.upcoming ?? []} />
+                {/* ── Coming Up ─────────────────────────────────────────────────── */}
+                <RowWithSeeAll title="Coming Up" all={insights?.upcoming ?? []} limit={8} resetKey={personId} />
 
                 {/* ── Timeline + genre mix ──────────────────────────────────────── */}
                 {insights && (insights.byYear.length > 1 || insights.genres.length > 0) && (

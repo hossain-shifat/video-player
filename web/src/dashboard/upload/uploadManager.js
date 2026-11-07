@@ -1,6 +1,6 @@
 "use strict";
 
-// web/src/dashboard/upload/uploadManager.js
+// web/src/Dashboard/Upload/uploadManager.js
 //
 // Same public API as before this rewrite (addFiles, startUpload, subscribe,
 // getQueue, pauseOrResumeItem, cancelItem, removeItem, retryItem, renameItem,
@@ -31,7 +31,7 @@ import Uppy from "@uppy/core";
 import FluxUploaderPlugin, { CHUNK_SIZE, computeTotalChunks } from "./FluxUploaderPlugin";
 import { uploadDB } from "./uploadDB";
 import { notifications } from "./notifications";
-import { storageApi } from "../api/storageApi";
+import { storageApi } from "../Api/storageApi";
 
 export { CHUNK_SIZE };
 

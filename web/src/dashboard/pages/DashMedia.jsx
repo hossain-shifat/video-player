@@ -1,6 +1,5 @@
-// web/src/dashboard/pages/DashMedia.jsx
-import { useState, useMemo, Fragment } from "react";
-import { Link } from "react-router";
+// web/src/Dashboard/Pages/DashMedia.jsx
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import {
@@ -12,56 +11,21 @@ import {
     FileVideo,
     HardDrive,
     Search,
-    Play,
     Info,
     FolderOpen,
-    Check,
     Image as ImageIcon,
     SquarePen,
     Trash2,
     X,
-    Loader2,
     CheckCircle2,
     ChevronLeft,
     ChevronRight,
     Database,
-    Star,
-    Calendar,
-    Layers,
-    Filter,
-    TrendingUp,
     Shield,
     ShieldOff,
-    SortAsc,
-    User,
-    Monitor,
-    Volume2,
-    Gauge,
-    Clock,
-    Link2,
-    Languages,
 } from "lucide-react";
-import { api } from "../../api/client";
-import ConfirmModal, {
-    ModalShell,
-    ModalHeader,
-    ModalTabs,
-    ModalContent,
-    ModalSection,
-    ModalRows,
-    ModalKV,
-    ModalStats,
-    ModalCallout,
-    ModalReview,
-    ModalCopyButton,
-    ModalFooter,
-    ModalBadge,
-    ModalButton,
-    ModalSegmented,
-    ModalToggle,
-    PANEL,
-    MODAL_INPUT,
-} from "../components/ConfirmModal";
+import { api } from "../Shared";
+import { MediaDeleteModal, MediaDetailsModal, MediaEditModal } from "../Components/DashModal";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -87,37 +51,6 @@ function fmtDuration(seconds) {
     const m = Math.floor((seconds % 3600) / 60);
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
-}
-
-// Generic "all metadata" rows: turns a flat ffprobe-ish object into label / value pairs.
-const humanize = (k) =>
-    k
-        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-        .replace(/[_-]+/g, " ")
-        .replace(/^./, (c) => c.toUpperCase());
-function fmtMeta(k, v) {
-    if (typeof v === "boolean") return v ? "Yes" : "No";
-    if (typeof v === "number") {
-        if (/bytes$|^size$/i.test(k)) return fmtBytes(v);
-        if (/bps$|bitrate/i.test(k)) return `${(v / 1_000_000).toFixed(2)} Mbps`;
-        if (/seconds$|^duration$/i.test(k)) return fmtDuration(v);
-        return v.toLocaleString();
-    }
-    return String(v);
-}
-function metaRows(obj, prefix = "") {
-    if (!obj || typeof obj !== "object") return [];
-    const out = [];
-    for (const [k, v] of Object.entries(obj)) {
-        if (v == null || v === "") continue;
-        const label = prefix ? `${prefix} · ${humanize(k)}` : humanize(k);
-        if (Array.isArray(v)) {
-            if (v.every((x) => x == null || typeof x !== "object")) out.push({ label, value: v.join(", ") });
-            else v.forEach((x, i) => out.push(...metaRows(x, `${label} ${i + 1}`)));
-        } else if (typeof v === "object") out.push(...metaRows(v, label));
-        else out.push({ label, value: fmtMeta(k, v) });
-    }
-    return out.filter((r) => r.value !== "");
 }
 
 // ffprobe reports frame rate as a fraction string like "24000/1001" or "24/1" —
@@ -228,464 +161,6 @@ function CodecChip({ label }) {
                 ? "bg-secondary/15 text-secondary border-secondary/25"
                 : "bg-white/8 text-white/70 border-white/12";
     return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-mono font-bold ${cls}`}>{label}</span>;
-}
-
-// ─── Modals (shared shell, header, footer and atoms: ../components/ConfirmModal) ──
-
-const TYPE_TONE = { movie: "primary", series: "info", anime: "accent" };
-const TYPE_LABEL = { movie: "Movie", series: "Series", anime: "Anime" };
-
-function PosterThumb({ src, Icon, className = "h-14 w-10" }) {
-    return (
-        <div className={`grid ${className} shrink-0 place-items-center overflow-hidden rounded-md border border-base-content/15 bg-base-300`}>
-            {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : <Icon size={16} className="text-base-content/40" />}
-        </div>
-    );
-}
-
-const INPUT_LG = `${MODAL_INPUT} !h-[42px]`;
-
-// ─── Edit Modal ───────────────────────────────────────────────────────────────
-
-function EditModal({ media, onClose, onSave, isPending, error }) {
-    const [title, setTitle] = useState(media._title || "");
-    const [year, setYear] = useState(media._year || "");
-    const [type, setType] = useState(media._type || "movie");
-    const [permission, setPermission] = useState(media._permission !== false);
-    const TypeIcon = (TYPE_CONFIG[media._type] || TYPE_CONFIG.movie).Icon;
-
-    const handleSubmit = () => {
-        onSave({ id: media._id, payload: { title, year: Number(year), type, permission } });
-    };
-
-    const access = (v) => (v ? "Normal" : "Restricted");
-    const changes = [
-        title !== (media._title || "") && { name: "Title", from: media._title || "—", to: title || "—" },
-        String(year) !== String(media._year || "") && { name: "Year", from: media._year || "—", to: year || "—" },
-        type !== (media._type || "movie") && { name: "Type", from: TYPE_LABEL[media._type || "movie"], to: TYPE_LABEL[type] },
-        permission !== (media._permission !== false) && { name: "Access", from: access(media._permission !== false), to: access(permission) },
-    ].filter(Boolean);
-    const dirty = changes.length > 0;
-    const edited = (a, b) => (String(a) !== String(b) ? "!border-primary/60" : "");
-
-    return (
-        <ModalShell onClose={onClose} busy={isPending} labelledBy="media-edit-t">
-            <ModalHeader
-                id="media-edit-t"
-                avatar={<PosterThumb src={media._poster} Icon={TypeIcon} className="h-[60px] w-[42px]" />}
-                title="Edit metadata"
-                subtitle={<span className="font-mono">{media._filename}</span>}
-                badges={
-                    <ModalBadge tone={TYPE_TONE[media._type] || "primary"} icon={TypeIcon}>
-                        {media._typeLabel}
-                    </ModalBadge>
-                }
-                onClose={onClose}
-                busy={isPending}
-            />
-            <ModalContent>
-                <ModalSection label="Title">
-                    <input
-                        id="media-edit-title"
-                        type="text"
-                        data-autofocus
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        className={`${INPUT_LG} ${edited(title, media._title || "")}`}
-                        placeholder="Media title…"
-                    />
-                </ModalSection>
-
-                <div className="grid shrink-0 grid-cols-1 items-start gap-4 sm:grid-cols-2">
-                    <ModalSection label="Year">
-                        <input
-                            id="media-edit-year"
-                            type="number"
-                            value={year}
-                            onChange={(e) => setYear(e.target.value)}
-                            className={`${INPUT_LG} ${edited(year, media._year || "")}`}
-                            placeholder="2024"
-                            min={1900}
-                            max={2099}
-                        />
-                    </ModalSection>
-                    <ModalSection label="Type">
-                        <ModalSegmented
-                            label="Type"
-                            value={type}
-                            onChange={setType}
-                            options={[
-                                { value: "movie", label: "Movie", icon: Film },
-                                { value: "series", label: "Series", icon: Tv2 },
-                                { value: "anime", label: "Anime", icon: Swords },
-                            ]}
-                        />
-                    </ModalSection>
-                </div>
-
-                {/* permission=true → Normal (allowed), permission=false → Restricted.
-                    The switch is "Restrict access": ON means RESTRICTED (permission=false). */}
-                <ModalSection label="Access & identity">
-                    <div className={`${PANEL} divide-y divide-base-content/10 overflow-hidden`}>
-                        <label className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-base-content/5">
-                            <span className="grid size-9 shrink-0 place-items-center rounded-full border border-base-content/10 bg-base-200">
-                                {permission ? <Shield size={16} className="text-success" /> : <ShieldOff size={16} className="text-error" />}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                                <span className="block text-[13px] font-medium text-base-content">{permission ? "Normal access" : "Restricted"}</span>
-                                <span className="block text-xs text-base-content/60">
-                                    {permission ? "Media is accessible. Turn on to restrict it." : "Access is restricted. Turn off to allow it."}
-                                </span>
-                            </span>
-                            <span className="text-xs text-base-content/60">{permission ? "Off" : "On"}</span>
-                            <ModalToggle value={!permission} onChange={(v) => setPermission(!v)} label="Restrict access" />
-                        </label>
-                        <div className="flex min-h-12 items-center gap-4 px-4 py-2">
-                            <span className="w-28 shrink-0 text-xs text-base-content/60">Media ID</span>
-                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/90">{media._id}</span>
-                            <ModalCopyButton text={media._id} label="media ID" />
-                        </div>
-                    </div>
-                </ModalSection>
-
-                {error && (
-                    <ModalCallout tone="error" icon={AlertTriangle} compact className="mt-auto">
-                        {error.message || "Failed to update media"}
-                    </ModalCallout>
-                )}
-                <ModalReview
-                    changes={changes}
-                    saved={[
-                        { name: "Title", value: media._title },
-                        { name: "Year", value: media._year },
-                        { name: "Type", value: TYPE_LABEL[media._type || "movie"] },
-                        { name: "Access", value: access(media._permission !== false) },
-                    ]}
-                    className={error ? "" : "mt-auto"}
-                />
-            </ModalContent>
-            <ModalFooter
-                note={
-                    dirty ? (
-                        <span className="inline-flex items-center gap-1.5 text-warning">
-                            <span className="size-2 rounded-full bg-warning" />
-                            Unsaved changes
-                        </span>
-                    ) : (
-                        <span className="text-base-content/60">No changes yet</span>
-                    )
-                }>
-                <ModalButton onClick={onClose} disabled={isPending}>
-                    Cancel
-                </ModalButton>
-                <ModalButton variant="primary" className="gap-1.5" onClick={handleSubmit} loading={isPending} loadingText="Saving…" disabled={!dirty}>
-                    <Check size={14} />
-                    Save changes
-                </ModalButton>
-            </ModalFooter>
-        </ModalShell>
-    );
-}
-
-// ─── Details Modal ────────────────────────────────────────────────────────────
-
-function DetailsModal({ media, onClose }) {
-    const [tab, setTab] = useState("overview");
-    const linkDest = media._type === "movie" ? `/player/${media._id}` : `/series/${media._id}`;
-    const config = TYPE_CONFIG[media._type] || TYPE_CONFIG.movie;
-    const TypeIcon = config.Icon;
-
-    // Fetches ffprobe-backed mediaInfo lazily on modal open — ONLY for movies.
-    // Series/anime media._id is a synthetic group id (e.g. "series:series:wednesday"),
-    // not a real scanned-file id, so GET /api/metadata/:id would always 404 for
-    // them — findById() only matches real file ids. For series/anime we already
-    // have everything we need on `media` itself (res/vcodec/acodec/_size/_duration
-    // were merged in from the bulk /api/mediainfo fetch back in the table's
-    // processItem, aggregated across all episodes there).
-    const { data: fullData } = useQuery({
-        queryKey: ["media-detail", media._id],
-        queryFn: () => api.get(`/api/metadata/${media._id}`),
-        staleTime: 1000 * 60 * 10,
-        enabled: media._type === "movie",
-    });
-
-    // mediaInfoStore now returns an organized shape: { container, video, audioTracks, subtitleTracks }.
-    // Cover-art "video" streams (embedded poster images) are already filtered
-    // out server-side when video is picked, so no client-side filtering needed here.
-    const mediaInfo = media._type === "movie" ? fullData?.mediaInfo : null;
-    const video = mediaInfo?.video || null;
-    const primaryAudio = mediaInfo?.audioTracks?.[0] || null;
-
-    // Movies: prefer freshly-fetched single-file data, fall back to row data.
-    // Series/anime: row data IS the data (already aggregated across episodes
-    // back in the table's processItem — see _resolution/_fps/_bitrate/etc).
-    const realRes = video?.height ? (video.height >= 2000 ? "4K" : video.height >= 1000 ? "1080p" : video.height >= 700 ? "720p" : "480p") : media.res;
-
-    const realDuration = mediaInfo?.container?.durationSeconds || (media.metadata?.runtime ? media.metadata.runtime * 60 : media._duration);
-    const realSize = mediaInfo?.container?.sizeBytes || media._size;
-    const realAdded = media.metadata?.date || media._added;
-    const realResolution = video?.resolution || media._resolution;
-    const realFps = video?.frameRate || media._fps; // already a formatted string like "23.976 fps" — no parsing needed
-    const realBitrate = mediaInfo?.container?.bitrateBps || media._bitrate;
-    const realChannels = primaryAudio?.channels || media._audioChannels;
-    const realAudioLang = primaryAudio?.language || media._audioLang;
-
-    const linkUrl = typeof window !== "undefined" ? `${window.location.origin}${linkDest}` : linkDest;
-    const tone = TYPE_TONE[media._type] || "primary";
-
-    const specs = [
-        { label: "Resolution", icon: Monitor, tone: "text-info", value: realResolution },
-        { label: "Frame rate", icon: Gauge, tone: "text-success", value: realFps || null },
-        { label: "Bitrate", icon: Database, tone: "text-warning", value: realBitrate ? `${(realBitrate / 1_000_000).toFixed(1)} Mbps` : null },
-        { label: "Audio", icon: Volume2, tone: "text-accent", value: realChannels ? `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` : null },
-    ].filter((x) => x.value);
-
-    const monoRow = (icon, label, value) => (
-        <ModalKV icon={icon} label={label} mono action={value ? <ModalCopyButton text={value} label={label.toLowerCase()} /> : null}>
-            <span title={value}>{value || "—"}</span>
-        </ModalKV>
-    );
-
-    const techGroups = [
-        {
-            label: "Summary",
-            rows: [
-                realResolution && { label: "Resolution", value: realResolution },
-                realRes && { label: "Quality", value: realRes },
-                realFps && { label: "Frame rate", value: realFps },
-                realBitrate && { label: "Bitrate", value: `${(realBitrate / 1_000_000).toFixed(2)} Mbps` },
-                realDuration && { label: "Duration", value: fmtDuration(realDuration) },
-                realSize && { label: "Size", value: fmtBytes(realSize) },
-                media.vcodec && { label: "Video codec", value: media.vcodec },
-                media.acodec && { label: "Audio codec", value: media.acodec },
-                realChannels && { label: "Audio", value: `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` },
-            ].filter(Boolean),
-        },
-        { label: "Container", rows: metaRows(mediaInfo?.container) },
-        { label: "Video stream", rows: metaRows(mediaInfo?.video) },
-        ...(mediaInfo?.audioTracks || []).map((t, i) => ({ label: `Audio track ${i + 1}`, rows: metaRows(t) })),
-        ...(mediaInfo?.subtitleTracks || []).map((t, i) => ({ label: `Subtitle track ${i + 1}`, rows: metaRows(t) })),
-    ].filter((g) => g.rows.length > 0);
-
-    const genres = media.metadata?.genres || [];
-    const cast = media.metadata?.cast || [];
-    const audioCount = mediaInfo?.audioTracks?.length;
-    const subCount = mediaInfo?.subtitleTracks?.length;
-
-    return (
-        <ModalShell onClose={onClose} labelledBy="media-details-t">
-            <ModalHeader
-                id="media-details-t"
-                avatar={<PosterThumb src={media._poster} Icon={TypeIcon} />}
-                title={media._title}
-                subtitle={<span className="font-mono">{media._filename}</span>}
-                badges={
-                    <>
-                        <ModalBadge tone={tone} icon={TypeIcon}>
-                            {media._typeLabel}
-                        </ModalBadge>
-                        {media._year && <ModalBadge>{media._year}</ModalBadge>}
-                        {realRes && <ModalBadge tone={realRes === "4K" ? "warning" : realRes === "1080p" ? "success" : "info"}>{realRes}</ModalBadge>}
-                        {media._permission ? (
-                            <ModalBadge tone="success" icon={Shield}>
-                                Normal
-                            </ModalBadge>
-                        ) : (
-                            <ModalBadge tone="error" icon={ShieldOff}>
-                                Restricted
-                            </ModalBadge>
-                        )}
-                    </>
-                }
-                onClose={onClose}
-            />
-            <ModalTabs
-                value={tab}
-                onChange={setTab}
-                tabs={[
-                    { id: "overview", label: "Overview", icon: Info },
-                    { id: "technical", label: "Technical", icon: Monitor },
-                    { id: "file", label: "File", icon: FolderOpen },
-                ]}
-            />
-            <ModalContent>
-                {tab === "overview" && (
-                    <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" className="flex shrink-0 flex-col gap-4">
-                        <ModalStats
-                            items={[
-                                { icon: Calendar, tone: "text-info", label: "Year", value: media._year || "—" },
-                                { icon: Star, tone: "text-warning", label: "Quality", value: realRes ? `${realRes}${video ? ` · ${video.width}×${video.height}` : ""}` : "—" },
-                                { icon: Clock, tone: "text-accent", label: "Duration", value: fmtDuration(realDuration) },
-                                { icon: HardDrive, tone: "text-success", label: "Size", value: fmtBytes(realSize) },
-                            ]}
-                        />
-
-                        <ModalSection label="Overview">
-                            <div className={`${PANEL} flex flex-col gap-2 p-4`}>
-                                {media.metadata?.overview ? (
-                                    <>
-                                        {media.metadata?.tagline && <p className="text-xs italic text-base-content/60">“{media.metadata.tagline}”</p>}
-                                        <p className="text-[13px] leading-relaxed text-base-content/90">{media.metadata.overview}</p>
-                                    </>
-                                ) : (
-                                    <p className="flex items-center gap-2 text-[13px] text-base-content/55">
-                                        <Info size={15} className="shrink-0 text-info" />
-                                        No description yet. Metadata comes from TMDB once this title is matched.
-                                    </p>
-                                )}
-                            </div>
-                        </ModalSection>
-
-                        <ModalSection label="Genres">
-                            {genres.length > 0 ? (
-                                <div className="flex flex-wrap gap-2">
-                                    {genres.map((g) => (
-                                        <ModalBadge key={g} tone="primary">
-                                            {g}
-                                        </ModalBadge>
-                                    ))}
-                                </div>
-                            ) : (
-                                <p className="text-[13px] text-base-content/50">No genres yet.</p>
-                            )}
-                        </ModalSection>
-                    </div>
-                )}
-
-                {tab === "technical" && (
-                    <div role="tabpanel" id="panel-technical" aria-labelledby="tab-technical" className="flex flex-1 flex-col gap-4">
-                        {techGroups.length === 0 ? (
-                            <ModalCallout tone="info" compact>
-                                No technical details available for this title yet.
-                            </ModalCallout>
-                        ) : (
-                            <div className={`${PANEL} overflow-hidden`}>
-                                <table className="w-full table-fixed border-collapse text-left text-[13px]">
-                                    <thead>
-                                        <tr className="border-b border-base-content/10 bg-base-content/5 text-xs text-base-content/65">
-                                            <th className="w-2/5 px-4 py-2.5 font-medium">Property</th>
-                                            <th className="px-4 py-2.5 font-medium">Value</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {techGroups.map((g) => (
-                                            <Fragment key={g.label}>
-                                                <tr className="border-y border-base-content/10 bg-base-200/60">
-                                                    <td colSpan={2} className="px-4 py-2 text-xs font-medium uppercase tracking-wider text-base-content/60">
-                                                        {g.label}
-                                                    </td>
-                                                </tr>
-                                                {g.rows.map((r) => (
-                                                    <tr key={`${g.label}-${r.label}`} className="border-b border-base-content/10 last:border-b-0">
-                                                        <td className="px-4 py-2.5 align-top text-xs text-base-content/60">{r.label}</td>
-                                                        <td className="break-words px-4 py-2.5 align-top text-base-content tabular-nums">{r.value}</td>
-                                                    </tr>
-                                                ))}
-                                            </Fragment>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {tab === "file" && (
-                    <div role="tabpanel" id="panel-file" aria-labelledby="tab-file" className="flex shrink-0 flex-col gap-4">
-                        <ModalSection label="File information">
-                            <ModalRows>
-                                <ModalKV icon={FolderOpen} tone="text-primary" label="Library">
-                                    {media._library || "—"}
-                                </ModalKV>
-                                <ModalKV icon={Calendar} tone="text-info" label="Added">
-                                    {fmtDate(realAdded)}
-                                </ModalKV>
-                                {media.metadata?.rating && (
-                                    <ModalKV icon={Star} tone="text-warning" label="TMDB rating">
-                                        <span className="tabular-nums">{media.metadata.rating}</span>
-                                    </ModalKV>
-                                )}
-                                {media.metadata?.status && (
-                                    <ModalKV icon={Info} label="Status">
-                                        {media.metadata.status}
-                                    </ModalKV>
-                                )}
-                                {media.metadata?.language && (
-                                    <ModalKV icon={Languages} label="Language">
-                                        {media.metadata.language.toUpperCase()}
-                                    </ModalKV>
-                                )}
-                                <ModalKV icon={media._permission ? Shield : ShieldOff} tone={media._permission ? "text-success" : "text-error"} label="Access">
-                                    <span className={media._permission ? "text-success" : "text-error"}>{media._permission ? "Normal" : "Restricted"}</span>
-                                </ModalKV>
-                            </ModalRows>
-                        </ModalSection>
-
-                        <ModalSection label="Links & IDs">
-                            <ModalRows>
-                                {monoRow(Play, "Player link", linkUrl)}
-                                {monoRow(FolderOpen, "File path", media._path)}
-                                {monoRow(Database, "Media ID", media._id)}
-                            </ModalRows>
-                        </ModalSection>
-                    </div>
-                )}
-            </ModalContent>
-            <ModalFooter note="Read only">
-                <ModalButton onClick={onClose}>Close</ModalButton>
-                <Link to={linkDest} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-primary gap-1.5 rounded-md border border-primary hover:brightness-110 [--depth:0] [--noise:0]">
-                    <Play size={14} />
-                    Play now
-                </Link>
-            </ModalFooter>
-        </ModalShell>
-    );
-}
-
-// ─── Delete Modal ─────────────────────────────────────────────────────────────
-
-function DeleteModal({ media, onClose, onConfirm, isPending, error }) {
-    const TypeIcon = (TYPE_CONFIG[media._type] || TYPE_CONFIG.movie).Icon;
-    return (
-        <ConfirmModal
-            open
-            badge={false}
-            onClose={onClose}
-            onConfirm={() => onConfirm(media._id)}
-            loading={isPending}
-            error={error ? error.message || "Failed to delete" : null}
-            variant="danger"
-            title={`Delete ${media._title}?`}
-            subtitle={<span className="font-mono">{media._filename}</span>}
-            confirmIcon={Trash2}
-            confirmText="Delete media"
-            timeline={[
-                { icon: Database, tone: "text-error", title: "Always", text: "This entry is removed from the database." },
-                { icon: AlertTriangle, tone: "text-warning", title: "Depends on server settings", text: "The physical file may also be removed." },
-            ]}
-            note="This action cannot be undone."
-            noteTone="error">
-            <ModalSection label="You are about to delete">
-                <div className={`${PANEL} flex items-center gap-4 px-4 py-3`}>
-                    <PosterThumb src={media._poster} Icon={TypeIcon} />
-                    <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-base-content">{media._title}</p>
-                        <p className="truncate font-mono text-xs text-base-content/55">{media._filename}</p>
-                    </div>
-                    <ModalBadge tone={TYPE_TONE[media._type] || "primary"} icon={TypeIcon}>
-                        {media._typeLabel}
-                    </ModalBadge>
-                </div>
-            </ModalSection>
-            <ModalStats
-                items={[
-                    { icon: Calendar, tone: "text-info", label: "Year", value: media._year || "—" },
-                    { icon: HardDrive, tone: "text-success", label: "Size", value: fmtBytes(media._size) },
-                    { icon: FolderOpen, tone: "text-primary", label: "Library", value: media._library || "—" },
-                ]}
-            />
-        </ConfirmModal>
-    );
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -1199,7 +674,7 @@ export default function DashMedia() {
             <Toast toast={toast} />
 
             {editMedia && (
-                <EditModal
+                <MediaEditModal
                     media={editMedia}
                     onClose={() => {
                         setEditMedia(null);
@@ -1210,9 +685,9 @@ export default function DashMedia() {
                     error={updateMutation.error}
                 />
             )}
-            {detailsMedia && <DetailsModal media={detailsMedia} onClose={() => setDetailsMedia(null)} />}
+            {detailsMedia && <MediaDetailsModal media={detailsMedia} onClose={() => setDetailsMedia(null)} />}
             {deleteMedia && (
-                <DeleteModal media={deleteMedia} onClose={() => setDeleteMedia(null)} onConfirm={deleteMutation.mutate} isPending={deleteMutation.isPending} error={deleteMutation.error} />
+                <MediaDeleteModal media={deleteMedia} onClose={() => setDeleteMedia(null)} onConfirm={deleteMutation.mutate} isPending={deleteMutation.isPending} error={deleteMutation.error} />
             )}
 
             {/* ── Header ── */}

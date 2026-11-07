@@ -1,9 +1,9 @@
-// web/src/dashboard/pages/DashJobs.jsx
+// web/src/Dashboard/Pages/DashJobs.jsx
 // Transcoding jobs viewer — uses DaisyUI/Tailwind only, no dashboard.css
 
 import { useState, useEffect, useCallback } from "react";
 import { Activity, RefreshCw, Clock } from "lucide-react";
-import { dashApi } from "../api/dashboardApi";
+import { dashApi } from "../Api/dashboardApi";
 
 function fmtRelTime(iso) {
     if (!iso) return "";

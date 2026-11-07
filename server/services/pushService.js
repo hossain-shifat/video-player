@@ -39,7 +39,14 @@ const RETRY_DELAY_MS = 2000;
 const DEAD_TOKEN_CODES = new Set(["messaging/registration-token-not-registered", "messaging/invalid-registration-token", "messaging/mismatched-credential", "messaging/sender-id-mismatch"]);
 
 // Worth one retry: temporary FCM / network trouble.
-const TRANSIENT_CODES = new Set(["messaging/server-unavailable", "messaging/internal-error", "messaging/message-rate-exceeded", "messaging/device-message-rate-exceeded", "app/network-error", "app/network-timeout"]);
+const TRANSIENT_CODES = new Set([
+    "messaging/server-unavailable",
+    "messaging/internal-error",
+    "messaging/message-rate-exceeded",
+    "messaging/device-message-rate-exceeded",
+    "app/network-error",
+    "app/network-timeout",
+]);
 
 // A dry-run with a bogus token proves auth + reachability when FCM answers with one of these.
 const REACHABLE_CODES = new Set(["messaging/invalid-argument", "messaging/registration-token-not-registered", "messaging/invalid-registration-token"]);

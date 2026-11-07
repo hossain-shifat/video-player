@@ -11,30 +11,35 @@
 
 require("dotenv").config();
 
+// Reorganise server/data into folders BEFORE any store loads its file (idempotent, never overwrites, backs up first).
+require("./utils/system/dataMigration").run();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 
-const libraryRouter = require("./routes/library");
-const mediaRouter = require("./routes/media");
-const streamRouter = require("./routes/stream");
-const metadataRouter = require("./routes/metadata");
-const historyRouter = require("./routes/history");
-const watchTimeRouter = require("./routes/watchtime");
-const userRouter = require("./routes/user");
-const categoriesRouter = require("./routes/categories");
-const recommendationsRouter = require("./routes/recommendations");
-const adminDashboardRouter = require("./routes/adminDashboard");
-const liveRouter = require("./routes/live");
-const mediaInfoRouter = require("./routes/mediainfo");
-const permissionsRouter = require("./routes/permissions");
-const trailersRouter = require("./routes/trailers");
-const notificationsRouter = require("./routes/notifications");
-const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailerScheduler");
-const { startStorageMonitor, stopStorageMonitor } = require("./utils/storageMonitor");
+const libraryRouter = require("./routes/media/library");
+const mediaRouter = require("./routes/media/media");
+const streamRouter = require("./routes/streaming/stream");
+const metadataRouter = require("./routes/media/metadata");
+const historyRouter = require("./routes/user/history");
+const watchTimeRouter = require("./routes/user/watchtime");
+const userRouter = require("./routes/user/user");
+const categoriesRouter = require("./routes/media/categories");
+const recommendationsRouter = require("./routes/media/recommendations");
+const adminDashboardRouter = require("./routes/admin/adminDashboard");
+const liveRouter = require("./routes/live/live");
+const mediaInfoRouter = require("./routes/media/mediainfo");
+const permissionsRouter = require("./routes/user/permissions");
+const trailersRouter = require("./routes/trailers/trailers");
+const notificationsRouter = require("./routes/user/notifications");
+const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailers/trailerScheduler");
+const { startReviewIdRefresher, stopReviewIdRefresher } = require("./metadata/metadataStore");
+const { startCommunityFeedScheduler, stopCommunityFeedScheduler } = require("./controllers/media/metadataController");
+const { startStorageMonitor, stopStorageMonitor } = require("./utils/system/storageMonitor");
 const notificationService = require("./services/notificationService");
-const { startAccountPurgeScheduler, stopAccountPurgeScheduler } = require("./utils/userStore");
+const { startAccountPurgeScheduler, stopAccountPurgeScheduler } = require("./utils/user/userStore");
 const pushService = require("./services/pushService");
 
 // ─── Auth layer (additive — does not touch existing routers above) ─────────────
@@ -43,18 +48,18 @@ const adminRouter = require("./auth/routes/adminRoutes");
 const sessionRouter = require("./auth/routes/sessionRoutes");
 const streamStartRouter = require("./auth/routes/streamStartRoutes");
 
-const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/fileHelpers");
-const { startDaemon, stopDaemon } = require("./utils/hlsCleanup");
-const transcoderService = require("./utils/transcoderService");
-const { detect: detectHW, getSysInfoRoute } = require("./utils/hwAccel");
+const { VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS } = require("./utils/media/fileHelpers");
+const { startDaemon, stopDaemon } = require("./utils/streaming/hlsCleanup");
+const transcoderService = require("./utils/streaming/transcoderService");
+const { detect: detectHW, getSysInfoRoute } = require("./utils/streaming/hwAccel");
 
 const { authenticateJWT } = require("./auth/middleware/authenticateJWT");
 const { requireApprovedUser } = require("./auth/middleware/requireApprovedUser");
 const { requireRole } = require("./auth/middleware/requireRole");
 const { enforceEmailVerified } = require("./auth/middleware/enforceEmailVerified");
 
-const subtitleStore = require("./utils/subtitleStore");
-const subtitleWorker = require("./utils/subtitleWorker");
+const subtitleStore = require("./utils/subtitles/subtitleStore");
+const subtitleWorker = require("./utils/subtitles/subtitleWorker");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -131,7 +136,7 @@ app.get("/health", (req, res) => {
 // ─── Info ─────────────────────────────────────────────────────────────────────
 app.get("/api/info", async (req, res) => {
     try {
-        const foldersRaw = await fs.promises.readFile(path.join(__dirname, "data", "folders.json"), "utf-8");
+        const foldersRaw = await fs.promises.readFile(path.join(__dirname, "data", "library", "folders.json"), "utf-8");
         const folders = JSON.parse(foldersRaw);
         const hw = await detectHW().catch(() => ({ type: "unknown" }));
         res.json({
@@ -180,10 +185,16 @@ app.use((err, req, res, next) => {
 });
 
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
+let _shuttingDown = false;
 async function shutdown(signal) {
+    if (_shuttingDown) return;
+    _shuttingDown = true;
+    setTimeout(() => process.exit(0), 8000).unref(); // never hang on a stuck cleanup
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
     stopTrailerScheduler();
+    stopReviewIdRefresher();
+    stopCommunityFeedScheduler();
     stopStorageMonitor();
     stopAccountPurgeScheduler();
     notificationService.stopMaintenance();
@@ -195,21 +206,119 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-// ─── Crash prevention — keep server alive, don't lose sessions ────────────────
-// An unhandled promise rejection or uncaught exception must NOT kill the process.
-// Log the full stack so we can debug, but keep running.
-process.on("unhandledRejection", (reason, promise) => {
-    console.error("[Server] ⚠ Unhandled Promise Rejection:", reason);
-    if (reason instanceof Error) console.error(reason.stack);
-    // Do NOT call process.exit() — that would destroy all in-memory HLS sessions
-});
+// ─── Crash diagnostics + guard ────────────────────────────────────────────────
+// Policy unchanged: a stray exception / rejection must NOT kill the process (that would destroy every
+// live HLS session). Added on top:
+//   • every event is written to logs/crash.log with memory + session count + stack
+//   • logs/memory.log gets one line / 30 s — the LAST lines before a fatal OOM or native crash show what grew
+//   • event-loop blocks > 1 s are logged (finds sync work that freezes the whole server)
+//   • an exception STORM (10 non-transient errors in 60 s = state probably corrupt) exits with code 70
+//     so supervisor.js restarts clean instead of limping on
+//   • "process exit" line in crash.log: if the last line of crash.log is NOT an exit line, the process was
+//     hard-killed (out of memory / native crash / killed from outside)
+const LOG_DIR = path.join(__dirname, "logs");
+try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+} catch {}
+const CRASH_LOG = path.join(LOG_DIR, "crash.log");
+const MEMORY_LOG = path.join(LOG_DIR, "memory.log");
+const TRANSIENT_CODES = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED", "ETIMEDOUT", "ERR_STREAM_PREMATURE_CLOSE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END", "ERR_HTTP_HEADERS_SENT"]);
+const STORM_LIMIT = 10;
+const STORM_WINDOW_MS = 60_000;
+let _stormHits = [];
 
-process.on("uncaughtException", (err, origin) => {
-    console.error(`[Server] ⚠ Uncaught Exception (${origin}):`, err.message);
-    console.error(err.stack);
-    // Do NOT call process.exit() — that would destroy all in-memory HLS sessions
-    // Exception is logged; server continues running
+const toMB = (n) => Math.round(n / 1048576);
+function snapshotLine() {
+    const m = process.memoryUsage();
+    let sessions = "?";
+    try {
+        sessions = transcoderService.getSessionStats().length;
+    } catch {}
+    return `rss=${toMB(m.rss)}MB heap=${toMB(m.heapUsed)}/${toMB(m.heapTotal)}MB ext=${toMB(m.external)}MB sessions=${sessions} up=${Math.round(process.uptime())}s`;
+}
+function appendLog(file, text) {
+    try {
+        fs.appendFileSync(file, text + "\n");
+    } catch {}
+}
+function trimLog(file, maxBytes = 1_000_000) {
+    try {
+        if (fs.statSync(file).size > maxBytes) fs.renameSync(file, file + ".1");
+    } catch {}
+}
+function crashLog(kind, err) {
+    const code = err && err.code ? ` code=${err.code}` : "";
+    trimLog(CRASH_LOG);
+    appendLog(CRASH_LOG, `[${new Date().toISOString()}] ${kind}${code} | ${snapshotLine()}\n${err && err.stack ? err.stack : String(err)}\n`);
+}
+
+function onProcessError(kind, err) {
+    if (err && TRANSIENT_CODES.has(err.code)) {
+        console.warn(`[Server] ${kind} (transient ${err.code}) — ignored`); // client dropped / socket reset — harmless, not logged to file
+        return;
+    }
+    console.error(`[Server] ⚠ ${kind}:`, err && err.message ? err.message : err);
+    if (err && err.stack) console.error(err.stack);
+    crashLog(kind, err);
+
+    const now = Date.now();
+    _stormHits = _stormHits.filter((t) => now - t < STORM_WINDOW_MS);
+    _stormHits.push(now);
+    if (_stormHits.length >= STORM_LIMIT) {
+        const msg = `exception storm (${_stormHits.length} in ${STORM_WINDOW_MS / 1000}s) — exiting 70 for clean restart`;
+        console.error(`[Server] ✖ ${msg}`);
+        appendLog(CRASH_LOG, `[${new Date().toISOString()}] ${msg}`);
+        const hard = setTimeout(() => process.exit(70), 4000);
+        transcoderService
+            .killAllSessions()
+            .catch(() => {})
+            .finally(() => {
+                clearTimeout(hard);
+                process.exit(70);
+            });
+    }
+}
+process.on("unhandledRejection", (reason) => onProcessError("unhandledRejection", reason));
+process.on("uncaughtException", (err, origin) => onProcessError(`uncaughtException(${origin})`, err));
+process.on("exit", (code) => appendLog(CRASH_LOG, `[${new Date().toISOString()}] process exit code=${code} | ${snapshotLine()}`));
+appendLog(CRASH_LOG, `[${new Date().toISOString()}] boot pid=${process.pid} node=${process.version}`);
+
+// Memory trail + event-loop block detector (timers are unref'd — they never keep the process alive)
+setInterval(() => {
+    trimLog(MEMORY_LOG);
+    appendLog(MEMORY_LOG, `[${new Date().toISOString()}] ${snapshotLine()}`);
+}, 30_000).unref();
+let _lastTick = Date.now();
+let _lastLagLog = 0;
+setInterval(() => {
+    const now = Date.now();
+    const lag = now - _lastTick - 1000;
+    _lastTick = now;
+    if (lag > 1000 && now - _lastLagLog > 10_000) {
+        _lastLagLog = now;
+        appendLog(CRASH_LOG, `[${new Date(now).toISOString()}] EVENT-LOOP BLOCKED ~${lag}ms | ${snapshotLine()}`);
+    }
+}, 1000).unref();
+
+// Started under supervisor.js: shut down cleanly when it asks (works on Windows, unlike signals) or vanishes.
+process.on("message", (m) => {
+    if (m && m.type === "shutdown") shutdown("supervisor");
 });
+if (process.send) process.on("disconnect", () => shutdown("supervisor-disconnect"));
+
+// One feature failing to start must not stop the others from starting.
+function safeStart(name, fn) {
+    const fail = (err) => {
+        console.error(`[Boot] ${name} failed:`, err && err.message ? err.message : err);
+        crashLog(`boot:${name}`, err);
+    };
+    try {
+        const r = fn();
+        if (r && typeof r.catch === "function") r.catch(fail);
+    } catch (err) {
+        fail(err);
+    }
+}
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, "0.0.0.0", async () => {
@@ -222,31 +331,38 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    MediaInfo: /api/mediainfo`);
     console.log(`    Permissions: /api/permissions`);
     console.log(`    Trailers: /api/trailers`);
+    console.log(`    Popular:  /api/media/popular-reviews  /api/media/popular-discussions`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
-    startDaemon();
+    safeStart("hls-cleanup", () => startDaemon());
 
     // Keeps data/trailers.json fresh daily without any frontend request
-    startTrailerScheduler();
+    safeStart("trailer-scheduler", () => startTrailerScheduler());
+
+    // Re-checks TMDB every 3 days for NEW review ids and stores them in metadata.json (all reviews, not 10)
+    safeStart("review-id-refresher", () => startReviewIdRefresher());
+
+    // Builds the Popular Reviews / Popular Discussions feeds for Home (cached in metadata.json, rebuilt every 3 days)
+    safeStart("community-feeds", () => startCommunityFeedScheduler());
 
     // FCM push (no-op + log line if Firebase credentials aren't configured),
     // disk-space alerts, and daily pruning of old notifications / stale devices.
-    pushService.init();
-    startStorageMonitor();
-    notificationService.startMaintenance();
+    safeStart("push-service", () => pushService.init());
+    safeStart("storage-monitor", () => startStorageMonitor());
+    safeStart("notification-maintenance", () => notificationService.startMaintenance());
 
     // Permanently removes accounts whose 30-day recovery window has passed. DB-backed (users.purgeAt),
     // so it survives restarts; the timer is only the trigger. Idempotent.
-    startAccountPurgeScheduler();
+    safeStart("account-purge", () => startAccountPurgeScheduler());
 
     // Pre-warm hardware detection + FFmpeg path resolution at startup.
     // Without this, the first transcode session would block for 3-36s while
     // QSV/NVENC/VAAPI test encodes run sequentially.
-    transcoderService.warmup().catch(() => {});
+    safeStart("transcoder-warmup", () => transcoderService.warmup());
 
     // Start idle-session sweeper (kills abandoned sessions after SESSION_TIMEOUT_MS)
-    transcoderService.startSweeper();
+    safeStart("transcoder-sweeper", () => transcoderService.startSweeper());
 
     // ── Subtitle system ───────────────────────────────────────────────────────
     // NOTE: getAllCached(folders) below scans every configured folder, which
@@ -256,8 +372,8 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     try {
         await subtitleStore.init();
 
-        const { getAllCached } = require("./utils/mediaCache");
-        const { readFolders } = require("./controllers/libraryController");
+        const { getAllCached } = require("./utils/media/mediaCache");
+        const { readFolders } = require("./controllers/media/libraryController");
         const folders = await readFolders();
 
         console.log(`[Subtitle] Folders configured: ${folders.length}`);
@@ -269,7 +385,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
             // Live folder watching. watchAllFolders() exists in libraryController but was never called, so
             // files added to EXISTING libraries were never detected (no cache refresh, no "new media"
             // notification). Done after the first scan so the baseline of known files is warm.
-            require("./controllers/libraryController").watchAllFolders(folders);
+            require("./controllers/media/libraryController").watchAllFolders(folders);
 
             const allMediaIds = new Set(allMedia.map((f) => f.id));
 
@@ -283,8 +399,8 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
             // (see metadataStore.setCache), so meta.parsed is ALWAYS undefined
             // on a cache hit. season/episode/part must be re-derived locally
             // via parseFilename() — never read them off the TMDB metadata object.
-            const { getMetadata } = require("./utils/metadataStore");
-            const { parseFilename } = require("./utils/nameParser");
+            const { getMetadata } = require("./metadata/metadataStore");
+            const { parseFilename } = require("./metadata/nameParser");
 
             // Fetch metadata for all files in parallel (bounded) instead of
             // one-by-one — sequential awaiting over a large library could take

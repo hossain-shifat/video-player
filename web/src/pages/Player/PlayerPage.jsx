@@ -1,18 +1,18 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router";
-import { PlayerProvider, usePlayerState } from "./UsePlayerState";
-import VideoCore from "./VideoCore";
-import PlayerControls from "./PlayerControls";
-import PlayerGestures from "./PlayerGestures";
-import PlayerLock from "./PlayerLock";
-import PlayerOverlays, { useOverlay } from "./PlayerOverlays";
-import SubtitleRenderer from "./SubtitleRenderer";
-import { useProgress } from "./useProgress";
-import { getMediaById, getSubtitles } from "../../api/media";
-import { getResumePoint } from "../../api/history";
-import { resolvePlayback, heartbeatSession, stopSession } from "../../api/stream";
-import { useAuth } from "../../auth/AuthContext";
-import { useIsMobile } from "./useIsMobile";
+import { PlayerProvider, usePlayerState } from "../../Hooks/Player/usePlayerState";
+import VideoCore from "./Components/VideoCore";
+import PlayerControls from "./Components/PlayerControls";
+import PlayerGestures from "./Components/PlayerGestures";
+import PlayerLock from "./Components/PlayerLock";
+import PlayerOverlays, { useOverlay } from "./Components/PlayerOverlays";
+import SubtitleRenderer from "./Components/SubtitleRenderer";
+import { useProgress } from "../../Hooks/Player/useProgress";
+import { getMediaById, getSubtitles } from "../../Api/media";
+import { getResumePoint } from "../../Api/history";
+import { resolvePlayback, heartbeatSession, stopSession } from "../../Api/stream";
+import { useAuth } from "../../Auth/AuthContext";
+import { useIsMobile } from "../../Hooks/Player/useIsMobile";
 
 // ─── Mobile playback init state machine ──────────────────────────────────────
 // Module-scope constant (stable reference, never recreated) so effects that

@@ -1,4 +1,4 @@
-// web/src/dashboard/pages/DashOverview.jsx
+// web/src/Dashboard/Pages/DashOverview.jsx
 // Same API calls as before — GET /api/admin-dashboard/stats + activity + libraries
 // White-text design, premium dark cards, more informative layout
 
@@ -26,8 +26,8 @@ import {
     Play,
     Shield,
 } from "lucide-react";
-import { useAuth } from "../../auth/AuthContext";
-import { useDashboardStats, useDashboardActivity, useDashboardLibraries } from "../../hooks/useDashboard";
+import { useAuth } from "../Shared";
+import { useDashboardStats, useDashboardActivity, useDashboardLibraries } from "../Hooks/useDashboard";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

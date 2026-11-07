@@ -23,7 +23,7 @@ const { clearVerifiedCache } = require("../middleware/enforceEmailVerified");
 const { getShowcase, warm: warmShowcase } = require("../services/showcaseService");
 const { playbackDenial, STREAM_COOKIE } = require("../middleware/requirePlaybackAccess");
 const notificationService = require("../../services/notificationService");
-const { recoverAccount } = require("../../utils/userStore");
+const { recoverAccount } = require("../../utils/user/userStore");
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
 

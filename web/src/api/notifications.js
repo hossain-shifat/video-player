@@ -1,4 +1,4 @@
-// web/src/api/notifications.js
+// web/src/Api/notifications.js
 // Thin wrappers over /api/notifications — same `api` facade as every other module.
 
 import { api } from "./client";

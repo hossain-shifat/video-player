@@ -1,14 +1,17 @@
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useApi } from "../../Context/apiContext";
-import CategoryBar from "../../Components/CategoryBar";
+import CategoryBar from "../../Components/Category/CategoryBar";
 import { HomeMediaSections } from "./HomeMediaSections";
-import LiveMediaRow from "../../Components/LiveMediaRow";
-import ContinueWatchingRow from "../../Components/ContinueWatchingRow";
-import Recommendations from "../../Components/Recommendations";
-import TrailerRow from "../../Components/TrailerRow";
-import { useTrailers } from "../../Hooks/useTrailers";
-import { HomeHeroBanner } from "../../Components/Banner";
+import LiveMediaRow from "../../Components/Live/LiveMediaRow";
+import ContinueWatchingRow from "../../Components/Media/ContinueWatchingRow";
+import Recommendations from "../../Components/Media/Recommendations";
+import SmartShelves from "../../Components/Media/SmartShelves";
+import { PopularReviews } from "../../Components/Media/Reviews";
+import PopularDiscussions from "../../Components/Media/PopularDiscussions";
+import TrailerRow from "../../Components/Trailers/TrailerRow";
+import { useTrailers } from "../../Hooks/Query/useTrailers";
+import { HomeHeroBanner, SeasonalBanner } from "../../Components/Layout/Banner";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -54,9 +57,23 @@ const Home = () => {
 
             <HomeMediaSections movieItems={movieItems} seriesItems={seriesItems} animeItems={animeItems} onPlay={handlePlay} onWatchTrailer={handleTrailer} loading={isLoading} />
 
+            {/* Seasonal banner — hides itself when no season is active (see Banner.jsx BANNER 7) */}
+            <SeasonalBanner />
+
+            {/* Smart shelves #1 — taste-based, built from your history + library metadata */}
+            <SmartShelves variant="for-you" onPlay={handlePlay} onWatchTrailer={handleTrailer} />
+
             <Recommendations />
 
+            {/* Smart shelves #2 — discovery rules (hidden gems, quick watch, decades…) */}
+            <SmartShelves variant="discover" onPlay={handlePlay} onWatchTrailer={handleTrailer} />
+
             <TrailerRow title="New Trailers" items={newTrailers} loading={trailersLoading} />
+
+            {/* Plex-style community rows — each fetches its own cached feed and hides itself when empty */}
+            <PopularReviews />
+
+            <PopularDiscussions />
         </div>
     );
 };

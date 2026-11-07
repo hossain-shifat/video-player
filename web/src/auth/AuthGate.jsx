@@ -1,4 +1,4 @@
-// web/src/auth/AuthGate.jsx
+// web/src/Auth/AuthGate.jsx
 // Route guard for the normal application (layout route — renders <Outlet/>).
 //
 // Browsing needs: signed in + e-mail verified (+ not blocked / not expired).

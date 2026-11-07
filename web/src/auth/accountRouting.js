@@ -1,4 +1,4 @@
-// web/src/auth/accountRouting.js
+// web/src/Auth/accountRouting.js
 // Single source of truth for "where does this account belong right now?".
 // Used by the route guards AND by the login / register / verify pages so they never disagree
 // (which is what causes redirect loops).

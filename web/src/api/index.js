@@ -1,5 +1,5 @@
 // Single import point for all API services
-// Usage: import { getMedia, saveProgress, addToWatchlist } from "../api";
+// Usage: import { getMedia, saveProgress, addToWatchlist } from "./";
 
 export * from "./media";
 export * from "./library";
@@ -11,7 +11,3 @@ export { api } from "./client";
 export * from "./stream";
 export * from "./trailers";
 export * from "./notifications";
-
-export { default as PlayerPage } from "../Pages/Player/PlayerPage";
-export { PlayerProvider, usePlayerState } from "../Pages/Player/UsePlayerState";
-export { useProgress } from "../Pages/Player/useProgress";

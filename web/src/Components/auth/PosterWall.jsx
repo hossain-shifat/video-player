@@ -1,4 +1,4 @@
-// web/src/Components/auth/PosterWall.jsx
+// web/src/Components/Auth/PosterWall.jsx
 // Decorative, slowly drifting wall of posters for the auth screens.
 //   • Normally REAL, RECENT posters (random movies / series / anime fetched from TMDB by the server — never restricted
 //     content, never your library) with the same type badge the app's cards use, from GET /auth/showcase.
@@ -8,7 +8,7 @@
 // people who prefer reduced motion.
 
 import { useMemo, useState } from "react";
-import { useShowcasePosters } from "./useShowcasePosters";
+import { useShowcasePosters } from "../../Hooks/Auth/useShowcasePosters";
 
 const TOKENS = ["primary", "accent", "secondary"];
 

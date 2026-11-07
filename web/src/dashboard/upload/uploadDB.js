@@ -1,4 +1,4 @@
-// web/src/dashboard/upload/uploadDB.js
+// web/src/Dashboard/Upload/uploadDB.js
 //
 // IndexedDB persistence for the upload queue. Replaces the old
 // localStorage-only approach: localStorage is fine for a few small

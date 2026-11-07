@@ -1,4 +1,4 @@
-// web/src/providers/QueryProvider.jsx
+// web/src/Providers/QueryProvider.jsx
 // Wraps the app with TanStack Query client.
 // Configure global defaults: staleTime, retry strategy, error handling.
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Megaphone, Send, RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react";
-import { getAnnouncements, getAnnouncementRoutes, sendAnnouncement, getPushStatus, runPushDiagnostics } from "../../api/notifications";
+import { getAnnouncements, getAnnouncementRoutes, sendAnnouncement, getPushStatus, runPushDiagnostics } from "../Shared";
 
 // Admin → Announcements. Broadcasts a notification to users (always saved to
 // their history; pushed to their devices when they've enabled push).

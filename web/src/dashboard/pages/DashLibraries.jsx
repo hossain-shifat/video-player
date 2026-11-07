@@ -1,6 +1,6 @@
-// web/src/dashboard/pages/DashLibraries.jsx
+// web/src/Dashboard/Pages/DashLibraries.jsx
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
     HardDrive,
     RefreshCw,
@@ -12,26 +12,19 @@ import {
     Database,
     FileVideo,
     Layers,
-    WifiOff,
-    CheckCircle2,
-    Eye,
     RotateCcw,
-    Pencil,
     Trash2,
-    Check,
     Server,
-    TrendingUp,
-    Activity,
     Loader2,
     Info,
     SquarePen,
     Cloud,
 } from "lucide-react";
-import { dashApi } from "../api/dashboardApi";
-import { api } from "../../api/client";
-import { storageApi } from "../api/storageApi";
+import { dashApi } from "../Api/dashboardApi";
+import { api } from "../Shared";
+import { storageApi } from "../Api/storageApi";
 import { Link } from "react-router";
-import ConfirmModal, { ModalShell, ModalHeader, ModalContent, ModalSection, ModalRows, ModalKV, ModalStats, ModalCallout, ModalReview, ModalCopyButton, ModalFooter, ModalBadge, ModalButton, ModalMeter, PANEL, MODAL_INPUT, TONE } from "../components/ConfirmModal";
+import { LibraryDetailModal, LibraryEditModal, LibraryRemoveModal } from "../Components/DashModal";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,296 +35,11 @@ function fmtBytes(b) {
     return `${(b / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
-function fmtDate(iso) {
-    if (!iso) return "—";
-    return new Date(iso).toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-    });
-}
-
 function guessType(folder) {
     const s = (folder.label + " " + folder.path).toLowerCase();
     if (s.includes("anime")) return { label: "Anime", Icon: Swords, tone: "accent", badgeClass: "badge-accent", barClass: "progress-accent", dotClass: "bg-accent" };
     if (s.includes("series") || s.includes("tv") || s.includes("show")) return { label: "TV", Icon: Tv2, tone: "info", badgeClass: "badge-info", barClass: "progress-info", dotClass: "bg-info" };
     return { label: "Movies", Icon: Film, tone: "primary", badgeClass: "badge-primary", barClass: "progress-primary", dotClass: "bg-primary" };
-}
-
-// ─── Detail Modal (view only) ─────────────────────────────────────────────────
-function DetailModal({ lib, totalSize, onClose, onEdit }) {
-    if (!lib) return null;
-
-    const { label: typeLabel, Icon, tone } = guessType(lib);
-    const online = lib.status === "online";
-    const pct = totalSize > 0 ? Math.min(100, Math.round(((lib.sizeBytes || 0) / totalSize) * 100)) : 0;
-    const used = lib.size || fmtBytes(lib.sizeBytes);
-
-    return (
-        <ModalShell onClose={onClose} labelledBy="lib-detail-t">
-            <ModalHeader
-                id="lib-detail-t"
-                icon={Icon}
-                tone={online ? TONE[tone] : "text-base-content/50"}
-                title={lib.label || "Unnamed Library"}
-                subtitle={<span className="font-mono">{lib.path}</span>}
-                badges={
-                    <>
-                        <ModalBadge tone={tone}>{typeLabel}</ModalBadge>
-                        {online ? (
-                            <ModalBadge tone="success" icon={CheckCircle2}>
-                                Online
-                            </ModalBadge>
-                        ) : (
-                            <ModalBadge tone="error" icon={WifiOff}>
-                                Offline
-                            </ModalBadge>
-                        )}
-                    </>
-                }
-                onClose={onClose}
-            />
-            <ModalContent>
-                <ModalStats
-                    items={[
-                        { icon: FileVideo, tone: "text-info", label: "Media files", value: (lib.fileCount ?? 0).toLocaleString() },
-                        { icon: Database, tone: "text-success", label: "Storage used", value: used },
-                        { icon: TrendingUp, tone: "text-warning", label: "Share of total", value: `${pct}%` },
-                    ]}
-                />
-
-                <section className={`${PANEL} flex shrink-0 flex-col gap-3 px-4 py-4`}>
-                    <div className="flex items-center justify-between gap-3 text-[13px]">
-                        <span className="text-base-content">Disk usage share</span>
-                        <span className="text-xs text-base-content/60">
-                            {used} of {fmtBytes(totalSize)} total
-                        </span>
-                    </div>
-                    <ModalMeter value={pct} tone={online ? tone : "error"} label="Disk usage share" />
-                </section>
-
-                <ModalSection label="Library" grow>
-                    <ModalRows className="flex-1">
-                        <ModalKV icon={FolderOpen} tone="text-primary" label="Path" mono action={<ModalCopyButton text={lib.path} label="path" />}>
-                            <span title={lib.path}>{lib.path}</span>
-                        </ModalKV>
-                        <ModalKV icon={Icon} tone={TONE[tone]} label="Type">
-                            {typeLabel}
-                        </ModalKV>
-                        <ModalKV icon={Server} tone={online ? "text-success" : "text-error"} label="Status">
-                            <span className={online ? "text-success" : "text-error"}>{online ? "Online" : "Offline"}</span>
-                        </ModalKV>
-                        <ModalKV icon={Activity} label="Added">
-                            {fmtDate(lib.addedAt)}
-                        </ModalKV>
-                    </ModalRows>
-                </ModalSection>
-            </ModalContent>
-            <ModalFooter note="Click a library row to inspect it">
-                <ModalButton onClick={onClose}>Close</ModalButton>
-                <ModalButton
-                    variant="primary"
-                    className="gap-1.5"
-                    onClick={() => {
-                        onClose();
-                        onEdit(lib);
-                    }}>
-                    <SquarePen size={14} />
-                    Edit library
-                </ModalButton>
-            </ModalFooter>
-        </ModalShell>
-    );
-}
-
-// ─── Edit Modal (functional — calls PATCH /api/library/:id) ──────────────────
-function EditModal({ lib, onClose, onSaved }) {
-    const [label, setLabel] = useState(lib?.label || "");
-    const [path, setPath] = useState(lib?.path || "");
-    const [saving, setSaving] = useState(false);
-    const [err, setErr] = useState(null);
-
-    if (!lib) return null;
-
-    const changes = [
-        label.trim() !== (lib.label || "") && { name: "Name", from: lib.label || "—", to: label.trim() || "—" },
-        path.trim() !== (lib.path || "") && { name: "Path", from: lib.path || "—", to: path.trim() || "—" },
-    ].filter(Boolean);
-    const dirty = changes.length > 0;
-
-    async function handleSave() {
-        if (!label.trim() && !path.trim()) return;
-        setSaving(true);
-        setErr(null);
-        try {
-            const updates = {};
-            if (label.trim() !== lib.label) updates.label = label.trim();
-            if (path.trim() !== lib.path) updates.path = path.trim();
-            if (Object.keys(updates).length === 0) {
-                onClose();
-                return;
-            }
-
-            await api.patch(`/api/library/${lib.id}`, updates);
-            onSaved({ ...lib, ...updates });
-            onClose();
-        } catch (e) {
-            setErr(e.message || "Save failed");
-        } finally {
-            setSaving(false);
-        }
-    }
-
-    return (
-        <ModalShell onClose={onClose} busy={saving} labelledBy="lib-edit-t">
-            <ModalHeader id="lib-edit-t" icon={SquarePen} tone="text-warning" title="Edit Library" subtitle={lib.label || lib.path} onClose={onClose} busy={saving} />
-            <ModalContent>
-                <ModalSection label="Display name">
-                    <input
-                        id="edit-lib-label"
-                        name="label"
-                        type="text"
-                        data-autofocus
-                        value={label}
-                        onChange={(e) => setLabel(e.target.value)}
-                        className={`${MODAL_INPUT} !h-[42px] ${label.trim() !== (lib.label || "") ? "!border-primary/60" : ""}`}
-                        placeholder="e.g. My Movies"
-                    />
-                </ModalSection>
-                <div className="flex shrink-0 flex-col gap-2">
-                    <ModalSection label="Folder path">
-                        <input
-                            id="edit-lib-path"
-                            name="path"
-                            type="text"
-                            value={path}
-                            onChange={(e) => setPath(e.target.value)}
-                            className={`${MODAL_INPUT} !h-[42px] font-mono ${path.trim() !== (lib.path || "") ? "!border-primary/60" : ""}`}
-                            placeholder="e.g. D:\Media\Movies"
-                        />
-                    </ModalSection>
-                    <p className="text-xs text-base-content/55">Must be an absolute path accessible by the server.</p>
-                </div>
-
-                <ModalStats
-                    items={[
-                        { icon: FileVideo, tone: "text-info", label: "Files", value: lib.fileCount?.toLocaleString?.() ?? lib.fileCount ?? "—" },
-                        { icon: Database, tone: "text-success", label: "Size", value: lib.sizeBytes != null ? fmtBytes(lib.sizeBytes) : "—" },
-                    ]}
-                />
-
-                {err && (
-                    <ModalCallout tone="error" icon={AlertTriangle} compact className="mt-auto">
-                        {err}
-                    </ModalCallout>
-                )}
-                <ModalReview
-                    changes={changes}
-                    saved={[
-                        { name: "Name", value: lib.label },
-                        { name: "Path", value: lib.path },
-                    ]}
-                    className={err ? "" : "mt-auto"}
-                />
-            </ModalContent>
-            <ModalFooter
-                note={
-                    dirty ? (
-                        <span className="inline-flex items-center gap-1.5 text-warning">
-                            <span className="size-2 rounded-full bg-warning" />
-                            Unsaved changes
-                        </span>
-                    ) : (
-                        <span className="text-base-content/60">No changes yet</span>
-                    )
-                }>
-                <ModalButton onClick={onClose} disabled={saving}>
-                    Cancel
-                </ModalButton>
-                <ModalButton variant="primary" className="gap-1.5" onClick={handleSave} loading={saving} loadingText="Saving…" disabled={!dirty}>
-                    <Check size={14} />
-                    Save changes
-                </ModalButton>
-            </ModalFooter>
-        </ModalShell>
-    );
-}
-
-// ─── Remove Confirm Modal (local libraries, and cloud libraries with `cloud`) ─
-function RemoveModal({ lib, onClose, onRemoved, cloud = false }) {
-    const [removing, setRemoving] = useState(false);
-    const [err, setErr] = useState(null);
-    if (!lib) return null;
-
-    async function handleRemove() {
-        setRemoving(true);
-        setErr(null);
-        try {
-            if (cloud) await storageApi.removeLibrary(lib.id);
-            else await api.delete(`/api/library/${lib.id}`);
-            onRemoved(lib.id);
-            onClose();
-        } catch (e) {
-            setErr(e.message || "Remove failed");
-            setRemoving(false);
-        }
-    }
-
-    const where = cloud ? lib.provider || "the provider" : "disk";
-    const { label: typeLabel, Icon: TypeIcon, tone } = guessType(lib);
-
-    return (
-        <ConfirmModal
-            open
-            badge={false}
-            onClose={onClose}
-            onConfirm={handleRemove}
-            loading={removing}
-            error={err}
-            variant="danger"
-            title={`Remove ${lib.label || "library"}?`}
-            subtitle={cloud ? `${lib.provider || "Cloud"} library` : <span className="font-mono">{lib.path}</span>}
-            confirmIcon={Trash2}
-            confirmText="Remove library"
-            timeline={[
-                { icon: Layers, tone: "warning", title: "Removed", text: "The library disappears from FLUX." },
-                { icon: FolderOpen, tone: "info", title: "Scanning stops", text: cloud ? "FLUX stops reading this folder." : "FLUX no longer scans this folder." },
-                { icon: cloud ? Cloud : HardDrive, tone: "success", title: "Files stay safe", text: `Nothing on ${where} is deleted.` },
-            ]}
-            note={cloud ? `Files stay on ${where}; only the library link is removed.` : "Your media files on disk are never deleted."}
-            noteTone="success">
-            <ModalSection label="You are about to remove">
-                <div className={`${PANEL} flex items-center gap-4 px-4 py-3`}>
-                    <span className="grid size-10 shrink-0 place-items-center rounded-full border border-base-content/10 bg-base-200">
-                        <TypeIcon size={17} className={TONE[tone]} />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-base-content">{lib.label || "Unnamed library"}</p>
-                        <p className="truncate font-mono text-xs text-base-content/55">{cloud ? `${lib.provider || "Cloud"}` : lib.path}</p>
-                    </div>
-                    <ModalBadge tone={tone}>{typeLabel}</ModalBadge>
-                </div>
-            </ModalSection>
-            {cloud && (
-                <ModalStats
-                    items={[
-                        { icon: Cloud, tone: "text-info", label: "Provider", value: lib.provider || "Cloud" },
-                        { icon: Activity, tone: "text-warning", label: "Added", value: fmtDate(lib.addedAt) },
-                        { icon: Layers, tone: "text-success", label: "Type", value: lib.shared ? "Shared folder" : "Cloud library" },
-                    ]}
-                />
-            )}
-            {!cloud && (
-                <ModalStats
-                    items={[
-                        { icon: FileVideo, tone: "text-info", label: "Media files", value: (lib.fileCount ?? 0).toLocaleString() },
-                        { icon: Database, tone: "text-success", label: "Storage used", value: lib.size || fmtBytes(lib.sizeBytes) },
-                        { icon: lib.status === "online" ? CheckCircle2 : WifiOff, tone: lib.status === "online" ? "text-success" : "text-error", label: "Status", value: lib.status === "online" ? "Online" : "Offline" },
-                    ]}
-                />
-            )}
-        </ConfirmModal>
-    );
 }
 
 // ─── Rescan toast (calls POST /api/metadata/refresh-all) ─────────────────────
@@ -523,7 +231,7 @@ export default function DashLibraries() {
         <>
             {/* modals */}
             {detailLib && (
-                <DetailModal
+                <LibraryDetailModal
                     lib={detailLib}
                     totalSize={totalSize}
                     onClose={() => setDetailLib(null)}
@@ -533,9 +241,9 @@ export default function DashLibraries() {
                     }}
                 />
             )}
-            {editLib && <EditModal lib={editLib} onClose={() => setEditLib(null)} onSaved={handleSaved} />}
-            {removeLib && <RemoveModal lib={removeLib} onClose={() => setRemoveLib(null)} onRemoved={handleRemoved} />}
-            {cloudRemoveLib && <RemoveModal cloud lib={cloudRemoveLib} onClose={() => setCloudRemoveLib(null)} onRemoved={(id) => setCloudLibs((prev) => prev.filter((l) => l.id !== id))} />}
+            {editLib && <LibraryEditModal lib={editLib} onClose={() => setEditLib(null)} onSaved={handleSaved} />}
+            {removeLib && <LibraryRemoveModal lib={removeLib} onClose={() => setRemoveLib(null)} onRemoved={handleRemoved} />}
+            {cloudRemoveLib && <LibraryRemoveModal cloud lib={cloudRemoveLib} onClose={() => setCloudRemoveLib(null)} onRemoved={(id) => setCloudLibs((prev) => prev.filter((l) => l.id !== id))} />}
             <Toast toast={toast} />
 
             <div className="space-y-5">

@@ -1,4 +1,4 @@
-// web/src/api/profile.js
+// web/src/Api/profile.js
 // Profile CRUD — now uses the shared api client (Axios).
 // ImgBB avatar upload remains as native fetch (multipart form data).
 

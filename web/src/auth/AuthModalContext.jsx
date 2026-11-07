@@ -1,4 +1,4 @@
-// web/src/auth/AuthModalContext.jsx
+// web/src/Auth/AuthModalContext.jsx
 //
 // COMPATIBILITY SHIM. Sign-in / registration / verification are now full pages (/login, /register,
 // /verify-email) — there is no auth modal any more. Existing callers (Navbar, Settings…) still do

@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Tv, SlidersHorizontal } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
-import MediaCard from "../../../Components/MediaCard";
-import Search from "../../../Components/Search";
+import MediaCard from "../../../Components/Media/MediaCard";
+import Search from "../../../Components/Media/Search";
 
 export default function Series() {
     const { series, loading, errors } = useApi();

@@ -1,5 +1,5 @@
 import React from "react";
-import MediaRow from "../../Components/MediaRow";
+import MediaRow from "../../Components/Media/MediaRow";
 
 export const HomeMediaSections = ({ movieItems, seriesItems, animeItems, onPlay, onWatchTrailer, loading = false }) => {
     return (

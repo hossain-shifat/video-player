@@ -606,7 +606,7 @@ async function notifyApproved(user) {
         let libraries = [];
         try {
             const { parsePermissions } = require("./permissionService");
-            const { readFolders } = require("../../controllers/libraryController");
+            const { readFolders } = require("../../controllers/media/libraryController");
             const perms = parsePermissions(user.permissionsJson) || {};
             const folders = await readFolders();
             const ids = Array.isArray(perms.libraries) ? perms.libraries : [];

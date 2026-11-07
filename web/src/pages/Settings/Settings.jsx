@@ -2,21 +2,21 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router";
 import { User, Palette, Database, Play, Captions, Server, Info, ShieldCheck, Lock, Search, Check, CornerDownLeft, X, Bell } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
-import { useAuth } from "../../auth/AuthContext";
-import { useAuthModal } from "../../auth/AuthModalContext";
+import { useAuth } from "../../Auth/AuthContext";
+import { useAuthModal } from "../../Auth/AuthModalContext";
 
-import ProfileSection from "./ProfileSection";
-import AppearanceSection from "./AppearanceSection";
-import LibrarySection from "./LibrarySection";
-import RestrictionsSection from "./RestrictionsSection";
-import PlaybackSection from "./PlaybackSection";
-import SubtitlesSection from "./SubtitlesSection";
-import ServerSection from "./ServerSection";
-import PrivacySection, { DevicesSection } from "./PrivacySection";
-import NotificationsSection from "./NotificationsSection";
-import AboutSection from "./AboutSection";
-import AddFolderModal from "./AddFolderModal";
-import { FOCUS, PREFS_KEY, loadPrefs, savePrefs } from "./shared";
+import ProfileSection from "./Sections/ProfileSection";
+import AppearanceSection from "./Sections/AppearanceSection";
+import LibrarySection from "./Sections/LibrarySection";
+import RestrictionsSection from "./Sections/RestrictionsSection";
+import PlaybackSection from "./Sections/PlaybackSection";
+import SubtitlesSection from "./Sections/SubtitlesSection";
+import ServerSection from "./Sections/ServerSection";
+import PrivacySection, { DevicesSection } from "./Sections/PrivacySection";
+import NotificationsSection from "./Sections/NotificationsSection";
+import AboutSection from "./Sections/AboutSection";
+import AddFolderModal from "./Components/AddFolderModal";
+import { FOCUS, PREFS_KEY, loadPrefs, savePrefs } from "./Components/shared";
 
 // ─── Navigation (grouped, Plex-style) ─────────────────────────────────────────
 const GROUPS = [

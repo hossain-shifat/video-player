@@ -1,4 +1,4 @@
-// web/src/Components/auth/motion.js
+// web/src/Components/Auth/motion.js
 // Small Web-Animations helpers for the auth screens. They do nothing when the user prefers reduced motion.
 
 const reduced = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

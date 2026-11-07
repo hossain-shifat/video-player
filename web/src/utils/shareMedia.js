@@ -84,7 +84,7 @@ export async function shareMedia({ url, poster }) {
  * the exact same link.
  */
 export async function getStreamUrl(id) {
-    const { resolvePlayback } = await import("../api/stream");
+    const { resolvePlayback } = await import("../Api/stream");
     const info = await resolvePlayback(id);
     const url = info.mode === "hls" ? info.hlsUrl : info.streamUrl;
     if (!url) throw new Error("no playable stream url");

@@ -1,11 +1,11 @@
-// web/src/dashboard/DashboardLayout.jsx
+// web/src/Dashboard/DashboardLayout.jsx
 // Admin shell — inherits global theme/CSS, NO dashboard.css
 
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo, Tv, Cloud, Megaphone } from "lucide-react";
-import { useAuth } from "../auth/AuthContext";
-import Logo from "../Components/Logo";
+import { useAuth } from "./Shared";
+import { Logo } from "./Shared";
 
 const NAV = [
     {
