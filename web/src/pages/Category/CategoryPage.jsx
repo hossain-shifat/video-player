@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useParams } from "react-router";
 import { useApi } from "../../Context/apiContext";
-import MediaRow from "../../Components/MediaRow";
+import MediaRow from "../../Components/Media/MediaRow";
 
 const CategoryPage = () => {
     const { name } = useParams();

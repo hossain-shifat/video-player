@@ -405,7 +405,9 @@ async function _deliverPush(rows) {
 
     // Drop devices whose login session was revoked/logged out.
     const sessionIds = [...new Set(devices.map((d) => d.sessionId).filter(Boolean))];
-    const liveSessions = sessionIds.length ? new Set((await prisma.session.findMany({ where: { id: { in: sessionIds }, isActive: true, revokedAt: null }, select: { id: true } })).map((s) => s.id)) : new Set();
+    const liveSessions = sessionIds.length
+        ? new Set((await prisma.session.findMany({ where: { id: { in: sessionIds }, isActive: true, revokedAt: null }, select: { id: true } })).map((s) => s.id))
+        : new Set();
     const revoked = devices.filter((d) => d.sessionId && !liveSessions.has(d.sessionId));
     if (revoked.length) {
         await prisma.pushDevice.updateMany({ where: { id: { in: revoked.map((d) => d.id) } }, data: { isActive: false } }).catch(() => {});
@@ -469,7 +471,9 @@ async function verifyMetaColumn() {
         await prisma.notification.findFirst({ select: { id: true, metaJson: true } });
     } catch (err) {
         if (/metaJson/i.test(String(err.message))) {
-            console.error("[Notify] ✖ The Prisma client/DB doesn't know Notification.metaJson — new notifications will be saved WITHOUT details. In server/ run: npx prisma db push  &&  npx prisma generate  (then restart).");
+            console.error(
+                "[Notify] ✖ The Prisma client/DB doesn't know Notification.metaJson — new notifications will be saved WITHOUT details. In server/ run: npx prisma db push  &&  npx prisma generate  (then restart).",
+            );
         }
     }
 }
@@ -513,15 +517,27 @@ async function _mediaIds(meta) {
     const titles = Array.isArray(meta.titles) ? meta.titles.filter(Boolean) : [];
     if (!titles.length || !meta.libraryId) return [];
     try {
-        const { readFolders } = require("../controllers/libraryController");
-        const { getAllCached } = require("../utils/mediaCache");
-        const { parseFilename } = require("../utils/nameParser");
+        const { readFolders } = require("../controllers/media/libraryController");
+        const { getAllCached } = require("../utils/media/mediaCache");
+        const { parseFilename } = require("../metadata/nameParser");
         const folder = (await readFolders()).find((f) => f.id === meta.libraryId);
         if (!folder) return [];
         const { allMedia } = await getAllCached([folder]);
         const want = new Set(titles.map((t) => String(t).toLowerCase()));
-        const clean = (f) => String((() => { try { return parseFilename(f.name)?.title; } catch { return null; } })() || f.name).toLowerCase();
-        return allMedia.filter((f) => want.has(clean(f))).slice(0, 10).map((f) => f.id);
+        const clean = (f) =>
+            String(
+                (() => {
+                    try {
+                        return parseFilename(f.name)?.title;
+                    } catch {
+                        return null;
+                    }
+                })() || f.name,
+            ).toLowerCase();
+        return allMedia
+            .filter((f) => want.has(clean(f)))
+            .slice(0, 10)
+            .map((f) => f.id);
     } catch {
         return [];
     }
@@ -537,13 +553,13 @@ const _withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTime
 async function _describeFile(file) {
     let parsed = {};
     try {
-        parsed = require("../utils/nameParser").parseFilename(file.name) || {};
+        parsed = require("../metadata/nameParser").parseFilename(file.name) || {};
     } catch {
         /* keep {} */
     }
     let md = null;
     try {
-        md = await _withTimeout(require("../utils/metadataStore").getMetadata(file), 1500); // cached after the library rescan; bounded so the modal never hangs
+        md = await _withTimeout(require("../metadata/metadataStore").getMetadata(file), 1500); // cached after the library rescan; bounded so the modal never hangs
     } catch {
         /* no metadata yet */
     }
@@ -571,8 +587,8 @@ async function _mediaInfo(libraryId, ids) {
     try {
         if (!libraryId || !ids.length) return { available: [], items: [], libraryMissing: false };
         // lazy requires: libraryController requires this module, so a top-level require would be circular
-        const { readFolders } = require("../controllers/libraryController");
-        const { getAllCached } = require("../utils/mediaCache");
+        const { readFolders } = require("../controllers/media/libraryController");
+        const { getAllCached } = require("../utils/media/mediaCache");
         const folder = (await readFolders()).find((f) => f.id === libraryId);
         if (!folder) return { available: [], items: [], libraryMissing: true };
         const { allMedia } = await getAllCached([folder]);
@@ -691,7 +707,15 @@ async function _buildContext(row, meta, user, { sessionId } = {}) {
         }
 
         case TYPES.ACCOUNT:
-            return { kind: "account", event: meta.event || null, status: meta.status || null, accessType: meta.accessType || null, accessExpiresAt: meta.accessExpiresAt || null, statusChanged: !!meta.statusChanged, accessChanged: !!meta.accessChanged };
+            return {
+                kind: "account",
+                event: meta.event || null,
+                status: meta.status || null,
+                accessType: meta.accessType || null,
+                accessExpiresAt: meta.accessExpiresAt || null,
+                statusChanged: !!meta.statusChanged,
+                accessChanged: !!meta.accessChanged,
+            };
 
         case TYPES.RELEASE_REMINDER:
             return {
@@ -765,7 +789,7 @@ const crypto = require("crypto");
 // Folder/JSON-first like the other stores: no Prisma migration. One file, atomic writes, cached in memory.
 // item = { id, userId, mediaId: "tmdb-movie-123" | "tmdb-tv-456", mediaType: "movie" | "series",
 //          title, poster, releaseDate: "YYYY-MM-DD", createdAt, sentAt }
-const REMINDERS_FILE = process.env.REMINDERS_FILE || path.join(__dirname, "..", "data", "reminders.json");
+const REMINDERS_FILE = process.env.REMINDERS_FILE || path.join(__dirname, "..", "data", "users", "reminders.json");
 const SENT_KEEP_DAYS = 30;
 
 let reminderCache = null;
@@ -844,7 +868,6 @@ function pruneSent() {
     db.items = db.items.filter((r) => !r.sentAt || new Date(r.sentAt).getTime() > cutoff);
     if (db.items.length !== before) saveReminders();
 }
-
 
 const reminderStore = { find, countForUser, upsert, remove, due, markSent, dropUser, pruneSent };
 
@@ -928,10 +951,13 @@ function startMaintenance() {
     verifyMetaColumn();
     _maintBoot = setTimeout(pruneOldData, 2 * 60 * 1000);
     _maintBoot.unref();
-    _maintTimer = setInterval(() => {
-        pruneOldData();
-        reminderStore.pruneSent();
-    }, 24 * 60 * 60 * 1000);
+    _maintTimer = setInterval(
+        () => {
+            pruneOldData();
+            reminderStore.pruneSent();
+        },
+        24 * 60 * 60 * 1000,
+    );
     _maintTimer.unref();
     // Release reminders: shortly after boot, then every hour.
     _remBoot = setTimeout(checkReleaseReminders, 30 * 1000);

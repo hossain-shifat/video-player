@@ -1,8 +1,8 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Clock, Flame, ArrowUpRight, ArrowDownRight, Film, Tv, CheckCircle2, Activity, Minus, Repeat2, Sunrise, Sun, Sunset, Moon } from "lucide-react";
-import { useWatchTime } from "../../Hooks/useWatchTime";
-import { useAuth } from "../../auth/AuthContext";
+import { useWatchTime } from "../../Hooks/Query/useWatchTime";
+import { useAuth } from "../../Auth/AuthContext";
 
 // ─── formatting ───────────────────────────────────────────────────────────────
 function splitDur(sec) {

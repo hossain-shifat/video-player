@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Film, SlidersHorizontal } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
-import MediaCard from "../../../Components/MediaCard";
-import Search from "../../../Components/Search";
+import MediaCard from "../../../Components/Media/MediaCard";
+import Search from "../../../Components/Media/Search";
 
 export default function Movies() {
     const { movies, loading, errors } = useApi();

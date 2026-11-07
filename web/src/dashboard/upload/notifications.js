@@ -1,4 +1,4 @@
-// web/src/dashboard/upload/notifications.js
+// web/src/Dashboard/Upload/notifications.js
 //
 // Tray notifications for upload progress — deliberately the PLAIN
 // `Notification` constructor, not `ServiceWorkerRegistration.showNotification`.

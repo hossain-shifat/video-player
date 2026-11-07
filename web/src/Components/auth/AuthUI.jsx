@@ -1,4 +1,4 @@
-// web/src/Components/auth/AuthUI.jsx
+// web/src/Components/Auth/AuthUI.jsx
 // Small shared kit for the full-page auth screens (login / register / verify / status pages).
 // Everything is built from daisyUI/Tailwind theme tokens (base-*, primary, accent, error…) so the
 // pages follow whichever FLUX theme is active — Cinema, AMOLED, Slate or Light Studio.

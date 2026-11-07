@@ -1,4 +1,4 @@
-// web/src/api/auth.js
+// web/src/Api/auth.js
 // Auth API calls — uses the shared Axios instance for consistency.
 // Auth routes are intentionally separate: they carry their own credentials
 // (password, refreshToken) rather than Bearer tokens, so they bypass

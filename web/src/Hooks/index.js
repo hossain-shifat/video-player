@@ -1,11 +1,10 @@
-// web/src/hooks/index.js
+// web/src/Hooks/index.js
 // Barrel export for all TanStack Query hooks.
 
-export * from "./useMedia";
-export * from "./useLibrary";
-export * from "./useCategories";
-export * from "./useHistory";
-export * from "./useWatchlist";
-export * from "./useFavourites";
-export * from "./useDashboard";
-export * from "./useUser";
+export * from "./Query/useMedia";
+export * from "./Query/useLibrary";
+export * from "./Query/useCategories";
+export * from "./Query/useHistory";
+export * from "./Query/useWatchlist";
+export * from "./Query/useFavourites";
+export * from "./Query/useUser";

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import LegalLayout, { LegalSection } from "../../Layout/LegalLayout";
-import tmdbLogo from "../../assets/tmdb.svg";
+import tmdbLogo from "../../Assets/tmdb.svg";
 import {
     TOC,
     LICENSE_STATUS,

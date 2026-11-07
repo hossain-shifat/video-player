@@ -1,8 +1,8 @@
-// web/src/dashboard/pages/DashStreams.jsx
+// web/src/Dashboard/Pages/DashStreams.jsx
 import { useState, useEffect, useCallback } from "react";
 import { Radio, RefreshCw, Square, Clock } from "lucide-react";
-import { dashApi } from "../api/dashboardApi";
-import ConfirmModal from "../components/ConfirmModal";
+import { dashApi } from "../Api/dashboardApi";
+import { ConfirmModal, DASH_MODALS } from "../Components/DashModal";
 
 function fmtRelTime(iso) {
     if (!iso) return "";
@@ -140,6 +140,7 @@ export default function DashStreams() {
             )}
 
             <ConfirmModal
+                modal={DASH_MODALS.streamStop}
                 open={!!confirm}
                 onClose={() => !stopping && setConfirm(null)}
                 onConfirm={handleStopConfirmed}

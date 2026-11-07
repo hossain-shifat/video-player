@@ -5,10 +5,10 @@ import { RouterProvider } from "react-router";
 import { router } from "./Routes/Routes.jsx";
 import { ThemeProvider } from "./Context/themeContext.jsx";
 import { ApiProvider } from "./Context/apiContext.jsx";
-import { AuthProvider } from "./auth/AuthContext.jsx";
-import { AuthModalProvider } from "./auth/AuthModalContext.jsx";
-import { QueryProvider } from "./providers/QueryProvider.jsx";
-import { listenToServiceWorker } from "./utils/push.js";
+import { AuthProvider } from "./Auth/AuthContext.jsx";
+import { AuthModalProvider } from "./Auth/AuthModalContext.jsx";
+import { QueryProvider } from "./Providers/QueryProvider.jsx";
+import { listenToServiceWorker } from "./Utils/push.js";
 
 // Clicking a system (push) notification while FLUX is already open: route inside the SPA —
 // no reload, so playback isn't interrupted. The bell opens the details modal for ?n=<id>.

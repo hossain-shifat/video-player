@@ -1,10 +1,10 @@
-// web/src/auth/AuthContext.jsx
+// web/src/Auth/AuthContext.jsx
 // Auth state, token management, session persistence.
 // Uses localStorage for token storage (simple, matches existing FLUX pattern).
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { authApi } from "../api/auth";
-import { registerAuthProvider, setAuthLoading } from "../api/client";
+import { authApi } from "../Api/auth";
+import { registerAuthProvider, setAuthLoading } from "../Api/client";
 
 const AuthContext = createContext(null);
 

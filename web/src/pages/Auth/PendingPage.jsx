@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Hourglass } from "lucide-react";
-import { useAuth } from "../../auth/AuthContext";
-import { AuthPanel, AuthBadge, AuthHeading } from "../../Components/auth/AuthUI";
+import { useAuth } from "../../Auth/AuthContext";
+import { AuthPanel, AuthBadge, AuthHeading } from "../../Components/Auth/AuthUI";
 
 // Optional status page. Pending users are NOT forced here — they can browse FLUX — but it explains
 // where their account stands and is linked from the approval flow.

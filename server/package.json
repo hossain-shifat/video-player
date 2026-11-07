@@ -4,8 +4,9 @@
     "description": "Self-hosted media player backend",
     "main": "server.js",
     "scripts": {
-        "start": "node server.js",
-        "dev": "nodemon server.js",
+        "start": "node supervisor.js",
+        "dev": "nodemon --exec \"node supervisor.js\"",
+        "dev:raw": "nodemon server.js",
         "test": "node --test \"tests/*.test.js\""
     },
     "dependencies": {

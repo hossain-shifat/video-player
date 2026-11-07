@@ -1,8 +1,8 @@
 import { useMemo, useRef, useEffect } from "react";
 import { useApi } from "../../Context/apiContext";
-import { useRecommendations, useRefreshRecommendations } from "../../Hooks/useRecommendations";
-import MediaCard from "../../Components/MediaCard";
-import { RecommendationsHeroBanner, RecommendationsTonightsPicksBanner } from "../../Components/Banner";
+import { useRecommendations, useRefreshRecommendations } from "../../Hooks/Query/useRecommendations";
+import MediaCard from "../../Components/Media/MediaCard";
+import { RecommendationsHeroBanner, RecommendationsTonightsPicksBanner } from "../../Components/Layout/Banner";
 
 // ============================================================================
 // RecommendationsPage.jsx — multi-section discovery page.

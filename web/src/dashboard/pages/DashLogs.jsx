@@ -1,9 +1,9 @@
-// web/src/dashboard/pages/DashLogs.jsx
+// web/src/Dashboard/Pages/DashLogs.jsx
 // Server: { total, logs: [{ id, ts, level, category, message, meta? }] }
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { RefreshCw, Download, ChevronDown, ChevronRight, Terminal } from "lucide-react";
-import { dashApi } from "../api/dashboardApi";
+import { dashApi } from "../Api/dashboardApi";
 
 // ── palette ───────────────────────────────────────────────────────────────────
 // info  → amber/gold    — eye-catching, warm, readable

@@ -2,9 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { ArrowLeft, Search as SearchIcon, X, SlidersHorizontal, LayoutGrid, List as ListIcon, Tv, Loader2, ChevronDown } from "lucide-react";
-import LiveCard from "../../Components/LiveCard";
-import { getLiveChannels, getLiveCategories, getFeaturedEvents } from "../../api/live";
-import { useAuth } from "../../auth/useAuth";
+import LiveCard from "../../Components/Live/LiveCard";
+import { getLiveChannels, getLiveCategories, getFeaturedEvents } from "../../Api/live";
+import { useAuth } from "../../Hooks/Auth/useAuth";
 
 // Same Settings → Live tab pref Live.jsx reads — "flux-prefs" localStorage key.
 function getLiveChannelMode() {

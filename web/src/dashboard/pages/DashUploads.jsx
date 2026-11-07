@@ -1,4 +1,4 @@
-// web/src/dashboard/pages/DashUploads.jsx
+// web/src/Dashboard/Pages/DashUploads.jsx
 // Upload manager — drag/drop files to a media library folder (local or cloud)
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
@@ -7,7 +7,6 @@ import {
     X,
     CheckCircle,
     AlertTriangle,
-    FolderOpen,
     Video,
     Loader2,
     Plus,
@@ -20,7 +19,6 @@ import {
     ListChecks,
     History,
     XCircle,
-    Info,
     Pause,
     Play,
     FileUp,
@@ -29,61 +27,13 @@ import {
     BellOff,
     Bug,
 } from "lucide-react";
-import { api } from "../../api/client";
-import { storageApi } from "../api/storageApi";
-import { uploadManager, CHUNK_SIZE } from "../upload/uploadManager";
-import { uploadDB } from "../upload/uploadDB";
-import { useUploadQueue } from "../upload/useUploadQueue";
+import { api } from "../Shared";
+import { storageApi } from "../Api/storageApi";
+import { uploadManager, CHUNK_SIZE } from "../Upload/uploadManager";
+import { uploadDB } from "../Upload/uploadDB";
+import { useUploadQueue } from "../Hooks/useUploadQueue";
 import { UppyContextProvider, useFileInput } from "@uppy/react";
-
-// ─── Inline modal (replaces native alert()/confirm()) ──────────────────────
-// Defined directly in this file — no separate imported component — so there's
-// no cross-file import path to get wrong.
-function useAppModal() {
-    const [modal, setModal] = useState(null); // { type: 'confirm' | 'notice', message, tone, resolve }
-
-    const confirm = useCallback((message) => {
-        return new Promise((resolve) => setModal({ type: "confirm", message, resolve }));
-    }, []);
-
-    // tone: 'error' (default) | 'success' | 'info'
-    const notify = useCallback((message, tone = "error") => {
-        return new Promise((resolve) => setModal({ type: "notice", message, tone, resolve }));
-    }, []);
-
-    function close(result) {
-        if (modal?.resolve) modal.resolve(result);
-        setModal(null);
-    }
-
-    const ToneIcon = modal?.tone === "success" ? CheckCircle : modal?.tone === "info" ? Info : AlertTriangle;
-    const toneClass = modal?.tone === "success" ? "text-success" : modal?.tone === "info" ? "text-primary" : "text-error";
-
-    const modalElement = modal ? (
-        <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/50 p-4" onClick={() => close(false)}>
-            <div className="bg-base-200 rounded-md shadow-xl w-full max-w-sm border border-base-content/10" onClick={(e) => e.stopPropagation()}>
-                <div className="p-5 space-y-4">
-                    <div className="flex items-start gap-3">
-                        {modal.type === "notice" && <ToneIcon size={20} className={`${toneClass} shrink-0 mt-0.5`} />}
-                        <p className="text-sm text-base-content/90 leading-relaxed">{modal.message}</p>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                        {modal.type === "confirm" && (
-                            <button onClick={() => close(false)} className="btn btn-sm btn-ghost rounded-md border-none outline-none focus:outline-none">
-                                Cancel
-                            </button>
-                        )}
-                        <button onClick={() => close(true)} className={`btn btn-sm rounded-md border-none outline-none focus:outline-none ${modal.type === "confirm" ? "btn-primary" : "btn-neutral"}`}>
-                            {modal.type === "confirm" ? "Confirm" : "OK"}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    ) : null;
-
-    return { modalElement, confirm, notify };
-}
+import { useAppModal } from "../Components/DashModal";
 
 function fmtBytes(b) {
     if (!b) return "0 B";
@@ -440,7 +390,7 @@ export default function DashUploads() {
 }
 
 function DashUploadsInner() {
-    const { modalElement, confirm: confirmModal, notify } = useAppModal();
+    const { modalElement, confirm: confirmModal, notify } = useAppModal("uploads");
     const [tab, setTab] = useState("session"); // 'session' (Uploads) | 'all' (All Uploads)
 
     // ── TEMPORARY CRASH DIAGNOSTIC — remove once the real bug is found ──────
@@ -723,7 +673,21 @@ function DashUploadsInner() {
     useEffect(() => uploadManager.onComplete(() => loadUploadHistory()), [loadUploadHistory]);
 
     async function deleteUploadedEntry(entry) {
-        const ok = await confirmModal(`Permanently delete "${entry.name}" from ${entry.provider}? This removes the actual file, not just this record.`);
+        const ok = await confirmModal(`Permanently delete "${entry.name}" from ${entry.provider}? This removes the actual file, not just this record.`, "danger", {
+            title: "Delete uploaded file?",
+            subtitle: "Cloud file",
+            factsLabel: "You are about to delete",
+            facts: [
+                { label: "File", icon: Video, tone: "text-info", value: entry.name, mono: true },
+                { label: "Provider", icon: Cloud, tone: "text-info", value: PROVIDER_LABELS[entry.provider] || entry.provider },
+            ],
+            timeline: [
+                { icon: Trash2, tone: "text-error", title: "File removed", text: "The actual file is deleted from the provider, not just this record." },
+                { icon: AlertTriangle, tone: "text-warning", title: "Can't be undone", text: "There is no recycle bin here, the file is gone for good." },
+            ],
+            confirmIcon: Trash2,
+            confirmText: "Delete file",
+        });
         if (!ok) return;
         setDeletingRef(entry.ref);
         try {

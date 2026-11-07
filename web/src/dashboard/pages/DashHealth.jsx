@@ -1,10 +1,10 @@
-// web/src/dashboard/pages/DashHealth.jsx
+// web/src/Dashboard/Pages/DashHealth.jsx
 // GET /api/admin-dashboard/health
 // Live polling · sparklines · streaming engine info · codec matrix · HW priority
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Cpu, HardDrive, Server, RefreshCw, Wifi, CheckCircle, AlertTriangle, XCircle, Activity, Zap, Clock, Database, Film, Play, Radio, Shield } from "lucide-react";
-import { dashApi } from "../api/dashboardApi";
+import { dashApi } from "../Api/dashboardApi";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const HISTORY_LEN = 40;

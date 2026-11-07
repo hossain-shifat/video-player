@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Film, Tv, Sword, Search, X, ChevronDown, ChevronLeft, ChevronRight, LayoutGrid, AlertTriangle, BookOpen, Check, SlidersHorizontal } from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
-import MediaCard from "../../../Components/MediaCard";
+import MediaCard from "../../../Components/Media/MediaCard";
 
 const PER_PAGE = 40;
 const GRID = "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7 gap-3.5";

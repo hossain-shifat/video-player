@@ -1,4 +1,4 @@
-// web/src/auth/GuestOnly.jsx
+// web/src/Auth/GuestOnly.jsx
 // Wraps /login and /register: a signed-in user has no business there, so send them to wherever
 // their account belongs (verify-email / access pages / the page they came from / Home).
 

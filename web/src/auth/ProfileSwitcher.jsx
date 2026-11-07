@@ -4,10 +4,10 @@
 
 import { useState, useRef } from "react";
 import { User, Plus, Pencil, Trash2, Check, X, Upload, LogOut } from "lucide-react";
-import { Modal } from "../../Pages/Settings/shared";
-import { useAuth } from "../../auth/AuthContext";
-import { useProfile } from "../../auth/ProfileContext";
-import AvatarUpload from "./AvatarUpload";
+import { Modal } from "../Pages/Settings/Components/shared";
+import { useAuth } from "./AuthContext";
+import { useProfile } from "./ProfileContext";
+import AvatarUpload from "../Components/Auth/AvatarUpload";
 
 function ProfileAvatar({ profile, size = "md" }) {
     const sizeClasses = {

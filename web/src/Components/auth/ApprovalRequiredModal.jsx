@@ -1,4 +1,4 @@
-// web/src/Components/auth/ApprovalRequiredModal.jsx
+// web/src/Components/Auth/ApprovalRequiredModal.jsx
 // Shown when an account that is not yet approved tries to start playback.
 // Native <dialog> → focus trap, Escape to close, aria-modal, backdrop — without extra dependencies.
 

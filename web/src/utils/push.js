@@ -1,4 +1,4 @@
-// web/src/utils/push.js
+// web/src/Utils/push.js
 //
 // Browser side of FCM push. Firebase is used ONLY to obtain a registration
 // token (firebase/messaging); the token is then registered with FLUX's own
@@ -9,7 +9,7 @@
 // Service Worker + Push API support, and a user gesture for the permission
 // prompt — enablePush() must be called from a click handler.
 
-import { registerPushDevice, unregisterPushToken } from "../api/notifications";
+import { registerPushDevice, unregisterPushToken } from "../Api/notifications";
 
 const SW_URL = "/flux-push-sw.js";
 const STORE_KEY = "flux-push";

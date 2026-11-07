@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Tv, Search, ChevronLeft, ChevronRight, Radio, Play } from "lucide-react";
-import { getLiveChannels, getLiveCategories } from "../../../api/live";
-import { useAuth } from "../../../auth/useAuth";
+import { getLiveChannels, getLiveCategories } from "../../../Api/live";
+import { useAuth } from "../../../Hooks/Auth/useAuth";
 
 const SEARCH_DEBOUNCE_MS = 350;
 const ROW_LIMIT = 20;

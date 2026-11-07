@@ -4,9 +4,9 @@
 
 import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { useAuth } from "../../auth/AuthContext";
-import { postAuthPath } from "../../auth/accountRouting";
-import { AuthPanel } from "../../Components/auth/AuthUI";
+import { useAuth } from "../../Auth/AuthContext";
+import { postAuthPath } from "../../Auth/accountRouting";
+import { AuthPanel } from "../../Components/Auth/AuthUI";
 
 export default function OAuthCallbackPage() {
     const navigate = useNavigate();

@@ -1,19 +1,50 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router";
-import { Play, Star, Film, Tv, Clock, Calendar, Globe, Award, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Layers, Info, Hash, Clapperboard, Volume2, BarChart2, PlayCircle, MoreVertical, Link2, Languages, MapPin, DollarSign, CalendarClock, RefreshCw, Plus, BellRing } from "lucide-react";
+import {
+    Play,
+    Star,
+    Film,
+    Tv,
+    Clock,
+    Calendar,
+    Globe,
+    Award,
+    ChevronDown,
+    ChevronUp,
+    ChevronLeft,
+    ChevronRight,
+    Layers,
+    Info,
+    Hash,
+    Clapperboard,
+    Volume2,
+    BarChart2,
+    PlayCircle,
+    MoreVertical,
+    Link2,
+    Languages,
+    MapPin,
+    DollarSign,
+    CalendarClock,
+    RefreshCw,
+    Plus,
+    BellRing,
+    Heart,
+    Check,
+} from "lucide-react";
 import { useApi } from "../../../Context/apiContext";
-import { useSeasonDetail } from "../../../Hooks/useMedia";
-import { useHistory } from "../../../Hooks/useHistory";
-import { getMediaById } from "../../../api";
-import { api } from "../../../api/client";
-import MediaDetailsSkeleton from "../../../Components/MediaDetailsSkeleton";
-import MediaCard, { useCountdown } from "../../../Components/MediaCard";
-import RelatedSections from "../../../Components/RelatedSections";
-import { assets } from "../../../assets/assets";
-import CastAndCrew from "../../../Components/CastAndCrew";
-import Reviews from "../../../Components/Reviews";
-import FloatingActionMenu from "../../../Components/FloatingActionMenu";
-import { TrailerModal, NotInLibraryModal, RemindMe } from "../../../Components/Modal";
+import { useSeasonDetail } from "../../../Hooks/Query/useMedia";
+import { useHistory } from "../../../Hooks/Query/useHistory";
+import { getMediaById } from "../../../Api";
+import { api } from "../../../Api/client";
+import MediaDetailsSkeleton from "../../../Components/Media/MediaDetailsSkeleton";
+import MediaCard, { useCountdown } from "../../../Components/Media/MediaCard";
+import RelatedSections from "../../../Components/Media/RelatedSections";
+import { assets } from "../../../Assets/assets";
+import CastAndCrew from "../../../Components/Media/CastAndCrew";
+import Reviews from "../../../Components/Media/Reviews";
+import FloatingActionMenu from "../../../Components/Layout/FloatingActionMenu";
+import { TrailerModal, NotInLibraryModal, RemindMe } from "../../../Components/Layout/Modal";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -183,11 +214,8 @@ function Divider() {
 function RatingBar({ rating }) {
     const pct = Math.round((rating / 10) * 100);
     return (
-        <div className="flex items-center gap-2">
-            <div className="flex-1 h-1.5 bg-base-300 rounded-full overflow-hidden">
-                <div className="h-full bg-warning rounded-full" style={{ width: `${pct}%` }} />
-            </div>
-            <span className="text-xs text-base-content/80 w-6 text-right">{pct}%</span>
+        <div className="h-1.5 bg-base-300 rounded-full overflow-hidden">
+            <div className="h-full bg-warning rounded-full" style={{ width: `${pct}%` }} />
         </div>
     );
 }
@@ -651,7 +679,7 @@ export default function MediaDetails() {
             { replace: true },
         );
 
-    const { movies, series, anime } = useApi();
+    const { movies, series, anime, isInWatchlist, toggleWatchlist, isFavourite, toggleFavourite } = useApi();
 
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -847,6 +875,13 @@ export default function MediaDetails() {
     const financials = m?.financials ?? null;
     const episodeSchedule = m?.episodeSchedule ?? null;
 
+    // ── Hero redesign: quality label + watchlist/favourite ──
+    const qualityLabel = [item?.parsed?.resolution ?? item?.parsed?.quality, item?.parsed?.source].filter(Boolean).join(" ") || null;
+    const favId = item?.id ?? decodedId;
+    const watchlisted = isInWatchlist(favId);
+    const favourited = isFavourite(favId);
+    const listPayload = { name: m?.title || item?.title || item?.name, poster: m?.poster ?? null, type: isSeries ? "series" : "movie", year: m?.year ?? null, rating: m?.rating ?? null };
+
     const overviewLong = overview && overview.length > 220;
 
     const parsedLangs = item?.parsed?.languages;
@@ -931,12 +966,13 @@ export default function MediaDetails() {
                     <div className="absolute inset-0 bg-linear-to-r from-base-100/95 via-base-100/40 to-transparent hidden sm:block" />
                 </div>
 
-                {/* Hero content */}
+                {/* Hero content — mobile: poster + title block side by side, everything else full width.
+                    sm+: poster left (spans both rows), info stacked on the right. */}
                 <div className="relative px-4 sm:px-6 md:px-8 lg:px-12 pt-6 sm:pt-10 pb-8" style={{ zIndex: 1 }}>
-                    <div className="flex flex-col sm:flex-row gap-5 sm:gap-8 max-w-6xl">
+                    <div className="grid grid-cols-[8rem_1fr] sm:grid-cols-[11rem_1fr] md:grid-cols-[13rem_1fr] lg:grid-cols-[14rem_1fr] sm:grid-rows-[auto_1fr] gap-x-4 sm:gap-x-8 max-w-6xl">
                         {/* ── Poster ──────────────────────────────────────── */}
-                        <div className="shrink-0 mx-auto sm:mx-0 w-32 xs:w-36 sm:w-44 md:w-52 lg:w-56">
-                            <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl bg-base-300 transition-transform duration-300">
+                        <div className="sm:row-span-2 min-w-0">
+                            <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl bg-base-300">
                                 {poster ? (
                                     <img src={poster} alt={title} className="w-full h-full object-cover" />
                                 ) : (
@@ -946,51 +982,43 @@ export default function MediaDetails() {
                                 )}
                             </div>
 
-                            {/* Rating below poster */}
+                            {/* Rating below poster (sm+ only — on phones it sits under the overview) */}
                             {rating != null && (
-                                <div className="mt-3 px-1">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <div className="flex items-center gap-1">
-                                            <Star size={13} className="text-warning fill-warning" />
-                                            <span className="text-sm font-bold text-base-content">{rating.toFixed(1)}</span>
-                                            <span className="text-xs text-base-content/72">/ 10</span>
+                                <div className="hidden sm:block mt-3 px-0.5">
+                                    <div className="flex items-end justify-between mb-1.5">
+                                        <div className="flex items-baseline gap-1">
+                                            <span className="text-base font-bold text-base-content">{rating.toFixed(1)}</span>
+                                            <span className="text-xs text-base-content/60">/ 10</span>
                                         </div>
-                                        {m?.votes && <span className="text-[10px] text-base-content/66">{fmtVotes(m.votes)} votes</span>}
+                                        {m?.votes ? <span className="text-[11px] text-base-content/60">{fmtVotes(m.votes)} votes</span> : null}
                                     </div>
                                     <RatingBar rating={rating} />
                                 </div>
                             )}
                         </div>
 
-                        {/* ── Info panel ──────────────────────────────────── */}
-                        <div className="flex-1 min-w-0">
-                            {/* Type + Status + Part badges */}
-                            <div className="flex flex-wrap gap-1.5 mb-2">
-                                <Badge className={isAnime ? "bg-secondary/20 text-secondary" : isSeries ? "bg-accent/20 text-accent" : "bg-primary/20 text-primary"}>
-                                    {isAnime ? <Clapperboard size={11} /> : isSeries ? <Tv size={11} /> : <Film size={11} />}
+                        {/* ── Title block ─────────────────────────────────── */}
+                        <div className="min-w-0 self-start">
+                            <div className="flex flex-wrap gap-1.5 mb-2.5">
+                                <Badge className={isAnime ? "bg-secondary text-secondary-content" : isSeries ? "bg-accent text-accent-content" : "bg-primary text-primary-content"}>
                                     {isAnime ? "Anime" : isSeries ? "Series" : "Movie"}
                                 </Badge>
-                                {m?.status && <Badge className="bg-base-300 text-base-content/82">{m.status}</Badge>}
+                                {m?.status && <Badge className="bg-base-300/80 text-base-content/80 border border-white/5">{m.status}</Badge>}
                                 {certification && (
-                                    <Badge className="bg-base-300 text-base-content/82 border border-white/10" title={certification.meaning || undefined}>
-                                        <Award size={11} /> {certification.certification}
+                                    <Badge className="bg-base-300/80 text-base-content/80 border border-white/5" title={certification.meaning || undefined}>
+                                        {certification.certification}
                                     </Badge>
                                 )}
-                                {partNum != null && (
-                                    <Badge className="bg-secondary/20 text-secondary">
-                                        <Layers size={11} /> Part {partNum}
-                                    </Badge>
-                                )}
-                                {audioLabel && (
-                                    <Badge className="bg-success/15 text-success">
-                                        <Volume2 size={11} /> {audioLabel}
-                                    </Badge>
-                                )}
+                                {partNum != null && <Badge className="bg-secondary/20 text-secondary">Part {partNum}</Badge>}
+                                {heroLang && <Badge className="bg-base-300/80 text-success border border-white/5">{heroLang}</Badge>}
+                                {audioLabel && <Badge className="bg-success/15 text-success">{audioLabel}</Badge>}
+                                {qualityLabel && <Badge className="bg-base-300/80 text-base-content/80 border border-white/5">{qualityLabel}</Badge>}
                             </div>
 
-                            {/* Title */}
                             {activeSeason && (
-                                <button onClick={() => setSelectedSeasonNum(null)} className="text-xs text-base-content/72 hover:text-primary transition-colors mb-1 flex items-center gap-1">
+                                <button
+                                    onClick={() => setSelectedSeasonNum(null)}
+                                    className="text-xs text-base-content/72 hover:text-primary transition-colors mb-1 flex items-center gap-1 cursor-pointer">
                                     <ChevronLeft size={12} />
                                     {m?.title || item?.title || item?.name}
                                 </button>
@@ -1007,52 +1035,39 @@ export default function MediaDetails() {
                             {originalTitle && <p className="text-xs text-base-content/66 mb-2 font-medium">{originalTitle}</p>}
                             {tagline && <p className="text-sm text-base-content/80 italic mb-3">{tagline}</p>}
 
-                            {/* Meta row */}
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3 text-sm text-base-content/86">
-                                {(releaseDateFmt || year) && (
-                                    <span className="flex items-center gap-1">
-                                        <Calendar size={13} className="shrink-0 text-base-content/72" />
-                                        {releaseDateFmt ?? year}
-                                    </span>
-                                )}
-                                {runtime && (
-                                    <span className="flex items-center gap-1">
-                                        <Clock size={13} className="shrink-0 text-base-content/72" />
-                                        {runtime}
-                                    </span>
-                                )}
-                                {heroLang && (
-                                    <span className="flex items-center gap-1">
-                                        <Globe size={13} className="shrink-0 text-base-content/72" />
-                                        {heroLang}
-                                    </span>
-                                )}
+                            {/* Meta row — plain text, no icons */}
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] sm:text-sm text-base-content/85">
+                                {(releaseDateFmt || year) && <span className="w-full sm:w-auto">{releaseDateFmt ?? year}</span>}
+                                {runtime && <span>{runtime}</span>}
+                                {heroLang && <span>{heroLang}</span>}
                                 {isSeries && m?.totalSeasons && (
-                                    <span className="flex items-center gap-1">
-                                        <Tv size={13} className="shrink-0 text-base-content/72" />
+                                    <span>
                                         {m.totalSeasons} {m.totalSeasons === 1 ? "season" : "seasons"}
                                         {m?.totalEpisodes && ` · ${m.totalEpisodes} episodes`}
                                     </span>
                                 )}
                             </div>
+                        </div>
 
+                        {/* ── Ratings, genres, actions, overview ──────────── */}
+                        <div className="col-span-2 sm:col-span-1 sm:col-start-2 min-w-0 mt-4 sm:mt-3 self-start">
                             {/* Inline rating badges — IMDb / RT / TMDB */}
                             {ratings && (ratings.tmdb != null || ratings.imdb != null || ratings.rottenTomatoes) && (
-                                <div className="flex flex-wrap items-center gap-2 mb-3">
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3">
                                     {ratings.imdb != null && (
-                                        <div className="flex items-center gap-1.5 px-2.5 py-1 no-underline transition-colors">
+                                        <div className="flex items-center gap-1.5 py-1">
                                             <img src={assets.imdbIcon} className="w-6" alt="IMDb Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#f5c518]">{ratings.imdb}</span>
                                         </div>
                                     )}
                                     {ratings.rottenTomatoes && (
-                                        <div className="flex items-center gap-1.5 px-2.5 py-1">
+                                        <div className="flex items-center gap-1.5 py-1">
                                             <img src={assets.rottenTomatoes} className="w-4.5" alt="Rotten Tomatoes Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#fa320a]">{ratings.rottenTomatoes}</span>
                                         </div>
                                     )}
                                     {ratings.tmdb != null && (
-                                        <div className="flex items-center gap-1.5 rounded-full px-2.5 py-1">
+                                        <div className="flex items-center gap-1.5 py-1">
                                             <img src={assets.tmdbIcon} className="w-6" alt="TMDB Icon" />
                                             <span className="text-xs md:text-[0.8rem] font-bold text-[#01b4e4]">{ratings.tmdb}</span>
                                         </div>
@@ -1062,12 +1077,12 @@ export default function MediaDetails() {
 
                             {/* Genre tags */}
                             {genres.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mb-5">
+                                <div className="flex flex-wrap gap-1.5 mb-4">
                                     {genres.map((g) => (
                                         <Link
                                             key={g}
                                             to={`/category/${encodeURIComponent(g)}`}
-                                            className="text-xs font-medium px-2.5 py-0.5 rounded-md bg-base-300 text-base-content/86 border border-white/5 hover:border-primary/40 hover:text-primary transition-colors">
+                                            className="text-xs font-medium px-2.5 py-1 rounded-md bg-base-300/80 text-base-content/86 border border-white/5 hover:border-primary/40 hover:text-primary transition-colors">
                                             {g}
                                         </Link>
                                     ))}
@@ -1077,13 +1092,13 @@ export default function MediaDetails() {
                             {/* Upcoming + not in library → release countdown, on its own row above the buttons */}
                             {item.notInLibrary && isUpcoming && <ReleaseCountdown t={releaseCountdown} />}
 
-                            {/* Action buttons */}
-                            <div className="flex flex-nowrap items-center gap-2 mb-5 overflow-x-auto -mx-1 px-1 pb-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                            {/* Action buttons — phones: Play full width, then Trailer / Watchlist / ♥ / ⋮ on one row. sm+: single row. */}
+                            <div className="flex flex-wrap items-center gap-2 mb-5">
                                 {/* Not in library — replaces Play for titles opened from the person page (once released) */}
                                 {item.notInLibrary && !isUpcoming && (
                                     <button
                                         onClick={() => setShowNotInLibrary(true)}
-                                        className="btn btn-sm sm:btn-md gap-2 px-6 rounded-[999px] shrink-0 border border-white/10 bg-base-300 text-base-content/80 hover:bg-base-200 hover:border-white/25 cursor-pointer"
+                                        className="btn gap-2 px-6 rounded-lg w-full sm:w-auto border border-white/10 bg-base-300 text-base-content/80 hover:bg-base-200 hover:border-white/25 cursor-pointer"
                                         aria-haspopup="dialog">
                                         <Info size={16} />
                                         Not in library
@@ -1094,27 +1109,36 @@ export default function MediaDetails() {
                                 {!isSeries && !item.notInLibrary && (
                                     <button
                                         onClick={handlePlayMovie}
-                                        className="btn btn-primary btn-sm sm:btn-md gap-2 px-6 rounded-[999px] border-none shadow-lg shadow-primary/25 hover:shadow-primary/40 hover:scale-[1.03] transition-all shrink-0">
+                                        className="btn btn-primary gap-2 px-6 rounded-lg w-full sm:w-auto border-none shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all cursor-pointer">
                                         <Play size={16} fill="currentColor" />
                                         {resumePos ? "Resume" : "Play"}
                                     </button>
                                 )}
 
                                 {trailerKey && (
-                                    <button onClick={() => setShowTrailer(true)} className="btn btn-sm sm:btn-md btn-outline gap-2 rounded-[999px] shrink-0">
-                                        <Play size={14} /> Trailer
+                                    <button
+                                        onClick={() => setShowTrailer(true)}
+                                        className="btn gap-2 rounded-lg flex-1 sm:flex-none border border-white/10 bg-base-300/80 hover:bg-base-200 cursor-pointer">
+                                        <Play size={13} fill="currentColor" /> Trailer
                                     </button>
                                 )}
 
                                 {/* Remind Me + — upcoming (unreleased, not-in-library) titles only. Opens a confirm dialog. */}
                                 {item.notInLibrary && isUpcoming && (
-                                    <RemindMe mediaId={decodedId} title={m?.title || item.title} poster={m?.poster || null} releaseDate={upcomingIso} isSeries={isSeries} autoOpen={wantsRemind} onAutoOpen={clearRemindParam}>
+                                    <RemindMe
+                                        mediaId={decodedId}
+                                        title={m?.title || item.title}
+                                        poster={m?.poster || null}
+                                        releaseDate={upcomingIso}
+                                        isSeries={isSeries}
+                                        autoOpen={wantsRemind}
+                                        onAutoOpen={clearRemindParam}>
                                         {({ reminded, open }) => (
                                             <button
                                                 type="button"
                                                 onClick={open}
                                                 aria-haspopup="dialog"
-                                                className={`btn btn-sm sm:btn-md btn-outline gap-2 rounded-[999px] shrink-0 cursor-pointer ${reminded ? "border-primary text-primary" : ""}`}>
+                                                className={`btn gap-2 rounded-lg flex-1 sm:flex-none border border-white/10 bg-base-300/80 hover:bg-base-200 cursor-pointer ${reminded ? "border-primary text-primary" : ""}`}>
                                                 {reminded ? (
                                                     <>
                                                         Reminder on <BellRing size={14} />
@@ -1130,9 +1154,24 @@ export default function MediaDetails() {
                                 )}
 
                                 <button
+                                    onClick={() => toggleWatchlist(favId, listPayload)}
+                                    className={`btn gap-1.5 rounded-lg flex-1 sm:flex-none border border-white/10 bg-base-300/80 hover:bg-base-200 cursor-pointer ${watchlisted ? "text-accent border-accent/40" : ""}`}>
+                                    {watchlisted ? <Check size={14} /> : <Plus size={14} />}
+                                    Watchlist
+                                </button>
+
+                                <button
+                                    onClick={() => toggleFavourite(favId, listPayload)}
+                                    aria-label="Favourite"
+                                    aria-pressed={favourited}
+                                    className="btn btn-square rounded-lg shrink-0 border border-white/10 bg-base-300/80 hover:bg-base-200 cursor-pointer">
+                                    <Heart size={16} className={favourited ? "text-error fill-error" : "text-base-content/80"} />
+                                </button>
+
+                                <button
                                     ref={actionBtnRef}
                                     onClick={() => setShowActionMenu((v) => !v)}
-                                    className={`btn btn-sm sm:btn-md btn-circle btn-outline shrink-0 transition-colors cursor-pointer ${showActionMenu ? "text-primary border-primary bg-primary/10" : "text-base-content/84"}`}
+                                    className={`btn btn-square rounded-lg shrink-0 border border-white/10 bg-base-300/80 hover:bg-base-200 transition-colors cursor-pointer ${showActionMenu ? "text-primary border-primary bg-primary/10" : "text-base-content/84"}`}
                                     title="More options"
                                     aria-haspopup="menu"
                                     aria-expanded={showActionMenu}>
@@ -1140,10 +1179,29 @@ export default function MediaDetails() {
                                 </button>
                             </div>
 
-                            {/* Overview — always full, toggle only if > 500 chars */}
+                            {/* Overview — phones clamp to 3 lines with Read more; sm+ always full */}
                             {overview && (
-                                <div>
-                                    <p className="text-sm sm:text-base text-base-content/88 leading-relaxed">{overview}</p>
+                                <div className="max-w-3xl">
+                                    <p className={`text-sm sm:text-base text-base-content/88 leading-relaxed ${overviewExpanded ? "" : "line-clamp-3 sm:line-clamp-none"}`}>{overview}</p>
+                                    {overviewLong && (
+                                        <button onClick={() => setOverviewExpanded((v) => !v)} className="sm:hidden mt-1 text-sm font-semibold text-primary cursor-pointer">
+                                            {overviewExpanded ? "Show less" : "Read more"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Rating — phones only (sm+ shows it under the poster) */}
+                            {rating != null && (
+                                <div className="sm:hidden mt-4">
+                                    <div className="flex items-end justify-between mb-1.5">
+                                        <div className="flex items-baseline gap-1">
+                                            <span className="text-lg font-bold text-base-content">{rating.toFixed(1)}</span>
+                                            <span className="text-xs text-base-content/60">/ 10</span>
+                                        </div>
+                                        {m?.votes ? <span className="text-[11px] text-base-content/60">{fmtVotes(m.votes)} votes</span> : null}
+                                    </div>
+                                    <RatingBar rating={rating} />
                                 </div>
                             )}
                         </div>

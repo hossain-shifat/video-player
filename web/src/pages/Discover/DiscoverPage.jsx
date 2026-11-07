@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 import { useApi } from "../../Context/apiContext";
-import MediaRow from "../../Components/MediaRow";
-import TrailerRow from "../../Components/TrailerRow";
-import { useTrailers } from "../../Hooks/useTrailers";
-import SeeAllPage from "../../Components/SeeAllPage";
+import MediaRow from "../../Components/Media/MediaRow";
+import TrailerRow from "../../Components/Trailers/TrailerRow";
+import { useTrailers } from "../../Hooks/Query/useTrailers";
+import SeeAllPage from "../../Components/Media/SeeAllPage";
 // Banners + the shared TMDB/library data layer live in Banner.jsx (see Components/BANNERS.md).
 import {
     DiscoverMainBanner,
@@ -18,7 +18,7 @@ import {
     buildLibrary,
     buildLibraryIndex,
     langName,
-} from "../../Components/Banner";
+} from "../../Components/Layout/Banner";
 
 // Plex-style Discover, no sidebar. All data work lives in this file.
 //   • Library rows  → your own media via useApi(); trailers via your TrailerRow + useTrailers()

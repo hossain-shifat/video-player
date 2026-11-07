@@ -22,7 +22,7 @@ import {
     Loader2,
     SquarePen,
 } from "lucide-react";
-import { getFolders, addFolder, updateFolder, removeFolder } from "../../api/library";
+import { getFolders, addFolder, updateFolder, removeFolder } from "../../Api/library";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

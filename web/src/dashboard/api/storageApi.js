@@ -5,7 +5,7 @@
  * Same shared Axios client + token injection pattern as dashboardApi.js.
  */
 
-import { api, getAuthToken } from "../../api/client";
+import { api, getAuthToken } from "../Shared";
 
 const STORAGE = "/api/storage";
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";

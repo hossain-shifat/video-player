@@ -3,12 +3,12 @@ import { useNavigate, useLocation } from "react-router";
 import { Tv, AlertCircle, Loader } from "lucide-react";
 import Hls from "hls.js";
 
-import { PlayerProvider, usePlayerState } from "./UsePlayerState";
-import PlayerOverlays, { useOverlay, BufferingOverlay } from "./PlayerOverlays";
-import PlayerGestures from "./PlayerGestures";
-import PlayerLock from "./PlayerLock";
-import PlayerControls from "./PlayerControls";
-import { useIsMobile } from "./useIsMobile";
+import { PlayerProvider, usePlayerState } from "../../Hooks/Player/usePlayerState";
+import PlayerOverlays, { useOverlay, BufferingOverlay } from "./Components/PlayerOverlays";
+import PlayerGestures from "./Components/PlayerGestures";
+import PlayerLock from "./Components/PlayerLock";
+import PlayerControls from "./Components/PlayerControls";
+import { useIsMobile } from "../../Hooks/Player/useIsMobile";
 
 // ── Landscape lock ────────────────────────────────────────────────────────────
 function useLandscapeLock(enabled, containerRef) {

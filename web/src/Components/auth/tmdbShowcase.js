@@ -1,4 +1,4 @@
-// web/src/Components/auth/tmdbShowcase.js
+// web/src/Components/Auth/tmdbShowcase.js
 // Browser-side fallback for the sign-in poster wall: recent movies / series / anime straight from TMDB, using the
 // same VITE_TMDB_API_KEY the app's Banner already uses. Only used when the server's /auth/showcase has nothing
 // (e.g. the server cannot reach TMDB). Pure functions — no import.meta, no React — so they are unit-testable.

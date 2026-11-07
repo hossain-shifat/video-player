@@ -11,18 +11,18 @@
 
 import { createContext, useContext, useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../Auth/AuthContext";
 
 // TanStack Query hooks
-import { useMedia, MEDIA_KEYS } from "../hooks/useMedia";
-import { useLibrary, useAddFolder, useUpdateFolder, useRemoveFolder, LIBRARY_KEYS } from "../hooks/useLibrary";
-import { useCategories, useCategoryMedia } from "../hooks/useCategories";
-import { useHistory, useDeleteHistory, useClearHistory } from "../hooks/useHistory";
-import { useWatchlist, useAddToWatchlist, useRemoveFromWatchlist } from "../hooks/useWatchlist";
-import { useFavourites, useAddToFavourites, useRemoveFromFavourites } from "../hooks/useFavourites";
+import { useMedia, MEDIA_KEYS } from "../Hooks/Query/useMedia";
+import { useLibrary, useAddFolder, useUpdateFolder, useRemoveFolder, LIBRARY_KEYS } from "../Hooks/Query/useLibrary";
+import { useCategories, useCategoryMedia } from "../Hooks/Query/useCategories";
+import { useHistory, useDeleteHistory, useClearHistory } from "../Hooks/Query/useHistory";
+import { useWatchlist, useAddToWatchlist, useRemoveFromWatchlist } from "../Hooks/Query/useWatchlist";
+import { useFavourites, useAddToFavourites, useRemoveFromFavourites } from "../Hooks/Query/useFavourites";
 
 // Direct API calls (still needed for player and metadata refresh actions)
-import { searchMedia, getResumePoint, saveProgress, refreshMetadata, refreshAllMetadata, api } from "../api";
+import { searchMedia, getResumePoint, saveProgress, refreshMetadata, refreshAllMetadata, api } from "../Api";
 
 const ApiContext = createContext(null);
 

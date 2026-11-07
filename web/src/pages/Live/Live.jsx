@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Tv, Search, ChevronLeft, ChevronRight, Radio, Play } from "lucide-react";
-import { getLiveChannels, getLiveCategories, getFeaturedEvents, getSportsEventChannels } from "../../api/live";
-import { useAuth } from "../../auth/useAuth";
+import { getLiveChannels, getLiveCategories, getFeaturedEvents, getSportsEventChannels } from "../../Api/live";
+import { useAuth } from "../../Hooks/Auth/useAuth";
 
 // Reads the Settings → Live tab preference directly — same "flux-prefs"
 // localStorage key Settings.jsx already writes to via setPref(). Read fresh

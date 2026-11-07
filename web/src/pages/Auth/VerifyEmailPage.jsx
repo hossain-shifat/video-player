@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate, useLocation, Navigate } from "react-router";
-import { useAuth } from "../../auth/AuthContext";
-import { postAuthPath } from "../../auth/accountRouting";
-import { FullScreenSpinner } from "../../auth/AuthGate";
+import { useAuth } from "../../Auth/AuthContext";
+import { postAuthPath } from "../../Auth/accountRouting";
+import { FullScreenSpinner } from "../../Auth/AuthGate";
 import { MailCheck } from "lucide-react";
-import { AuthPanel, AuthHeading, AuthAlert, AuthSubmit, AuthBadge } from "../../Components/auth/AuthUI";
+import { AuthPanel, AuthHeading, AuthAlert, AuthSubmit, AuthBadge } from "../../Components/Auth/AuthUI";
 
 const RESEND_COOLDOWN_SEC = 60;
 

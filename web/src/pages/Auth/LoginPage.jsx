@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useNavigate, useLocation, useSearchParams, Link } from "react-router";
 import { Mail, Lock } from "lucide-react";
-import { useAuth } from "../../auth/AuthContext";
-import { authApi } from "../../api/auth";
-import { postAuthPath } from "../../auth/accountRouting";
-import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, GoogleButton, OrDivider } from "../../Components/auth/AuthUI";
+import { useAuth } from "../../Auth/AuthContext";
+import { authApi } from "../../Api/auth";
+import { postAuthPath } from "../../Auth/accountRouting";
+import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, GoogleButton, OrDivider } from "../../Components/Auth/AuthUI";
 
 export default function LoginPage() {
     const { login } = useAuth();

@@ -1,4 +1,4 @@
-// web/src/auth/PlaybackGate.jsx
+// web/src/Auth/PlaybackGate.jsx
 // Guards the routes that START playback (/player/:id, /live/watch/:id).
 //   - not signed in / unverified / blocked / expired → same destinations as AuthGate
 //   - verified but waiting for approval → "Approval Required" modal; "Got it" returns to the page
@@ -9,7 +9,7 @@ import { Navigate, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "./AuthContext";
 import { requiredPathFor } from "./accountRouting";
 import { FullScreenSpinner } from "./AuthGate";
-import ApprovalRequiredModal from "../Components/auth/ApprovalRequiredModal";
+import ApprovalRequiredModal from "../Components/Auth/ApprovalRequiredModal";
 
 export default function PlaybackGate() {
     const { user, loading } = useAuth();

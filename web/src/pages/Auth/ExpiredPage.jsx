@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { Clock, ShieldBan } from "lucide-react";
-import { useAuth } from "../../auth/AuthContext";
-import { AuthPanel, AuthBadge, AuthHeading, AuthAlert, AuthSubmit } from "../../Components/auth/AuthUI";
+import { useAuth } from "../../Auth/AuthContext";
+import { AuthPanel, AuthBadge, AuthHeading, AuthAlert, AuthSubmit } from "../../Components/Auth/AuthUI";
 
 function Row({ label, value, tone }) {
     return (

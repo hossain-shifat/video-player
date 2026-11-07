@@ -1,6 +1,6 @@
 "use strict";
 
-// web/src/dashboard/upload/FluxUploaderPlugin.js
+// web/src/Dashboard/Upload/FluxUploaderPlugin.js
 //
 // A custom Uppy (v5) uploader plugin. This is the actual "Uppy as the
 // upload engine" integration point: Uppy owns file selection, the queue,
@@ -33,7 +33,7 @@
 //   — all FLUX-specific fields live in `meta`, Uppy's designated free-form bag.
 
 import { BasePlugin } from "@uppy/core";
-import { storageApi } from "../api/storageApi";
+import { storageApi } from "../Api/storageApi";
 
 export const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB per chunk
 const CHUNK_CONCURRENCY = 5;

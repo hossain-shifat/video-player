@@ -222,8 +222,8 @@ function setFileResolver(fn) {
     _resolveFile = fn;
 }
 async function defaultResolveFile(id) {
-    const mediaCache = require("../../utils/mediaCache");
-    const { readFolders } = require("../../controllers/libraryController");
+    const mediaCache = require("../../utils/media/mediaCache");
+    const { readFolders } = require("../../controllers/media/libraryController");
     const cached = mediaCache.getFileById?.(id);
     const folders = await readFolders();
     const file = cached || (await mediaCache.findById(folders, id));
@@ -284,7 +284,7 @@ function restrictToLibraryPath(paramName) {
             if (!decoded || decoded.includes("\0")) return res.status(400).json({ error: "Invalid encoded path" });
             const path = require("path");
             const resolved = path.resolve(decoded);
-            const { readFolders } = _resolveFile ? { readFolders: async () => (await _resolveFile("__folders__")).folders } : require("../../controllers/libraryController");
+            const { readFolders } = _resolveFile ? { readFolders: async () => (await _resolveFile("__folders__")).folders } : require("../../controllers/media/libraryController");
             const folders = await readFolders();
             if (!(folders || []).some((f) => inside(resolved, path.resolve(f.path)))) {
                 return res.status(403).json({ error: "Path is outside the media library", code: "PATH_DENIED" });

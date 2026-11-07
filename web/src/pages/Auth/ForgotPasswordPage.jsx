@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router";
 import { Mail, Lock, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
-import { authApi } from "../../api/auth";
-import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, AuthBadge, StepTransition } from "../../Components/auth/AuthUI";
+import { authApi } from "../../Api/auth";
+import { AuthPanel, AuthHeading, AuthAlert, AuthField, AuthSubmit, AuthBadge, StepTransition } from "../../Components/Auth/AuthUI";
 
 const RESEND_COOLDOWN_SEC = 60;
 

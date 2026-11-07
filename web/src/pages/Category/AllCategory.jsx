@@ -1,6 +1,6 @@
 import React from "react";
 import { useApi } from "../../Context/apiContext";
-import CategoryCard from "../../Components/CategoryCards";
+import CategoryCard from "../../Components/Category/CategoryCards";
 
 const AllCategory = () => {
     const { categories, loading, errors } = useApi();
