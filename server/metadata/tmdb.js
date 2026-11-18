@@ -1288,6 +1288,7 @@ const _origGetMovieDetails = getMovieDetails;
 getMovieDetails = async function (tmdbId) {
     const [result, releaseDatesRaw, certList] = await Promise.all([_origGetMovieDetails(tmdbId), tmdbFetchSafe(`/movie/${tmdbId}/release_dates`), _getMovieCertList()]);
     if (!result) return result;
+    _rememberReleaseDates(tmdbId, releaseDatesRaw); // v24: reused by verifyReleaseQualifier, avoids a 2nd request
 
     if (!result.releaseDate) {
         const fallbackDate = _extractFallbackReleaseDate(releaseDatesRaw);
@@ -1525,6 +1526,207 @@ lookupMetadata = async function (parsed) {
 };
 
 // ============================================================================
+// ─── Release-qualifier layer (v24) ───────────────────────────────────────────
+// ADDITIVE ONLY. Three separate concerns, kept apart on purpose:
+//   1. DETECTION    nameParser.js sets the optional `parsed.releaseQualifier` ("Encore", "Re-Release").
+//   2. IDENTITY     which TMDB movie IS this? (a) a dedicated record for the retitled release, if TMDB has one, via the
+//                   ordinary matcher; else (b) _matchReleaseQualified(): the ORIGINAL film — title decides, the file year
+//                   does not (it is the RE-release year, so the ordinary year gap would reject the original).
+//   3. VERIFICATION verifyReleaseQualifier(): does TMDB hold any release-date evidence for that claimed year?
+//                   Stored beside the metadata as `releaseVerification`; never changes year / releaseDate.
+// Files WITHOUT releaseQualifier go straight to the previous lookupMetadata, untouched.
+// ============================================================================
+
+// release_dates payload that getMovieDetails already fetched (see hook above) — small, bounded, short-lived.
+const _RELEASE_DATES_TTL_MS = 10 * 60 * 1000;
+const _RELEASE_DATES_MAX = 200;
+const _releaseDatesMemo = new Map(); // tmdbId -> { at, raw }
+
+function _rememberReleaseDates(tmdbId, raw) {
+    if (tmdbId == null || !raw || !Array.isArray(raw.results)) return;
+    _releaseDatesMemo.set(String(tmdbId), { at: Date.now(), raw });
+    if (_releaseDatesMemo.size > _RELEASE_DATES_MAX) _releaseDatesMemo.delete(_releaseDatesMemo.keys().next().value);
+}
+
+function _recallReleaseDates(tmdbId) {
+    const hit = _releaseDatesMemo.get(String(tmdbId));
+    if (!hit) return null;
+    if (Date.now() - hit.at > _RELEASE_DATES_TTL_MS) {
+        _releaseDatesMemo.delete(String(tmdbId));
+        return null;
+    }
+    return hit.raw;
+}
+
+// TMDB release types: 1 premiere, 2 theatrical (limited), 3 theatrical, 4 digital, 5 physical, 6 TV.
+// Only theatrical dates count as evidence of a theatrical re-release: a 2026 digital/physical date on a 2019 film is
+// an ordinary home-media release, not an "Encore".
+const _THEATRICAL_RELEASE_TYPES = new Set([2, 3]);
+const _EVIDENCE_LIMIT = 5;
+
+function _verification(status, claimedYear, extra = {}) {
+    return { status, source: "tmdb", claimedYear: Number.isInteger(claimedYear) ? claimedYear : null, matchedYear: null, evidence: [], ...extra };
+}
+
+/**
+ * Conservative release verification. Never throws for TMDB problems; never treats the qualifier itself as proof.
+ *   not_applicable : no qualifier
+ *   unverified     : TV (movie rules are not applied to series), bad input, TMDB failure, or no supporting dates
+ *   evidence_found : TMDB lists a THEATRICAL release date in the claimed year, later than the original release year.
+ *                    This supports "released again in <year>", NOT the exact "Encore" branding
+ *                    (`noteMatchesQualifier` is true only when TMDB's own release note mentions it).
+ */
+async function verifyReleaseQualifier({ kind = "movie", tmdbId = null, originalYear = null, claimedYear = null, qualifier = null, releaseDatesRaw = null } = {}) {
+    if (!qualifier) return { status: "not_applicable", source: null, claimedYear: null, matchedYear: null, evidence: [] };
+    if (kind !== "movie") return _verification("unverified", claimedYear, { reason: "tv-not-supported" });
+    if (tmdbId == null || !_plausibleYear(claimedYear)) return _verification("unverified", claimedYear, { reason: "missing-id-or-year" });
+    if (Number.isInteger(originalYear) && originalYear >= claimedYear) return _verification("unverified", claimedYear, { reason: "claimed-year-not-after-original" });
+
+    let raw = releaseDatesRaw && Array.isArray(releaseDatesRaw.results) ? releaseDatesRaw : _recallReleaseDates(tmdbId);
+    if (!raw) {
+        try {
+            raw = await tmdbFetch(`/movie/${tmdbId}/release_dates`);
+        } catch (err) {
+            console.warn(`[TMDB] release verification skipped for movie ${tmdbId}: ${err.message}`);
+            return _verification("unverified", claimedYear, { reason: "lookup-failed" });
+        }
+        _rememberReleaseDates(tmdbId, raw);
+    }
+    if (!raw || !Array.isArray(raw.results)) return _verification("unverified", claimedYear, { reason: "no-release-data" });
+
+    const qualRe = new RegExp(String(qualifier).replace(/[^A-Za-z0-9]+/g, "[\\s-]*"), "i");
+    const evidence = [];
+    let noteMatchesQualifier = false;
+    for (const c of raw.results) {
+        if (!c || !Array.isArray(c.release_dates)) continue;
+        for (const d of c.release_dates) {
+            if (!d || typeof d.release_date !== "string") continue;
+            if (parseInt(d.release_date.slice(0, 4), 10) !== claimedYear) continue;
+            if (!_THEATRICAL_RELEASE_TYPES.has(d.type)) continue;
+            const note = typeof d.note === "string" && d.note.trim() ? d.note.trim() : null;
+            if (note && qualRe.test(note)) noteMatchesQualifier = true;
+            if (evidence.length < _EVIDENCE_LIMIT) evidence.push({ country: typeof c.iso_3166_1 === "string" ? c.iso_3166_1 : null, date: d.release_date.slice(0, 10), type: d.type, note });
+        }
+    }
+    if (!evidence.length) return _verification("unverified", claimedYear, { reason: "no-theatrical-release-in-claimed-year" });
+    return _verification("evidence_found", claimedYear, { matchedYear: claimedYear, evidence, noteMatchesQualifier });
+}
+
+// Identity matching for a file with a release qualifier. Differences from _matchAcross, all deliberate:
+//   • the file year is NOT sent to TMDB and NOT used for scoring/gap rejection (it is the re-release year)
+//   • only STRONG title evidence qualifies (exact / alternate-title, sim ≥ MATCH_HIGH); prefix/overlap hits never do
+//   • existing ambiguity/popularity tie-break (_decide) is reused as-is
+//   • the winner must be dated and must predate the file year (a "re-release" of a later film is not a re-release)
+// → { best, ambiguous }
+async function _matchReleaseQualified({ queries, year, budget }) {
+    for (const { q, trust } of queries) {
+        const raw = await _search(budget, "movie", q, null);
+        if (raw === null) break; // budget exhausted
+        let scored = _scoreResults(raw, q, null, "release_date", trust, null);
+        if (!scored.length && raw.length) scored = await _rescueByAltTitles(budget, "movie", raw, q, null, "release_date", trust);
+        const strong = scored.filter((s) => !_WEAK_EVIDENCE.has(s.kind) && s.sim >= MATCH_HIGH);
+        const d = _decide(strong, budget && budget.languages);
+        if (d.status === "ambiguous") {
+            console.log(`[TMDB] release-qualifier: ambiguous movie "${q}": "${d.a.result.title}" vs "${d.b.result.title}"`);
+            return { best: null, ambiguous: true };
+        }
+        if (d.status !== "match") continue;
+        const ry = parseInt(String(d.best.result.release_date || "").slice(0, 4), 10);
+        if (!Number.isInteger(ry) || ry >= year) {
+            console.log(`[TMDB] release-qualifier: rejected "${d.best.result.title}" (${Number.isNaN(ry) ? "undated" : ry}) — not earlier than file year ${year}`);
+            continue;
+        }
+        console.log(`[TMDB] release-qualifier: movie match "${q}" → "${d.best.result.title}" (${ry}) id=${d.best.result.id}, file year ${year} treated as re-release year`);
+        return { best: d.best, ambiguous: false };
+    }
+    return { best: null, ambiguous: false };
+}
+
+// A file matched to the ORIGINAL film must not look identical to the plain release of that film in the library
+// (same title, same year, side by side). Present it as the re-release the file says it is, and keep TMDB's real values
+// in separate fields (tmdbTitle / tmdbYear / tmdbReleaseDate). releaseDate becomes the first theatrical date TMDB lists in
+// the claimed year when there is one; otherwise it is left as TMDB's.
+function _presentAsRelease(d, qualifier, fileYear) {
+    d.tmdbTitle = d.title ?? null;
+    d.tmdbYear = d.year ?? null;
+    d.tmdbReleaseDate = d.releaseDate ?? null;
+    const qRe = new RegExp(String(qualifier).replace(/[^A-Za-z0-9]+/g, "[\\s-]*") + "\\s*$", "i");
+    if (typeof d.title === "string" && d.title && !qRe.test(d.title)) d.title = `${d.title} ${qualifier}`;
+    d.year = fileYear;
+    const rv = d.releaseVerification;
+    const dates = rv && rv.status === "evidence_found" && Array.isArray(rv.evidence) ? rv.evidence.map((e) => e && e.date).filter(Boolean).sort() : [];
+    if (dates.length) d.releaseDate = dates[0];
+    return d;
+}
+
+// What did the ordinary matcher return for "<title> <qualifier>"? Decided by the record's OWN title, never by how it was
+// found (fuzzy search, alternate title, …):
+//   • title carries the qualifier            → a real dedicated record. Use it if it has anything to show, else keep it only
+//                                              as a last resort (done:false) while the original film is tried.
+//   • title does NOT carry it, and is older  → it is the plain film that was reached by a fuzzy / alternate-title match.
+//                                              Present it as the re-release (this is the original film, found early).
+//   • anything else                          → not provably the same film: ignore it.
+// → { done: true, value }  = final answer     |  { done: false, value } = keep going (value = last-resort record or null)
+async function _settleDedicatedRecord(d, qualifier, fileYear) {
+    if (!d) return { done: false, value: null };
+    if (d.type !== "movie") return { done: true, value: d };
+    const qRe = new RegExp("\\b" + String(qualifier).replace(/[^A-Za-z0-9]+/g, "[\\s-]*") + "\\b", "i");
+    const own = qRe.test(String(d.title || "")) || qRe.test(String(d.originalTitle || ""));
+    if (own) {
+        d.releaseQualifier = qualifier;
+        if (d.poster || d.overview) return { done: true, value: d };
+        console.log(`[TMDB] release-qualifier: dedicated record id=${d.tmdbId} is empty (no poster/overview) — trying the original film`);
+        return { done: false, value: d };
+    }
+    if (_plausibleYear(fileYear) && Number.isInteger(d.year) && d.year < fileYear) {
+        console.log(`[TMDB] release-qualifier: "${d.title}" (${d.year}) id=${d.tmdbId} is the original film (matched via alternate/fuzzy title) — presenting as ${qualifier} ${fileYear}`);
+        d.releaseQualifier = qualifier;
+        d.releaseVerification = await verifyReleaseQualifier({ kind: "movie", tmdbId: d.tmdbId, originalYear: d.year, claimedYear: fileYear, qualifier });
+        return { done: true, value: _presentAsRelease(d, qualifier, fileYear) };
+    }
+    return { done: false, value: null };
+}
+
+const _prevLookupMetadata = lookupMetadata;
+lookupMetadata = async function (parsed) {
+    const qualifier = parsed && typeof parsed.releaseQualifier === "string" ? parsed.releaseQualifier.trim() : "";
+    if (!qualifier) return _prevLookupMetadata(parsed); // ordinary files: behaviour unchanged
+
+    const { releaseQualifier: _q, ...plain } = parsed; // the qualifier never goes into a search or the previous layers
+
+    // TV: movie re-release rules do not apply. Normal lookup; only mark the verification as unverified.
+    if (parsed.type === "series" || parsed.type === "anime") {
+        const result = await _prevLookupMetadata(plain);
+        if (result) result.releaseVerification = await verifyReleaseQualifier({ kind: "tv", qualifier });
+        return result;
+    }
+
+    // 1) DEDICATED RECORD. Some re-releases are official retitles with their OWN TMDB record ("<Title> Encore", dated
+    //    with the re-release year). Look for it first with the full title + file year through the ordinary, unchanged matcher.
+    let dedicated = await _prevLookupMetadata({ ...plain, title: `${parsed.title} ${qualifier}` });
+    const settled = await _settleDedicatedRecord(dedicated, qualifier, parsed.year);
+    if (settled.done) return settled.value;
+    dedicated = settled.value;
+
+    // 2) ORIGINAL FILM. Title decides identity; the file year is the re-release year and is not used as a filter.
+    const year = parsed.year;
+    if (parsed.title && _plausibleYear(year)) {
+        const budget = _newBudget();
+        budget.languages = !parsed.dualAudio && !parsed.multiAudio && Array.isArray(parsed.languages) && parsed.languages.length === 1 ? parsed.languages[0] : null;
+        const m = await _matchReleaseQualified({ queries: _buildQueries(parsed, true), year, budget });
+        if (m.best) {
+            const details = await getMovieDetails(m.best.result.id);
+            details.releaseQualifier = qualifier;
+            details.releaseVerification = await verifyReleaseQualifier({ kind: "movie", tmdbId: details.tmdbId, originalYear: details.year, claimedYear: year, qualifier });
+            return _presentAsRelease(details, qualifier, year);
+        }
+    }
+
+    // Nothing better: the (possibly empty) dedicated record, else the safe no-match.
+    return dedicated || null;
+};
+
+// ============================================================================
 // ─── Trailer discovery (v20) ─────────────────────────────
 // ADDITIVE ONLY. Powers trailerController.js's discover feed: NEW
 // movies/series from production companies already in your library, that
@@ -1595,4 +1797,6 @@ module.exports = {
     getVideosFor,
     fetchReviewIds, // all current TMDB review ids of one title (see fetchReviews above)
     tmdbFetch, // server-side TMDB proxy (metadataController.getTmdbItem)
+    verifyReleaseQualifier, // v24: conservative re-release evidence check (see release-qualifier layer)
+    _settleDedicatedRecord, // v24 (exported for tests)
 };

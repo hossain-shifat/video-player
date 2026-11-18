@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { useParams, useNavigate, useSearchParams, Link } from "react-router";
+import { useNavigate, useSearchParams, Link } from "react-router";
 import {
     Play,
     Star,
@@ -45,6 +45,8 @@ import CastAndCrew from "../../../Components/Media/CastAndCrew";
 import Reviews from "../../../Components/Media/Reviews";
 import FloatingActionMenu from "../../../Components/Layout/FloatingActionMenu";
 import { TrailerModal, NotInLibraryModal, RemindMe } from "../../../Components/Layout/Modal";
+import { routeId } from "../../../Utils/shortId.js";
+import { useMediaRouteId } from "../../../Hooks/Query/useMediaRouteId.js";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -665,7 +667,7 @@ async function fetchTmdbItem(fullId) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function MediaDetails() {
-    const { id } = useParams();
+    const id = useMediaRouteId();
     const navigate = useNavigate();
     // Opened from a banner's "Remind me" button (?remind=1) → the reminder dialog opens by itself, once.
     const [searchParams, setSearchParams] = useSearchParams();
@@ -864,7 +866,6 @@ export default function MediaDetails() {
     // ── New: ratings / reviews / videos ───────────────────────────────────────
     const ratings = m?.ratings ?? null;
     const imdbId = m?.imdbId ?? null;
-    const reviews = Array.isArray(m?.reviews) ? m.reviews : [];
     const videos = Array.isArray(m?.videos) ? m.videos : [];
 
     // ── New (metadata upgrade, v18/v19): languages, origin, collection,
@@ -910,7 +911,7 @@ export default function MediaDetails() {
      * encodeURIComponent so React Router gets a clean single-segment param.
      */
     const handlePlayMovie = () => {
-        navigate(`/player/${encodeURIComponent(decodedId)}`, {
+        navigate(`/player/${routeId(decodedId)}`, {
             state: resumePos != null ? { knownResumePosition: resumePos } : undefined,
         });
     };
@@ -920,7 +921,7 @@ export default function MediaDetails() {
      * Called from EpisodeRow inside the SeasonsPanel.
      */
     const handlePlayEpisode = (epId) => {
-        navigate(`/player/${encodeURIComponent(epId)}`);
+        navigate(`/player/${routeId(epId)}`);
     };
 
     /**
@@ -1307,11 +1308,11 @@ export default function MediaDetails() {
                     </section>
                 )}
 
-                {/* ── Reviews ──────────────────────────────────────────────── */}
-                {reviews.length > 0 && (
+                {/* ── Reviews ── own review system (reviews · reactions · discussions), data in reviews.json — see Reviews.jsx ── */}
+                {m?.tmdbId && (
                     <>
                         <Divider />
-                        <Reviews reviews={reviews} tmdbId={m?.tmdbId} mediaType={mediaType} />
+                        <Reviews tmdbId={m.tmdbId} mediaType={mediaType} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
                     </>
                 )}
 

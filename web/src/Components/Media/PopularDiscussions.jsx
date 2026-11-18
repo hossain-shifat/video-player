@@ -1,29 +1,30 @@
 // ============================================================================
-// PopularDiscussions.jsx — Plex-style "Popular Discussions" row.
+// PopularDiscussions.jsx — Plex-style "Popular Discussions" row for the HOME page.
 // File: web/src/Components/Media/PopularDiscussions.jsx
 //
-//   <PopularDiscussions />            ← Home page: fetches its own data, hides itself when there is none
+//   <PopularDiscussions />            ← fetches its own data, hides itself when there is none
 //   <PopularDiscussions items={[...]} loading />   ← or render your own list
 //
-// Same tall card as Popular Reviews (PopularCardShell in Reviews.jsx) — only the
-// content differs: a bold thread headline + short excerpt instead of big stars.
+// Which reviews show up here: the ones people react to and reply to the most (score = reactions + 3 × replies),
+// one per title, taken from this server's reviews.json (GET /api/reviews/discussions). Until there is enough
+// activity, the best imported TMDB reviews fill the row — opening one and replying is what starts a real discussion.
 //
-// item shape:
-//   { id, title (thread headline), body, author, avatar?, createdAt,
-//     likes?, comments?, rating? (0–10, shown inside the "More" modal),
-//     media: { id, title, backdrop?, poster?, logo? } }
+// Same tall card as Popular Reviews (PopularCardShell in Reviews.jsx): bold headline + short excerpt instead of
+// big stars, reaction count and reply count in the footer. Click → the discussion page (/discussion/:id, Pages/Discussion/DiscussionPage.jsx).
 //
-// Data: GET /api/media/popular-discussions (server-side cache, needs TRAKT_CLIENT_ID — see metadataController.js).
+// item shape: { id (review id), title (headline), body, author, avatar?, rating?, createdAt, likes, comments,
+//               media: { id, title, backdrop?, poster?, logo? } }
 // ============================================================================
 
-import { useState } from "react";
-import { PopularCardShell, PopularRow, ReviewModal, popularToModalShape, usePopularFeed } from "./Reviews";
+import { useNavigate } from "react-router";
+import { PopularCardShell, PopularRow, usePopularFeed } from "./Reviews";
+import { seedCount } from "./ReviewThread";
 
 export default function PopularDiscussions({ items, loading, title = "Popular Discussions" }) {
     const feed = usePopularFeed("discussions", items === undefined);
     const rows = items ?? feed.data ?? [];
     const busy = loading ?? (items === undefined && feed.isLoading);
-    const [open, setOpen] = useState(null);
+    const navigate = useNavigate();
 
     return (
         <>
@@ -41,13 +42,12 @@ export default function PopularDiscussions({ items, loading, title = "Popular Di
                         author={it.author}
                         avatar={it.avatar}
                         date={it.createdAt}
-                        likes={it.likes}
+                        likes={seedCount(it.likes, it.id)}
                         comments={it.comments}
-                        onMore={() => setOpen(it)}
+                        onMore={() => navigate(`/discussion/${it.id}`)}
                     />
                 )}
             />
-            {open && <ReviewModal data={popularToModalShape({ ...open, content: open.body }, open.title)} onClose={() => setOpen(null)} />}
         </>
     );
 }

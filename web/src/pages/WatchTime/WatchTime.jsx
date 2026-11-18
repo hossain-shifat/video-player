@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { Clock, Flame, ArrowUpRight, ArrowDownRight, Film, Tv, CheckCircle2, Activity, Minus, Repeat2, Sunrise, Sun, Sunset, Moon } from "lucide-react";
 import { useWatchTime } from "../../Hooks/Query/useWatchTime";
 import { useAuth } from "../../Auth/AuthContext";
+import { routeId } from "../../Utils/shortId.js";
 
 // ─── formatting ───────────────────────────────────────────────────────────────
 function splitDur(sec) {
@@ -833,7 +834,7 @@ function RankCard({ g, rank, totalSeconds }) {
     const isSeries = g.type !== "movie";
     const [badgeLabel, badgeCls] = TYPE_BADGE[g.type];
     const share = totalSeconds > 0 ? Math.round((g.seconds / totalSeconds) * 100) : 0;
-    const target = isSeries ? `/player/${encodeURIComponent(g.targetId)}` : `/media/${encodeURIComponent(g.targetId)}`;
+    const target = isSeries ? `/player/${routeId(g.targetId)}` : `/media/${routeId(g.targetId)}`;
 
     return (
         <div onClick={() => navigate(target)} className="group relative my-2 w-full min-w-0 cursor-pointer select-none">
@@ -954,7 +955,7 @@ function ActivityCard({ t }) {
     const sub = [ep, isSeries ? t.seriesTitle : null].filter(Boolean).join(" · ");
     const title = t.title || "Unknown";
     const [badgeLabel, badgeCls] = TYPE_BADGE[type];
-    const target = isSeries ? `/player/${encodeURIComponent(t.id)}` : `/media/${encodeURIComponent(t.id)}`;
+    const target = isSeries ? `/player/${routeId(t.id)}` : `/media/${routeId(t.id)}`;
 
     return (
         <div onClick={() => navigate(target)} className="group relative my-2 w-full min-w-0 cursor-pointer select-none">

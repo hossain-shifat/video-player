@@ -12,6 +12,7 @@ import PopularDiscussions from "../../Components/Media/PopularDiscussions";
 import TrailerRow from "../../Components/Trailers/TrailerRow";
 import { useTrailers } from "../../Hooks/Query/useTrailers";
 import { HomeHeroBanner, SeasonalBanner } from "../../Components/Layout/Banner";
+import { routeId } from "../../Utils/shortId.js";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -35,7 +36,7 @@ const Home = () => {
     );
 
     const handlePlay = (rawItem) => {
-        if (rawItem?.id) navigate(`/player/${encodeURIComponent(rawItem.id)}`);
+        if (rawItem?.id) navigate(`/player/${routeId(rawItem.id)}`);
     };
 
     const handleTrailer = (normItem) => {
@@ -50,6 +51,8 @@ const Home = () => {
             <ContinueWatchingRow />
 
             <CategoryBar onSelect={(cat) => (cat ? fetchByCategory(cat) : null)} />
+
+            <PopularReviews />
 
             <LiveMediaRow />
 
@@ -69,9 +72,6 @@ const Home = () => {
             <SmartShelves variant="discover" onPlay={handlePlay} onWatchTrailer={handleTrailer} />
 
             <TrailerRow title="New Trailers" items={newTrailers} loading={trailersLoading} />
-
-            {/* Plex-style community rows — each fetches its own cached feed and hides itself when empty */}
-            <PopularReviews />
 
             <PopularDiscussions />
         </div>

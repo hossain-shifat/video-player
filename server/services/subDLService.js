@@ -37,9 +37,111 @@ const API_BASE = "https://api.subsource.net/api/v1";
 const API_KEY = process.env.SUBSOURCE_API || "";
 
 // SubSource uses full language names (lowercase)
-const LANG_TO_SS = { en: "english", bn: "bengali" };
-const LANG_LABEL = { en: "English", bn: "Bangla" };
-const SUPPORTED_LANGS = ["en", "bn"];
+// Language table: code → SubSource language name, UI label, folder name under data/subtitles/<media>/.
+// SubSource names are its own lowercase English names; a wrong name just returns no subtitles for that language.
+const LANGS = {
+    en: { ss: "english", label: "English", folder: "english" },
+    bn: { ss: "bengali", label: "Bangla", folder: "bangla" },
+    hi: { ss: "hindi", label: "Hindi", folder: "hindi" },
+    ar: { ss: "arabic", label: "Arabic", folder: "arabic" },
+    ur: { ss: "urdu", label: "Urdu", folder: "urdu" },
+    es: { ss: "spanish", label: "Spanish", folder: "spanish" },
+    fr: { ss: "french", label: "French", folder: "french" },
+    de: { ss: "german", label: "German", folder: "german" },
+    id: { ss: "indonesian", label: "Indonesian", folder: "indonesian" },
+    tr: { ss: "turkish", label: "Turkish", folder: "turkish" },
+    ta: { ss: "tamil", label: "Tamil", folder: "tamil" },
+    ms: { ss: "malay", label: "Malay", folder: "malay" },
+    ru: { ss: "russian", label: "Russian", folder: "russian" },
+    it: { ss: "italian", label: "Italian", folder: "italian" },
+    ko: { ss: "korean", label: "Korean", folder: "korean" },
+    ja: { ss: "japanese", label: "Japanese", folder: "japanese" },
+    pt: { ss: "brazilian_portuguese", label: "Portuguese (BR)", folder: "portuguese" },
+    fa: { ss: "farsi_persian", label: "Persian", folder: "persian" },
+};
+const LANG_TO_SS = Object.fromEntries(Object.entries(LANGS).map(([k, v]) => [k, v.ss]));
+const LANG_LABEL = Object.fromEntries(Object.entries(LANGS).map(([k, v]) => [k, v.label]));
+const LANG_FOLDER = Object.fromEntries(Object.entries(LANGS).map(([k, v]) => [k, v.folder]));
+
+// Languages the background worker downloads (only when SubSource actually has them for that title).
+// Env SUBTITLE_LANGUAGES="en,bn,hi,ar" — English is always first/included.
+const SUPPORTED_LANGS = (() => {
+    const wanted = String(process.env.SUBTITLE_LANGUAGES || "en,bn,hi,ar")
+        .split(",")
+        .map((l) => l.trim().toLowerCase())
+        .filter(Boolean);
+    const known = [...new Set(wanted)].filter((l) => {
+        if (LANGS[l]) return true;
+        console.warn(`[SubSource] SUBTITLE_LANGUAGES: unknown language "${l}" ignored (known: ${Object.keys(LANGS).join(",")})`);
+        return false;
+    });
+    if (!known.includes("en")) known.unshift("en");
+    return known;
+})();
+
+// ─── Hourly budget (SubSource API limit, default 900 of 1000/hour — leaves headroom for the manual UI) ───
+const HOURLY_LIMIT = Number(process.env.SUBSOURCE_HOURLY_LIMIT) || 900;
+const _hourStamps = [];
+
+// ─── Request history (dashboard graphs): requests per hour, kept 30 days, saved to disk ───
+const fs = require("fs");
+const USAGE_FILE = path.join(__dirname, "..", "data", "subtitles", "_api-usage.json");
+const USAGE_KEEP_MS = 30 * 86_400_000;
+const HOUR = 3_600_000;
+let _usage = {}; // hourStart(ms) → { n, search, download, limited }
+let _usageDirty = false;
+try {
+    const raw = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+    if (raw && typeof raw === "object") _usage = raw.hours || {};
+} catch {
+    /* first run, or unreadable — start empty */
+}
+
+function _record(kind) {
+    const t = Math.floor(Date.now() / HOUR) * HOUR;
+    const h = (_usage[t] ||= { n: 0, search: 0, download: 0, limited: 0 });
+    if (kind === "limited") h.limited++;
+    else {
+        h.n++;
+        h[kind === "download" ? "download" : "search"]++;
+    }
+    _usageDirty = true;
+}
+
+function _saveUsage() {
+    if (!_usageDirty) return;
+    _usageDirty = false;
+    const cutoff = Date.now() - USAGE_KEEP_MS;
+    for (const k of Object.keys(_usage)) if (Number(k) < cutoff) delete _usage[k];
+    try {
+        fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true });
+        const tmp = `${USAGE_FILE}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify({ hours: _usage }));
+        fs.renameSync(tmp, USAGE_FILE);
+    } catch {
+        _usageDirty = true; // try again next tick — never let this break a download
+    }
+}
+const _usageTimer = setInterval(_saveUsage, 30_000);
+if (_usageTimer.unref) _usageTimer.unref();
+process.on("exit", _saveUsage);
+
+function _rateLimited() {
+    _record("limited");
+    return Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+}
+
+function _hourlyCheck(kind = "search") {
+    const now = Date.now();
+    while (_hourStamps.length && now - _hourStamps[0] > 3_600_000) _hourStamps.shift();
+    if (_hourStamps.length >= HOURLY_LIMIT) {
+        const retryAfterMs = _hourStamps[0] + 3_600_000 - now + 1000;
+        _record("limited");
+        throw Object.assign(new Error("hourly_limit"), { code: "hourly_limit", retryAfterMs });
+    }
+    _hourStamps.push(now);
+    _record(kind);
+}
 
 // ─── Rate limiter (provider layer only) ──────────────────────────────────────
 const RL_MAX = 55; // stay under 60/min limit
@@ -47,7 +149,8 @@ const RL_WIN = 60_000;
 let _rlCount = 0;
 let _rlStart = Date.now();
 
-async function _throttle() {
+async function _throttle(kind = "search") {
+    _hourlyCheck(kind); // throws code "hourly_limit" when the hour's budget is spent — callers pause instead of waiting an hour
     const now = Date.now();
     if (now - _rlStart > RL_WIN) {
         _rlCount = 0;
@@ -276,7 +379,7 @@ async function _findMovieId(title, year, imdbId, type, season) {
         try {
             return await fn();
         } catch (err) {
-            if (err.code === "rate_limit" || err.code === "auth_error") throw err;
+            if (err.code === "rate_limit" || err.code === "auth_error" || err.code === "hourly_limit") throw err;
             console.warn(`[SubSource] Strategy "${label}" failed for "${title}": ${err.message} — trying next`);
             return null;
         }
@@ -344,7 +447,7 @@ async function _searchAPI(queryString, season) {
         throw err; // re-throw rate_limit / auth_error etc.
     }
 
-    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (status === 429) throw _rateLimited();
     if (status === 401 || status === 403) throw Object.assign(new Error("auth_error"), { code: "auth_error" });
     if (!body?.success || !body.data?.length) return null;
     return body.data[0]?.movieId || null;
@@ -365,7 +468,7 @@ async function _searchText(title, year, type, season) {
         throw err;
     }
 
-    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (status === 429) throw _rateLimited();
     if (status === 401 || status === 403) throw Object.assign(new Error("auth_error"), { code: "auth_error" });
     if (!body?.success || !body.data?.length) return null;
 
@@ -391,7 +494,7 @@ async function _findSubtitleId(movieId, ssLang) {
     await _throttle();
     const url = `${API_BASE}/subtitles?movieId=${movieId}&language=${encodeURIComponent(ssLang)}&sort=popular&limit=5`;
     const { status, body } = await _get(url);
-    if (status === 429) throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
+    if (status === 429) throw _rateLimited();
     if (!body?.success || !body.data?.length) return null;
 
     // Pick subtitle with best rating (good votes), fallback to most downloaded
@@ -405,6 +508,29 @@ async function _findSubtitleId(movieId, ssLang) {
     return best?.subtitleId || null;
 }
 
+/**
+ * Same lookup as _findSubtitleId but returns up to `n` ranked candidates (best first) so the worker can
+ * download several and keep the one that validates against the embedded track. n=1 behaves exactly like before.
+ */
+async function _findSubtitleIds(movieId, ssLang, n = 1) {
+    await _throttle();
+    const limit = Math.max(5, Math.min(20, n));
+    const url = `${API_BASE}/subtitles?movieId=${movieId}&language=${encodeURIComponent(ssLang)}&sort=popular&limit=${limit}`;
+    const { status, body } = await _get(url);
+    if (status === 429) throw _rateLimited();
+    if (!body?.success || !body.data?.length) return [];
+
+    return [...body.data]
+        .sort((a, b) => {
+            const ra = (a.rating?.good || 0) - (a.rating?.bad || 0);
+            const rb = (b.rating?.good || 0) - (b.rating?.bad || 0);
+            return rb !== ra ? rb - ra : (b.downloads || 0) - (a.downloads || 0);
+        })
+        .slice(0, n)
+        .filter((x) => x?.subtitleId)
+        .map((x) => ({ subtitleId: x.subtitleId, releaseName: x.releaseInfo || x.release_info || x.releaseName || x.name || "" }));
+}
+
 // ─── Exported public API ──────────────────────────────────────────────────────
 
 /**
@@ -414,25 +540,21 @@ async function _findSubtitleId(movieId, ssLang) {
  *   Always fetch English.
  *   Fetch Bangla only if spokenLanguage is bn/ben/bangla/bengali OR languages[] includes "bn".
  *
+ * candidates (default 1): how many ranked subtitles to return PER language. 1 = the single best one (old behaviour,
+ * what the search endpoint/UI get); the background worker asks for more and validates them.
+ *
  * Returns:
  *   { ok: true, results: [{ subtitleId, lang, label, ssLang, releaseName, url, fullUrl }] }
  *   url = "/subtitles/{id}/download" (relative)
  *   fullUrl = full download URL
  */
-async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type = "movie", languages = ["en", "bn"], spokenLanguage } = {}) {
+async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, type = "movie", languages = ["en", "bn"], spokenLanguage, candidates = 1 } = {}) {
     if (!API_KEY) return { ok: false, error: "SUBSOURCE_API not configured" };
 
-    // Determine langs to fetch
-    let langsNeeded = languages.length ? [...new Set(languages)] : ["en"];
-    // Always include EN
-    if (!langsNeeded.includes("en")) langsNeeded.unshift("en");
-
-    // spokenLanguage filter: only add BN if spoken lang is Bangla
-    if (spokenLanguage) {
-        const spoken = (Array.isArray(spokenLanguage) ? spokenLanguage : [spokenLanguage]).map((l) => l.toLowerCase());
-        const isBangla = spoken.some((l) => ["bn", "ben", "bangla", "bengali"].includes(l));
-        langsNeeded = ["en", ...(isBangla ? ["bn"] : [])];
-    }
+    // Languages to look up: exactly what was asked (English only if nothing was asked). Every language is "only if
+    // available" — a language SubSource has nothing for just returns no results. (spokenLanguage no longer restricts
+    // anything: before, Bangla was fetched ONLY for Bangla-language movies.)
+    const langsNeeded = languages.length ? [...new Set(languages)] : ["en"];
 
     try {
         // Step 1: find movieId
@@ -447,38 +569,44 @@ async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, t
         const results = [];
         let sawRateLimit = false;
         let sawAuthError = false;
+        let hourly = null;
+        const failedLangs = []; // lookups cut short by a rate/hourly limit — NOT "no subtitles", the caller must retry them
 
         const settled = await Promise.allSettled(
             langsNeeded.map(async (lang) => {
                 const ssLang = LANG_TO_SS[lang];
                 if (!ssLang) return null;
-                const subtitleId = await _findSubtitleId(movieId, ssLang);
-                if (!subtitleId) return null;
-                return {
-                    subtitleId,
+                const found = await _findSubtitleIds(movieId, ssLang, Math.max(1, Math.min(8, candidates | 0 || 1)));
+                if (!found.length) return null;
+                return found.map((f) => ({
+                    subtitleId: f.subtitleId,
                     lang,
                     ssLang,
                     label: LANG_LABEL[lang] || lang,
-                    releaseName: "",
-                    url: `/subtitles/${subtitleId}/download`,
-                    fullUrl: `${API_BASE}/subtitles/${subtitleId}/download`,
+                    releaseName: f.releaseName || "",
+                    url: `/subtitles/${f.subtitleId}/download`,
+                    fullUrl: `${API_BASE}/subtitles/${f.subtitleId}/download`,
                     hi: false,
-                };
+                }));
             }),
         );
 
-        for (const s of settled) {
+        for (let si = 0; si < settled.length; si++) {
+            const s = settled[si];
             if (s.status === "fulfilled" && s.value) {
-                results.push(s.value);
+                results.push(...s.value);
             } else if (s.status === "rejected") {
+                if (s.reason?.code === "rate_limit" || s.reason?.code === "hourly_limit") failedLangs.push(langsNeeded[si]);
                 if (s.reason?.code === "rate_limit") sawRateLimit = true;
                 if (s.reason?.code === "auth_error") sawAuthError = true;
+                if (s.reason?.code === "hourly_limit") hourly = s.reason;
                 console.warn(`[SubSource] Lang lookup failed for "${title}": ${s.reason?.message}`);
             }
         }
 
         // Only propagate rate_limit/auth_error if we got ZERO usable results —
         // if at least one language succeeded, return what we have.
+        if (results.length === 0 && hourly) throw hourly;
         if (results.length === 0 && sawRateLimit) {
             throw Object.assign(new Error("rate_limit"), { code: "rate_limit", retryAfter: 60 });
         }
@@ -487,8 +615,9 @@ async function searchSubtitles({ title, year, imdbId, tmdbId, season, episode, t
         }
 
         console.log(`[SubSource] "${title}" (movieId=${movieId}) → ${results.length} subtitle(s)`);
-        return { ok: true, results };
+        return { ok: true, results, failedLangs, pauseMs: failedLangs.length ? (hourly?.retryAfterMs || 65_000) : 0 };
     } catch (err) {
+        if (err.code === "hourly_limit") return { ok: false, error: "hourly_limit", retryAfterMs: err.retryAfterMs };
         if (err.code === "rate_limit") return { ok: false, error: "rate_limit", retryAfter: err.retryAfter || 60 };
         if (err.code === "auth_error") return { ok: false, error: "SUBSOURCE_API key invalid or missing" };
         if (err.code === "quota_exceeded") return { ok: false, error: "quota_exceeded", retryAfter: 86400 };
@@ -522,7 +651,7 @@ async function downloadSubtitle(subtitleRef, destDir, baseName = "subtitle", lan
             return { ok: false, error: "Invalid subtitle reference" };
         }
 
-        await _throttle();
+        await _throttle("download");
         const zipBuf = await _getBuffer(dlUrl);
 
         const magic = zipBuf.slice(0, 4).toString("hex");
@@ -544,9 +673,64 @@ async function downloadSubtitle(subtitleRef, destDir, baseName = "subtitle", lan
 
         return { ok: true, destPath, filename: destFilename, ext: extracted.ext };
     } catch (err) {
+        if (err.code === "hourly_limit") return { ok: false, error: "hourly_limit", retryAfterMs: err.retryAfterMs };
         console.error("[SubSource] downloadSubtitle error:", err.message);
         return { ok: false, error: err.message };
     }
 }
 
-module.exports = { searchSubtitles, downloadSubtitle, SUPPORTED_LANGS };
+/** SubSource requests used in the last hour vs the configured budget (for the dashboard). */
+function getBudget() {
+    const now = Date.now();
+    while (_hourStamps.length && now - _hourStamps[0] > 3_600_000) _hourStamps.shift();
+    return { used: _hourStamps.length, limit: HOURLY_LIMIT };
+}
+
+/** Request history for the dashboard: last 48 hourly buckets, 14 daily totals, and the peak hour / day / typical busiest hour. */
+function getUsage() {
+    const now = Date.now();
+    const nowHour = Math.floor(now / HOUR) * HOUR;
+    const get = (t) => _usage[t] || { n: 0, search: 0, download: 0, limited: 0 };
+    const hours = Array.from({ length: 48 }, (_, i) => {
+        const t = nowHour - (47 - i) * HOUR;
+        return { t, ...get(t) };
+    });
+    // daily totals (server local time) + hour-of-day profile over the whole history
+    const dayKey = (t) => {
+        const d = new Date(t);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const perDay = new Map();
+    const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, total: 0 }));
+    let all = { n: 0, search: 0, download: 0, limited: 0 };
+    let peakHour = null;
+    let first = null;
+    for (const [k, v] of Object.entries(_usage)) {
+        const t = Number(k);
+        first = first == null ? t : Math.min(first, t);
+        perDay.set(dayKey(t), (perDay.get(dayKey(t)) || 0) + v.n);
+        byHour[new Date(t).getHours()].total += v.n;
+        for (const f of Object.keys(all)) all[f] += v[f] || 0;
+        if (!peakHour || v.n > peakHour.n) peakHour = { t, n: v.n, search: v.search, download: v.download };
+    }
+    const days = Array.from({ length: 14 }, (_, i) => {
+        const d = new Date(now - (13 - i) * 86_400_000);
+        const key = dayKey(d.getTime());
+        return { date: key, n: perDay.get(key) || 0 };
+    });
+    let peakDay = null;
+    for (const [date, n] of perDay) if (!peakDay || n > peakDay.n) peakDay = { date, n };
+    const busiest = byHour.reduce((a, b) => (b.total > a.total ? b : a), byHour[0]);
+    const sum = (arr, f = "n") => arr.reduce((a, x) => a + (x[f] || 0), 0);
+    const last24 = hours.slice(-24);
+    return {
+        hours,
+        days,
+        byHour,
+        peak: { hour: peakHour, day: peakDay, typicalHour: busiest.total ? { hour: busiest.hour, total: busiest.total } : null },
+        totals: { lastHour: hours[47].n, last24h: sum(last24), last7d: sum(days.slice(-7)), all: all.n, search: all.search, download: all.download, limited: all.limited, limitedLast24h: sum(last24, "limited") },
+        since: first,
+    };
+}
+
+module.exports = { searchSubtitles, downloadSubtitle, getBudget, getUsage, SUPPORTED_LANGS, LANGS, LANG_LABEL, LANG_FOLDER };

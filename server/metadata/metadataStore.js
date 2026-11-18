@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseFilename } = require("./nameParser");
-const { lookupMetadata, fetchReviewIds } = require("./tmdb");
+const { lookupMetadata } = require("./tmdb");
 
 const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 
@@ -107,11 +107,11 @@ const STORE_FILE = path.join(__dirname, "..", "data", "metadata.json");
 //   of waiting for each page to be visited. Either way: restart the server
 //   (Node has to load the new code), then either browse normally or hit
 //   refresh-all — metadata.json itself never needs to be touched by hand.
-// NOTE (reviews — deliberately NO bump): tmdb.js fetchReviews() now stores ALL review ids (it used to keep 10).
-// The schema is unchanged — `reviews` is still an array of ids — so PARSER_VERSION stays as is. Old entries are
-// upgraded IN PLACE by refreshReviewIds() further down (one cheap TMDB call per title) instead of re-enriching
-// the whole library; new entries get the full list straight from tmdb.js.
-const PARSER_VERSION = 21;
+// v22: review ids removed from metadata (reviews live in reviews.json, see server/utils/media/reviewStore.js).
+// v23: matcher-only fix (no cached field changed): tmdb.js re-release qualifier guard ("Encore" / "Re-release" must agree between file and
+//      TMDB title, alt titles can no longer attach the original to an Encore file) + nameParser.js trailing platform/IMAX tags.
+//      hasTitleDrifted() cannot see matcher-only changes, so the version bump purges old (wrong / _notFound) entries.
+const PARSER_VERSION = 23;
 
 // _notFound entries expire after 7 days — prevents permanently cached misses
 // from a bad API key or transient network failure blocking real lookups.
@@ -208,6 +208,9 @@ function scheduleSave() {
 function isCacheValid(entry) {
     if (!entry) return false;
     if ((entry._parserVersion ?? 0) < PARSER_VERSION) return false;
+    // v24: a result produced by the release-qualifier matcher is only valid for the current matcher revision. Checked here
+    // so EVERY read path (getMetadata, getCached, startup purge) drops entries from older revisions, not just getMetadata.
+    if (entry.releaseQualifier && entry._qualifierRev !== QUALIFIER_REV) return false;
     if (entry._notFound) {
         const age = Date.now() - new Date(entry._cachedAt).getTime();
         return age < NOT_FOUND_TTL_MS;
@@ -245,6 +248,35 @@ async function getCached(fileId) {
     return entry;
 }
 
+// v24: entries for files with a release qualifier ("Encore") are stamped with the matcher revision that produced them.
+// hasTitleDrifted() cannot see matcher-only changes, and bumping PARSER_VERSION would purge the WHOLE library, so this
+// re-checks ONLY qualifier files whose entry was written by an older revision (or before qualifiers existed).
+// Bump QUALIFIER_REV when the qualifier matching logic changes again.
+const QUALIFIER_REV = 4;
+
+function needsQualifierRecheck(cached, parsed) {
+    if (!cached || !parsed || !parsed.releaseQualifier) return false;
+    return cached._qualifierRev !== QUALIFIER_REV;
+}
+
+function stampQualifierRev(fileId, parsed) {
+    if (!parsed || !parsed.releaseQualifier) return;
+    const entry = store.get(fileId);
+    if (entry) entry._qualifierRev = QUALIFIER_REV; // already queued for save by setCache/setNotFound
+}
+
+// v24: a refresh that could not re-check a release (TMDB down) must not downgrade an earlier `evidence_found` for the SAME
+// TMDB movie to `unverified`. Mutates `next` only in that case. Old entries without the field are simply ignored.
+function preserveReleaseVerification(prev, next) {
+    const before = prev && prev.releaseVerification;
+    const after = next && next.releaseVerification;
+    if (!before || !after) return next;
+    if (before.status === "evidence_found" && after.status === "unverified" && after.reason === "lookup-failed" && prev.tmdbId === next.tmdbId) {
+        next.releaseVerification = before;
+    }
+    return next;
+}
+
 // setCache(fileId, metadata, sourceTitle)
 // sourceTitle = the parsed.title that produced this TMDB hit — stamped as
 // _sourceTitle so future reads can detect parser-output drift (self-heal).
@@ -257,6 +289,7 @@ function setCache(fileId, metadata, sourceTitle) {
     // The stored entry contains only clean TMDB data:
     //   title, year, overview, poster, backdrop, genres, cast, trailer, ...
     const { parsed: _drop, ...cleanMetadata } = metadata;
+    preserveReleaseVerification(store.get(fileId), cleanMetadata);
 
     const date = resolveAddedDate(fileId);
 
@@ -264,7 +297,6 @@ function setCache(fileId, metadata, sourceTitle) {
         ...cleanMetadata,
         date,
         _sourceTitle: sourceTitle,
-        _reviewsCheckedAt: new Date().toISOString(), // the review ids were just fetched — refreshReviewIds() skips it for now
         _parserVersion: PARSER_VERSION,
         _cachedAt: new Date().toISOString(),
     });
@@ -293,7 +325,8 @@ function invalidate(fileId) {
 
 function invalidateAll() {
     store.clear();
-    storeLoaded = false;
+    // storeLoaded stays true: resetting it made the next request re-read the OLD metadata.json from disk (the empty store
+    // is only written 2 s later), silently undoing refresh-all.
     scheduleSave();
 }
 
@@ -303,7 +336,7 @@ async function purgeStaleEntries() {
     let purged = 0;
     for (const [key, value] of store) {
         // Season entries have their own TTL — skip here, getCachedSeason handles expiry
-        if (key.startsWith("_season:") || key.startsWith("_feed:")) continue;
+        if (key.startsWith("_season:")) continue;
         if (!isCacheValid(value)) {
             store.delete(key);
             purged++;
@@ -350,8 +383,9 @@ async function getMetadata(file) {
 
     const cached = store.get(file.id);
     const driftedStale = hasTitleDrifted(cached, parsed.title);
+    const qualifierStale = needsQualifierRecheck(cached, parsed);
 
-    if (cached && isCacheValid(cached) && !driftedStale) {
+    if (cached && isCacheValid(cached) && !driftedStale && !qualifierStale) {
         if (cached._notFound) return null;
         return cached;
     }
@@ -360,13 +394,18 @@ async function getMetadata(file) {
         console.log(`[Metadata] Self-heal: source title changed "${cached._sourceTitle}" → "${parsed.title}" for ${file.id} — re-fetching`);
     }
 
+    if (qualifierStale && !driftedStale) {
+        console.log(`[Metadata] Re-check: release qualifier "${parsed.releaseQualifier}" file ${file.id} — entry predates qualifier matching`);
+    }
+
     // Stale, missing, or drifted — re-fetch
     console.log(
         `[Metadata] Fetching: "${parsed.title}"` +
             ` type=${parsed.type}` +
             (parsed.year ? ` year=${parsed.year}` : "") +
             (parsed.season != null ? ` S${String(parsed.season).padStart(2, "0")}` : "") +
-            (parsed.part != null ? ` Part ${parsed.part}` : ""),
+            (parsed.part != null ? ` Part ${parsed.part}` : "") +
+            (parsed.releaseQualifier ? ` qualifier=${parsed.releaseQualifier}` : ""),
     );
 
     let metadata;
@@ -382,11 +421,13 @@ async function getMetadata(file) {
     if (!metadata) {
         // Genuine "no result from TMDB" — cache it so we don't hammer the API
         setNotFound(file.id, parsed.title);
+        stampQualifierRev(file.id, parsed);
         return null;
     }
 
     // Store clean TMDB data (no 'parsed' internals) + date + sourceTitle
     setCache(file.id, metadata, parsed.title);
+    stampQualifierRev(file.id, parsed);
     return store.get(file.id); // return the stored version (without parsed)
 }
 
@@ -407,7 +448,7 @@ async function reconcile(activeFileIds) {
     let removed = 0;
     for (const key of store.keys()) {
         // Skip internal season cache entries — they are NOT indexed by fileId
-        if (key.startsWith("_season:") || key.startsWith("_feed:")) continue;
+        if (key.startsWith("_season:")) continue;
 
         // hasOwnProperty-safe check — supports both Set and Map
         const isActive = activeFileIds instanceof Set ? activeFileIds.has(key) : activeFileIds.has(key);
@@ -463,108 +504,6 @@ async function setCachedSeason(tmdbId, seasonNumber, data) {
     scheduleSave();
 }
 
-// ─── Review-id refresher ──────────────────────────────────────────────────────
-// tmdb.js stores the TMDB review ids of a title ONCE, when the title is enriched.
-// Reviews written later never showed up, and old entries only hold the first 10
-// ids (the old cap). This job re-reads the CURRENT id list per title — one cheap
-// TMDB call per title, no full re-enrichment — and stores it back on the entry.
-//
-//   • runs every REVIEW_REFRESH_INTERVAL_MS (default 3 days) per title; entries
-//     never checked before (everything cached before this feature) go first
-//   • a tick handles at most REVIEW_REFRESH_BATCH titles (default 300), so a big
-//     library is spread over several ticks instead of hammering TMDB at once
-//   • a failed/empty TMDB answer never wipes ids that are already stored
-const REVIEW_REFRESH_MS = parseInt(process.env.REVIEW_REFRESH_INTERVAL_MS || String(3 * 24 * 60 * 60 * 1000), 10);
-const REVIEW_REFRESH_BATCH = parseInt(process.env.REVIEW_REFRESH_BATCH || "300", 10);
-const REVIEW_TICK_MS = 6 * 60 * 60 * 1000;
-let _reviewRunning = false;
-let _reviewFirstTimer = null;
-let _reviewTimer = null;
-
-async function refreshReviewIds() {
-    if (_reviewRunning) return { checked: 0, updated: 0, added: 0 };
-    _reviewRunning = true;
-    const out = { checked: 0, updated: 0, added: 0 };
-    try {
-        await loadStore();
-        const now = Date.now();
-        const due = [];
-        for (const [key, entry] of store) {
-            if (key.startsWith("_season:") || key.startsWith("_feed:")) continue;
-            if (!entry || entry._notFound || !entry.tmdbId) continue;
-            const last = entry._reviewsCheckedAt ? new Date(entry._reviewsCheckedAt).getTime() : 0;
-            if (now - last >= REVIEW_REFRESH_MS) due.push({ entry, last });
-        }
-        due.sort((a, b) => a.last - b.last); // never-checked first, then oldest
-        const batch = due.slice(0, REVIEW_REFRESH_BATCH);
-
-        let next = 0;
-        const worker = async () => {
-            while (next < batch.length) {
-                const { entry } = batch[next++];
-                try {
-                    const ids = await fetchReviewIds(entry.type === "movie" ? "movie" : "tv", entry.tmdbId);
-                    const had = Array.isArray(entry.reviews) ? entry.reviews : [];
-                    if (!ids.length && had.length) continue; // TMDB hiccup — keep what we have, retry next tick
-                    out.checked++;
-                    entry._reviewsCheckedAt = new Date().toISOString();
-                    if (ids.join(",") !== had.join(",")) {
-                        const known = new Set(had);
-                        out.added += ids.filter((id) => !known.has(id)).length;
-                        entry.reviews = ids;
-                        out.updated++;
-                    }
-                } catch (err) {
-                    console.warn(`[Metadata] review-id refresh failed for tmdbId=${entry.tmdbId}: ${err.message}`);
-                }
-            }
-        };
-        await Promise.all(Array.from({ length: 4 }, worker));
-        if (out.checked) scheduleSave();
-        return out;
-    } finally {
-        _reviewRunning = false;
-    }
-}
-
-async function _reviewTick() {
-    try {
-        const r = await refreshReviewIds();
-        if (r.checked) console.log(`[Metadata] review ids refreshed — checked=${r.checked} updated=${r.updated} newIds=${r.added}`);
-    } catch (err) {
-        console.error("[Metadata] review-id refresh failed:", err.message);
-    }
-}
-
-function startReviewIdRefresher() {
-    _reviewFirstTimer = setTimeout(_reviewTick, 60 * 1000); // after boot has settled
-    _reviewFirstTimer.unref();
-    _reviewTimer = setInterval(_reviewTick, REVIEW_TICK_MS);
-    _reviewTimer.unref();
-}
-
-function stopReviewIdRefresher() {
-    if (_reviewFirstTimer) clearTimeout(_reviewFirstTimer);
-    if (_reviewTimer) clearInterval(_reviewTimer);
-    _reviewFirstTimer = null;
-    _reviewTimer = null;
-}
-
-// ─── Feed cache (Popular Reviews / Popular Discussions) ───────────────────────
-// Small derived lists kept in the same metadata.json under "_feed:<name>" keys
-// (same trick as the "_season:" entries — purge/reconcile skip both prefixes).
-
-async function getCachedFeed(name) {
-    await loadStore();
-    return store.get(`_feed:${name}`) || null; // { generatedAt, items } — caller decides how old is too old
-}
-
-async function setCachedFeed(name, items) {
-    await loadStore();
-    store.set(`_feed:${name}`, { generatedAt: new Date().toISOString(), items });
-    scheduleSave();
-}
-
 module.exports = {
     getMetadata,
     getCached,
@@ -575,9 +514,7 @@ module.exports = {
     reconcile,
     getCachedSeason,
     setCachedSeason,
-    refreshReviewIds,
-    startReviewIdRefresher,
-    stopReviewIdRefresher,
-    getCachedFeed,
-    setCachedFeed,
+    preserveReleaseVerification, // v24 (exported for tests)
+    needsQualifierRecheck, // v24 (exported for tests)
+    isCacheValid, // v24 (exported for tests)
 };

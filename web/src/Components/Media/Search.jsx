@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { Search as SearchIcon, X, Film, Tv, Loader2, Star, ArrowLeft, Sparkles } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
+import { routeId } from "../../Utils/shortId.js";
 
 // ─── Type resolver ────────────────────────────────────────────────────────────
 // Source of truth priority: metadata.type > parsed.type > explicit bucket
@@ -488,7 +489,7 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
         setQuery("");
         setResults([]);
         const id = item.id ?? item.seriesKey ?? encodeURIComponent(item._displayTitle);
-        navigate(`/media/${encodeURIComponent(id)}`);
+        navigate(`/media/${routeId(id)}`);
     }
 
     function clear() {

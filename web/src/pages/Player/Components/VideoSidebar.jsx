@@ -86,7 +86,7 @@ import { api } from "../../../Api/client";
 import { getOrCreateClientId } from "../../../Api/stream";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { getLiveChannels } from "../../../Api/live";
-import { shareMedia, shareStream, getStreamUrl, copyToClipboard } from "../../../Utils/shareMedia";
+import { shareMedia, shareStream, getStreamLinks, copyToClipboard } from "../../../Utils/shareMedia";
 
 // Backend base URL — used by the mediainfo.json fallback fetch (see
 // SubtitlePicker) when a live track's language name is missing.
@@ -3295,15 +3295,17 @@ function TutorialOverlay({ onClose }) {
 //      bulk map of every file's ffprobe result, keyed by id (no per-id
 //      route exists, so this fetches the whole map and picks this file's
 //      entry — same as DashMedia does on the dashboard side).
-//   2. getStreamUrl() from shareMedia.js — the exact same call Share/
-//      Network Stream use, so "Stream URL" here is always the real,
-//      currently-playable link (direct file URL or the session's .m3u8).
+//   2. getStreamLinks() from shareMedia.js — the same call Share / Network Stream use: a short
+//      share link (…/s/<code>/<Title>.mkv, or …/s/<code>/h/stream.m3u8 for HLS) that external
+//      players such as VLC / MX Player can open.
 // Decoder mode (hw/hw+/sw) comes straight from player state — no fetch
 // needed, it's already known locally.
-function InfoBody({ mediaId, mediaInfo, hlsUrl }) {
+function InfoBody({ mediaId, mediaInfo }) {
     const { state } = usePlayerState();
     const [entry, setEntry] = useState(null);
-    const [streamUrl, setStreamUrl] = useState(null);
+    const [streamUrls, setStreamUrls] = useState(null); // { direct, hls } short share links
+    const [streamMode, setStreamMode] = useState("direct");
+    const streamUrl = streamUrls ? streamUrls[streamMode] : null;
     const [streamUrlLoading, setStreamUrlLoading] = useState(false);
     const [streamUrlFailed, setStreamUrlFailed] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -3318,7 +3320,7 @@ function InfoBody({ mediaId, mediaInfo, hlsUrl }) {
         setEntry(null);
         // Reset the manually-fetched stream link too when switching files,
         // so a stale link from a previous file can't be shown/copied.
-        setStreamUrl(null);
+        setStreamUrls(null);
         setStreamUrlFailed(false);
 
         // FIX: this is now the EXACT call FloatingActionMenu.jsx's own
@@ -3368,28 +3370,16 @@ function InfoBody({ mediaId, mediaInfo, hlsUrl }) {
         ["Decoder", DECODER_LABELS[state.decoderMode] || state.decoderMode],
     ].filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== "");
 
-    // On-demand only — NOT called automatically. getStreamUrl() calls
-    // resolvePlayback(), the same call the player itself makes to START a
-    // transcode session; firing it as a side effect of just opening this
-    // panel (while the file is already playing) was what broke the active
-    // stream. Same trigger model as the existing Share/Network Stream
-    // buttons: only runs when the user explicitly asks for it.
-    //
-    // If the caller passes the ACTIVE playback's URL (hlsUrl), reuse it — no
-    // resolvePlayback()/session creation at all, so an active HLS stream is never touched.
+    // On-demand only — runs when the user taps "Get link". getStreamLinks() asks the server for a share link
+    // (POST /stream/share/:id): a short URL that VLC / MX Player can open. It never starts a transcode session
+    // and never touches the active playback, so it is safe while the file is playing.
     const fetchStreamUrl = async () => {
-        if (hlsUrl) {
-            setStreamUrl(hlsUrl);
-            setStreamUrlFailed(false);
-            return;
-        }
         setStreamUrlLoading(true);
         setStreamUrlFailed(false);
         try {
-            const url = await getStreamUrl(mediaId);
-            setStreamUrl(url);
+            setStreamUrls(await getStreamLinks(mediaId));
         } catch (err) {
-            console.error("[MoreOptionsPanel] Info panel: failed to resolve stream url:", err);
+            console.error("[MoreOptionsPanel] Info panel: failed to create share link:", err);
             setStreamUrlFailed(true);
         } finally {
             setStreamUrlLoading(false);
@@ -3552,6 +3542,29 @@ function InfoBody({ mediaId, mediaInfo, hlsUrl }) {
                         marginBottom: 8,
                     }}>
                     <Link2 size={12} /> Stream URL
+                    {streamUrls && (
+                        <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                            {[["direct", "File"], ["hls", "HLS .m3u8"]].map(([key, label]) => (
+                                <button
+                                    key={key}
+                                    onClick={() => setStreamMode(key)}
+                                    style={{
+                                        padding: "2px 8px",
+                                        borderRadius: 5,
+                                        border: "none",
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        textTransform: "none",
+                                        letterSpacing: 0,
+                                        cursor: "pointer",
+                                        color: "#fff",
+                                        background: streamMode === key ? "var(--color-primary)" : "rgba(255,255,255,0.1)",
+                                    }}>
+                                    {label}
+                                </button>
+                            ))}
+                        </span>
+                    )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.05)", borderRadius: 10, padding: "9px 10px" }}>
                     <span

@@ -114,6 +114,7 @@ import { useApi } from "../../Context/apiContext";
 import { useRecommendations } from "../../Hooks/Query/useRecommendations";
 import { useCountdown } from "../Media/MediaCard";
 import { RemindMe, TrailerModal } from "./Modal";
+import { routeId } from "../../Utils/shortId.js";
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BANNER IDS — the DOM `id` of each banner's root element (also see BANNERS.md)
@@ -880,7 +881,7 @@ function HeroSlide({ item, active, variant = "default" }) {
     const upcoming = Boolean(item._release);
     const spotlight = variant === "spotlight";
     const navigate = useNavigate();
-    const detailsPath = `/media/${encodeURIComponent(keyOf(item))}`;
+    const detailsPath = `/media/${routeId(keyOf(item))}`;
     // Series: Play opens the details page with a season pre-selected
     // (lowest real season; Season 0 / specials only if nothing else exists).
     const seasonKeys = Object.keys(item.seasons || {}).sort((a, b) => Number(a) - Number(b));
@@ -1050,7 +1051,7 @@ function HeroSlide({ item, active, variant = "default" }) {
                 <div className="flex gap-2 sm:gap-3 mt-0.5 sm:mt-2">
                     {isMovie && item.streamUrl && (
                         <div style={buttonStyle(5.5)}>
-                            <Link to={`/player/${encodeURIComponent(keyOf(item))}`} onClick={(e) => e.stopPropagation()} className={btn}>
+                            <Link to={`/player/${routeId(keyOf(item))}`} onClick={(e) => e.stopPropagation()} className={btn}>
                                 {playIcon}Play
                             </Link>
                         </div>
@@ -1578,7 +1579,7 @@ function HorizonText({ item, out, trailerKey, onWatchTrailer, onDialog }) {
                         </button>
                     )}
                     <Link
-                        to={`/media/${encodeURIComponent(item.id)}`}
+                        to={`/media/${routeId(item.id)}`}
                         className="inline-flex items-center whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-content transition-all duration-300 hover:-translate-y-0.5 active:scale-95 sm:px-3.5 sm:py-2 sm:text-sm">
                         Details
                     </Link>
@@ -2088,7 +2089,7 @@ function RecoHeroSlide({ item, active }) {
     const genres = meta.genres || item.category || [];
     const isMovie = !item.seasons;
     const navigate = useNavigate();
-    const detailsPath = `/media/${encodeURIComponent(item.id)}`;
+    const detailsPath = `/media/${routeId(item.id)}`;
     // Series: Play opens the details page with a season pre-selected
     // (lowest real season; Season 0 / specials only if nothing else exists).
     const seasonKeys = Object.keys(item.seasons || {}).sort((a, b) => Number(a) - Number(b));
@@ -2202,7 +2203,7 @@ function RecoHeroSlide({ item, active }) {
                 <div className="flex gap-2 sm:gap-3 mt-0.5 sm:mt-2">
                     {isMovie && item.streamUrl && (
                         <div style={buttonStyle(5.5)}>
-                            <Link to={`/player/${encodeURIComponent(item.id)}`} onClick={(e) => e.stopPropagation()} className={btn}>
+                            <Link to={`/player/${routeId(item.id)}`} onClick={(e) => e.stopPropagation()} className={btn}>
                                 {playIcon}Play
                             </Link>
                         </div>
@@ -2524,10 +2525,10 @@ function PickText({ item, rank, total, out }) {
     const meta = item.metadata || {};
     const title = meta.title || item.title || item.name;
     const isMovie = !item.seasons;
-    const detailsPath = `/media/${encodeURIComponent(item.id)}`;
+    const detailsPath = `/media/${routeId(item.id)}`;
     const seasonKeys = Object.keys(item.seasons || {}).sort((a, b) => Number(a) - Number(b));
     const firstSeason = seasonKeys.find((k) => Number(k) !== 0) ?? seasonKeys[0];
-    const playPath = isMovie ? `/player/${encodeURIComponent(item.id)}` : firstSeason != null ? `${detailsPath}?season=${encodeURIComponent(firstSeason)}` : detailsPath;
+    const playPath = isMovie ? `/player/${routeId(item.id)}` : firstSeason != null ? `${detailsPath}?season=${encodeURIComponent(firstSeason)}` : detailsPath;
     const label = item._pickTag || item._recReasons?.[0] || "Tonight's pick";
     const runtime = isMovie && meta.runtime ? (meta.runtime >= 60 ? `${Math.floor(meta.runtime / 60)}h ${meta.runtime % 60}m` : `${meta.runtime}m`) : null;
     const details = [meta.year, runtime, !isMovie ? `${seasonKeys.length} season${seasonKeys.length > 1 ? "s" : ""}` : null, meta.votes ? `${compactVotes(meta.votes)} votes` : null].filter(Boolean);
@@ -2858,9 +2859,10 @@ function generateHomeBanner(ctx, keepExpiresAt) {
     const take = (list, tier) => {
         for (const i of list) {
             if (slides.length >= HOME_HERO_SLIDES) break;
-            if (used.has(i.id)) continue;
-            used.add(i.id);
-            slides.push({ id: i.id, tier });
+            const k = keyOf(i); // series/anime groups have no `.id` — only seriesKey
+            if (used.has(k)) continue;
+            used.add(k);
+            slides.push({ id: k, tier });
         }
     };
     take(fresh, "new");
@@ -2887,14 +2889,14 @@ function useHomeHeroBanner(ctx, ready) {
         return () => clearInterval(t);
     }, []);
 
-    const poolById = useMemo(() => new Map((ctx?.pool || []).map((i) => [i.id, i])), [ctx]);
+    const poolById = useMemo(() => new Map((ctx?.pool || []).map((i) => [keyOf(i), i])), [ctx]);
 
     const slides = useMemo(() => {
         if (!stored) return [];
         return stored.slides
             .map((s) => {
                 const item = poolById.get(s.id);
-                return item ? { ...item, _heroReason: homeTag(s.tier) } : null;
+                return item ? { ...item, id: keyOf(item), _heroReason: homeTag(s.tier) } : null;
             })
             .filter(Boolean);
     }, [stored, poolById, ctx]);
@@ -2927,7 +2929,7 @@ function useHomeHeroBanner(ctx, ready) {
             alive = false;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [needsNew]);
+    }, [needsNew, freshIds]); // freshIds: library changed WHILE a rebuild is pending → restart with the new pool
 
     return slides;
 }
@@ -3230,7 +3232,7 @@ export function SeasonalBanner() {
                 <p className="hidden max-w-sm text-sm text-base-content/70 sm:block">{season.sub}</p>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-1 sm:mt-1">
                     <Link
-                        to={`/media/${encodeURIComponent(keyOf(first))}`}
+                        to={`/media/${routeId(keyOf(first))}`}
                         className="group inline-flex max-w-full items-center rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-content shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-primary/90 hover:shadow-lg active:scale-95 sm:px-5 sm:py-2 sm:text-sm">
                         <span className="mr-1.5 transition-transform duration-300 group-hover:translate-x-0.5">▶</span>
                         <span className="truncate">Watch {firstTitle}</span>
@@ -3254,7 +3256,7 @@ export function SeasonalBanner() {
                                 zIndex: 10 - Math.abs(Math.round(off)),
                             }}>
                             <Link
-                                to={`/media/${encodeURIComponent(keyOf(item))}`}
+                                to={`/media/${routeId(keyOf(item))}`}
                                 title={title}
                                 className="block h-full w-full overflow-hidden rounded-lg bg-base-300 shadow-2xl ring-1 ring-base-content/15 transition-transform duration-300 hover:-translate-y-2 hover:scale-105">
                                 <img src={item.metadata.poster} alt={title} className="h-full w-full object-cover" loading="lazy" draggable={false} />

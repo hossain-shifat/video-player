@@ -22,6 +22,11 @@ const fs = require("fs");
 const libraryRouter = require("./routes/media/library");
 const mediaRouter = require("./routes/media/media");
 const streamRouter = require("./routes/streaming/stream");
+const { hideImageSubtitles } = require("./routes/media/subtitleListFilter"); // PGS/DVD tracks can not be shown → not offered
+const subtitleRouter = require("./routes/streaming/subtitles"); // downloaded subtitles (data/subtitles) — mounted before /stream
+const shareRouters = require("./routes/streaming/share"); // short stream links: /stream/share (manage) + /s/:code (the link)
+const idsRouter = require("./routes/media/ids"); // /api/ids/:short → long media id
+const shortIds = require("./utils/system/shortIds");
 const metadataRouter = require("./routes/media/metadata");
 const historyRouter = require("./routes/user/history");
 const watchTimeRouter = require("./routes/user/watchtime");
@@ -34,9 +39,9 @@ const mediaInfoRouter = require("./routes/media/mediainfo");
 const permissionsRouter = require("./routes/user/permissions");
 const trailersRouter = require("./routes/trailers/trailers");
 const notificationsRouter = require("./routes/user/notifications");
+const reviewsRouter = require("./routes/media/reviews");
 const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailers/trailerScheduler");
-const { startReviewIdRefresher, stopReviewIdRefresher } = require("./metadata/metadataStore");
-const { startCommunityFeedScheduler, stopCommunityFeedScheduler } = require("./controllers/media/metadataController");
+const { startReviewScheduler, stopReviewScheduler, flushReviews } = require("./controllers/media/reviewController");
 const { startStorageMonitor, stopStorageMonitor } = require("./utils/system/storageMonitor");
 const notificationService = require("./services/notificationService");
 const { startAccountPurgeScheduler, stopAccountPurgeScheduler } = require("./utils/user/userStore");
@@ -85,13 +90,15 @@ app.use(
 );
 
 app.use(express.json());
+app.use(shortIds.middleware); // short ids (9 chars) are accepted anywhere a media id is; ids sent out get registered
+app.get("/api/media/:id/subtitles", hideImageSubtitles); // wraps res.json only, then falls through to the real handler
 
 // ─── Request Logger ───────────────────────────────────────────────────────────
 app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
         const ms = Date.now() - start;
-        if (!req.path.startsWith("/stream/hls")) {
+        if (!req.path.startsWith("/stream/hls") && !/^\/s\/[^/]+\/h\//.test(req.path)) {
             // don't spam HLS segment logs
             console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${ms}ms`);
         }
@@ -105,10 +112,22 @@ app.use((req, res, next) => {
 // approval is NOT checked here — pending users may browse. Playback is gated in routes/stream.js.
 app.use(enforceEmailVerified);
 
+// ─── Subtitle worker idle gate ────────────────────────────────────────────────
+// The background subtitle downloader/validator only works while the server is idle: any stream/share traffic
+// pushes its "quiet since" clock forward, and it also waits for zero active HLS sessions (see start below).
+app.use(["/stream", "/s"], (req, res, next) => {
+    subtitleWorker.noteActivity();
+    next();
+});
+
 // ─── Auth routes (public — no middleware applied here) ────────────────────────
 app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
 app.use("/api/sessions", sessionRouter);
+app.use("/stream/share", shareRouters.authed); // POST /stream/share/:id → short link (logged in)
+app.use("/s", shareRouters.public); // /s/:code[/…] → the link itself (code = credential)
+app.use("/api/ids", idsRouter);
+app.use("/stream/subtitle", subtitleRouter); // data/subtitles files only; everything else falls through to /stream below
 app.use("/stream/start", streamStartRouter); // POST /stream/start/:id — auth-gated stream token
 
 // ─── Existing routes (auth middleware injected inside each router) ─────────────
@@ -125,6 +144,7 @@ app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/live", liveRouter);
 app.use("/api/trailers", trailersRouter);
+app.use("/api/reviews", reviewsRouter); // review system: reviews · reactions · discussions (data/media/reviews.json)
 app.use("/api/notifications", notificationsRouter);
 app.use("/stream", streamRouter);
 
@@ -174,6 +194,63 @@ app.post("/api/subtitle/enqueue/:id", authenticateJWT, requireApprovedUser, asyn
     }
 });
 
+// ─── Subtitle admin dashboard API (admin only) ────────────────────────────────
+// Overview cards, table rows, preview/download and bulk actions behind the dashboard "Subtitles" page.
+const subtitleAdmin = express.Router();
+subtitleAdmin.use(authenticateJWT, requireApprovedUser, requireRole("admin"));
+const subAdminRoute = (fn) => async (req, res) => {
+    try {
+        res.set("Cache-Control", "no-store");
+        await fn(req, res);
+    } catch (err) {
+        console.error("[SubtitleAdmin]", err.message);
+        res.status(500).json({ error: err.message });
+    }
+};
+subtitleAdmin.get("/overview", subAdminRoute(async (req, res) => res.json(await subtitleWorker.adminOverview())));
+subtitleAdmin.get("/list", subAdminRoute(async (req, res) => res.json(await subtitleWorker.adminList(req.query))));
+subtitleAdmin.get(
+    "/preview/:mediaId/:lang",
+    subAdminRoute(async (req, res) => {
+        const out = await subtitleWorker.adminPreview(req.params.mediaId, req.params.lang, req.query);
+        return out ? res.json(out) : res.status(404).json({ error: "Subtitle not found" });
+    }),
+);
+subtitleAdmin.get(
+    "/details/:mediaId/:lang",
+    subAdminRoute(async (req, res) => {
+        const out = await subtitleWorker.adminDetails(req.params.mediaId, req.params.lang);
+        return out ? res.json(out) : res.status(404).json({ error: "Subtitle not found" });
+    }),
+);
+subtitleAdmin.get(
+    "/file/:mediaId/:lang",
+    subAdminRoute(async (req, res) => {
+        const f = subtitleWorker.adminFile(req.params.mediaId, req.params.lang);
+        return f ? res.download(f.path, f.filename) : res.status(404).json({ error: "Subtitle not found" });
+    }),
+);
+subtitleAdmin.post(
+    "/action",
+    subAdminRoute(async (req, res) => {
+        const { action, items, params } = req.body || {};
+        if (!["revalidate", "redownload", "delete", "shift", "clean", "upgrade"].includes(action)) return res.status(400).json({ error: "Unknown action" });
+        if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: "No items selected" });
+        return res.json(await subtitleWorker.adminAction(action, items, params || {}));
+    }),
+);
+subtitleAdmin.post("/purge-rejected", subAdminRoute(async (req, res) => res.json(await subtitleWorker.adminPurgeRejected())));
+subtitleAdmin.get("/missing", subAdminRoute(async (req, res) => res.json(await subtitleWorker.adminMissing(req.query))));
+subtitleAdmin.post(
+    "/missing/retry",
+    subAdminRoute(async (req, res) => {
+        const { mediaIds, all, status } = req.body || {};
+        if (!all && !(Array.isArray(mediaIds) && mediaIds.length)) return res.status(400).json({ error: "No titles selected" });
+        return res.json(await subtitleWorker.adminRetryMissing({ mediaIds, all: all === true, status: String(status || "") }));
+    }),
+);
+app.use("/api/subtitle/admin", subtitleAdmin);
+
 // ─── 404 / Error ─────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 // eslint-disable-next-line no-unused-vars
@@ -193,8 +270,8 @@ async function shutdown(signal) {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
     stopTrailerScheduler();
-    stopReviewIdRefresher();
-    stopCommunityFeedScheduler();
+    stopReviewScheduler();
+    await flushReviews(); // write any review/reaction/reply still waiting for its debounced save
     stopStorageMonitor();
     stopAccountPurgeScheduler();
     notificationService.stopMaintenance();
@@ -331,7 +408,6 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`    MediaInfo: /api/mediainfo`);
     console.log(`    Permissions: /api/permissions`);
     console.log(`    Trailers: /api/trailers`);
-    console.log(`    Popular:  /api/media/popular-reviews  /api/media/popular-discussions`);
     console.log(`    Stream:  /stream/video/:id\n`);
 
     // Start HLS cleanup daemon
@@ -340,11 +416,8 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     // Keeps data/trailers.json fresh daily without any frontend request
     safeStart("trailer-scheduler", () => startTrailerScheduler());
 
-    // Re-checks TMDB every 3 days for NEW review ids and stores them in metadata.json (all reviews, not 10)
-    safeStart("review-id-refresher", () => startReviewIdRefresher());
-
-    // Builds the Popular Reviews / Popular Discussions feeds for Home (cached in metadata.json, rebuilt every 3 days)
-    safeStart("community-feeds", () => startCommunityFeedScheduler());
+    // Review system: imports full TMDB reviews into reviews.json every 3 days (local reactions/replies are never touched)
+    safeStart("review-scheduler", () => startReviewScheduler());
 
     // FCM push (no-op + log line if Firebase credentials aren't configured),
     // disk-space alerts, and daily pruning of old notifications / stale devices.
@@ -363,6 +436,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 
     // Start idle-session sweeper (kills abandoned sessions after SESSION_TIMEOUT_MS)
     safeStart("transcoder-sweeper", () => transcoderService.startSweeper());
+    safeStart("short-ids", () => shortIds.registerLibrary());
 
     // ── Subtitle system ───────────────────────────────────────────────────────
     // NOTE: getAllCached(folders) below scans every configured folder, which
@@ -447,6 +521,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
             console.log("[Subtitle] No library folders configured — nothing to enqueue");
         }
 
+        subtitleWorker.setSessionProbe(() => transcoderService.getSessionStats().length);
         subtitleWorker.start();
     } catch (err) {
         console.error("[Server] Subtitle system init error:", err.message);

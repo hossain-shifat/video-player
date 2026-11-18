@@ -424,3 +424,21 @@ export async function copyText(text) {
         return false;
     }
 }
+
+// ─── Card style (Settings → Appearance → Cards) ──────────────────────────────
+// Raw saved style id; the card components fall back to the default for unknown ids.
+const readCardStyle = () => loadPrefs().cardStyle || "classic";
+
+export function useCardStyle() {
+    const [style, setStyle] = useState(readCardStyle);
+    useEffect(() => {
+        const on = () => setStyle(readCardStyle());
+        window.addEventListener("flux-prefs-changed", on);
+        window.addEventListener("storage", on);
+        return () => {
+            window.removeEventListener("flux-prefs-changed", on);
+            window.removeEventListener("storage", on);
+        };
+    }, []);
+    return style;
+}

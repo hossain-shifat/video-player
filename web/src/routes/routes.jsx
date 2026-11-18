@@ -5,6 +5,8 @@ import AllCategory from "../Pages/Category/AllCategory";
 import CategoryPage from "../Pages/Category/CategoryPage";
 import MediaDetails from "../Pages/Media/Details/MediaDetails";
 import PersonPage from "../Pages/Person/PersonPage";
+import ReviewPage from "../Pages/Review/ReviewPage";
+import DiscussionPage from "../Pages/Discussion/DiscussionPage";
 import DiscoverPage from "../Pages/Discover/DiscoverPage";
 import Movies from "../Pages/Media/Movies/Movies";
 import Series from "../Pages/Media/Series/Series";
@@ -48,12 +50,19 @@ import DashUploads from "../Dashboard/Pages/DashUploads";
 import DashStorage from "../Dashboard/Pages/DashStorage";
 import DashIPTV from "../Dashboard/Pages/DashIPTV";
 import DashAnnouncements from "../Dashboard/Pages/DashAnnouncements";
+import DashSubtitles from "../Dashboard/Pages/DashSubtitles";
 import ErrorPreview from "../Errors/ErrorPreview";
 import ErrorShowcase from "../Errors/ErrorShowcase";
 // import Live from "../Pages/Media/Live/Live";
 import LivePlayerPage from "../Pages/Player/LivePlayerPage";
 import Live from "../Pages/Live/Live";
 import LiveCategory from "../Pages/Live/LiveCategory";
+import { withResolvedMediaId } from "./MediaIdGate";
+import MediaDetailsSkeleton from "../Components/Media/MediaDetailsSkeleton";
+
+// /media/:id and /player/:id accept the short 9-char alias as well as a long id (see MediaIdGate).
+const PlayerRoute = withResolvedMediaId(PlayerPage);
+const MediaDetailsRoute = withResolvedMediaId(MediaDetails, MediaDetailsSkeleton);
 
 export const router = createBrowserRouter([
     // ─── Authentication — full pages on their own layout (no Navbar / Footer) ─────────────────
@@ -82,7 +91,7 @@ export const router = createBrowserRouter([
     {
         Component: PlaybackGate,
         children: [
-            { path: "/player/:id", Component: PlayerPage },
+            { path: "/player/:id", Component: PlayerRoute },
             // Live player — simple dedicated page, no main layout
             { path: "/live/watch/:id", Component: LivePlayerPage, errorElement: <Error500 /> },
         ],
@@ -104,6 +113,7 @@ export const router = createBrowserRouter([
                     { path: "libraries", Component: DashLibraries },
                     { path: "iptv", Component: DashIPTV },
                     { path: "media", Component: DashMedia },
+                    { path: "subtitles", Component: DashSubtitles },
                     { path: "jobs", Component: DashJobs },
                     { path: "uploads", Component: DashUploads },
                     { path: "storage", Component: DashStorage },
@@ -126,8 +136,10 @@ export const router = createBrowserRouter([
                     { index: true, Component: Home },
                     { path: "category/all", Component: AllCategory },
                     { path: "category/:name", Component: CategoryPage },
-                    { path: "media/:id", Component: MediaDetails },
+                    { path: "media/:id", Component: MediaDetailsRoute },
                     { path: "person/:personId", Component: PersonPage },
+                    { path: "review/:id", Component: ReviewPage },
+                    { path: "discussion/:id", Component: DiscussionPage },
                     { path: "discover", Component: DiscoverPage },
                     { path: "live", Component: Live },
                     { path: "live/category/:slug", Component: LiveCategory },

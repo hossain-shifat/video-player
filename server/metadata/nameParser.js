@@ -1356,3 +1356,99 @@ module.exports = {
     parseFilename: parseFilenameWithContext,
     parseFilenameOriginal: parseFilename,
 };
+
+// ============================================================================
+// ─── v10 PATCH LAYER — release qualifier ("Encore", "Re-Release") ────────────
+// ============================================================================
+// Appended only. Nothing above this line is modified.
+//
+// In "<Title>.Encore.<year>.1080p…" the word "Encore" is a RELEASE QUALIFIER for a theatrical re-release, not part of the
+// title, and the year is the re-release year, not the production year. This layer splits it into the optional
+// `releaseQualifier` field and leaves title / year / edition untouched otherwise.
+//
+// Deliberately NOT a global noise word: "Encore" can also be a real title word (as a whole title, or ending one).
+// The qualifier is only extracted when ALL of these hold, otherwise it is left unset (never guessed):
+//   • movie, no season/episode, not a camera clip, not a folder-context result
+//   • the file carries an explicit plausible year AFTER the qualifier token ("Encore 2026", "Encore (2026)",
+//     "Encore 1080p WEB-DL 2026"). The title ends at the first tech/year token, so a qualifier that is the last
+//     title word sits right in front of the release tags
+//   • the qualifier is the LAST word(s) of the title
+//   • "Re-Release" forms: ≥ 1 title word remains. "Encore" (ambiguous): the last remaining word is not a
+//     connector/adjective that makes "Encore" a noun of the title ("The Last", "One More", …), and a one-word
+//     remainder additionally needs release tags (resolution or source) in the file name
+// Pure string logic: no TMDB, no network, no filesystem.
+
+// separator before the qualifier: space/dot/dash ("Title - Encore") or an opening bracket ("Title (Encore)")
+const _V10_TAIL_RE = /^(.*\S)(?:[\s._\-\u2013\u2014]+|\s*[(\[]\s*)(Encore|Re[\s._-]?Release|Rerelease)\s*[)\]]?$/i;
+const _V10_ENCORE_PRECEDING_STOP = new Set(["the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with", "no", "my", "your", "his", "her", "our", "their", "last", "final", "one", "big", "grand", "great", "first", "second", "one-more", "another", "an"]);
+const _V10_KEY_TAIL_RE = /(?:^|\s)(?:encore|re release|rerelease)$/;
+
+function _v10DetectReleaseQualifier(adv, filename) {
+    if (!adv || typeof adv.title !== "string" || !adv.title || typeof filename !== "string") return null;
+    if (adv.isDeviceFile || adv.type !== "movie") return null;
+    if (adv.season != null || adv.episode != null || (adv.episodes && adv.episodes.length)) return null;
+    if (!Number.isInteger(adv.year) || adv.year < 1900 || adv.year > new Date().getFullYear() + 2) return null;
+    if (adv.title.trim() === String(adv.year)) return null;
+    if (adv.parseNotes && adv.parseNotes.includes("folder-context")) return null;
+
+    const m = adv.title.match(_V10_TAIL_RE);
+    if (!m) return null;
+    let rest = m[1].replace(/[\s\-\u2013\u2014:,~+(]+$/, "").trim();
+    // "<Title> <earlier year> Encore <year>": an EARLIER (original) year left at the end of the title is not part of the title
+    const prevYear = rest.match(/^(.*\S)\s+((?:19|20)\d{2})$/);
+    if (prevYear && parseInt(prevYear[2], 10) < adv.year && parseInt(prevYear[2], 10) <= new Date().getFullYear()) rest = prevYear[1].trim();
+    const isEncore = /^encore$/i.test(m[2]);
+    const restWords = rest.split(/\s+/).filter(Boolean);
+    if (!restWords.length) return null;
+    if (/^(encore|re|release|rerelease)$/i.test(restWords[restWords.length - 1])) return null; // remainder is itself a qualifier word
+    if (isEncore) {
+        if (_V10_ENCORE_PRECEDING_STOP.has(restWords[restWords.length - 1].toLowerCase())) return null;
+        // a one-word remainder ("<Word> Encore") is also an ordinary title shape, so it additionally needs release tags
+        if (restWords.length < 2 && !(adv.resolution || adv.source)) return null;
+    }
+
+    // Context: the claimed year must appear AFTER the qualifier token in the ORIGINAL name.
+    const flat = filename.replace(/[._]+/g, " ");
+    const ctx = new RegExp(`\\b(?:Encore|Re[\\s-]?Release|Rerelease)\\b[^]*?(?<![0-9])${adv.year}(?![0-9])`, "i");
+    if (!ctx.test(flat)) return null;
+
+    return { title: rest, qualifier: isEncore ? "Encore" : "Re-Release" };
+}
+
+function _v10ApplyReleaseQualifier(adv, filename) {
+    let det = null;
+    try {
+        det = _v10DetectReleaseQualifier(adv, filename);
+    } catch (err) {
+        // heuristic layer: never let it break parsing, but do not hide that it failed
+        console.warn(`[nameParser] release-qualifier detection skipped for "${filename}": ${err.message}`);
+        return adv;
+    }
+    if (!det) return adv;
+
+    adv.title = det.title;
+    adv.releaseQualifier = det.qualifier;
+
+    // Title candidates were built from the OLD title ("… Encore"): rebuild, and drop any candidate that still ends in the
+    // qualifier — the qualifier must never reach a TMDB search query.
+    try {
+        const rebuilt = buildTitleCandidates(adv, filename).filter((c) => !_V10_KEY_TAIL_RE.test(_candKey(c.title)));
+        Object.defineProperty(adv, "titleCandidates", { value: rebuilt, enumerable: false, writable: true, configurable: true });
+        if (Array.isArray(adv.parseNotes)) adv.parseNotes.push("release-qualifier");
+    } catch (err) {
+        console.warn(`[nameParser] title candidates not rebuilt for "${filename}": ${err.message}`);
+    }
+    return adv;
+}
+
+function parseFilenameWithQualifier(filename, filePath) {
+    const adv = parseFilenameWithContext(filename, filePath);
+    if (!adv || typeof filename !== "string") return adv;
+    return _v10ApplyReleaseQualifier(adv, filename);
+}
+
+// Re-export. Same signature as before; `releaseQualifier` is an optional extra field.
+module.exports = {
+    parseFilename: parseFilenameWithQualifier,
+    parseFilenameOriginal: parseFilename,
+};

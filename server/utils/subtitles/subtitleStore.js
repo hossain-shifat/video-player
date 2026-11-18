@@ -45,8 +45,9 @@ const SUB_DIR = path.join(DATA_DIR, "subtitles");
 const META_FILE = path.join(SUB_DIR, "subtitle-meta.json");
 const QUEUE_FILE = path.join(SUB_DIR, "subtitle-queue.json");
 
-const LANG_FOLDER = { en: "english", bn: "bangla" };
-const SUPPORTED_LANGS = ["en", "bn"];
+// Languages + folder names come from the provider's table (env SUBTITLE_LANGUAGES, default en,bn,hi,ar).
+const { SUPPORTED_LANGS, LANG_FOLDER } = require("../../services/subDLService");
+const BACKFILL = process.env.SUBTITLE_BACKFILL !== "0"; // re-check already-processed titles for newly enabled languages
 
 // ─── Naming helpers ───────────────────────────────────────────────────────────
 
@@ -174,7 +175,9 @@ async function getMediaMeta(mediaId) {
     return _meta[mediaId] || { downloaded: [] };
 }
 
-async function recordDownloaded(mediaId, { lang, filename, destPath }) {
+// v4: optional validation stamp — { source: "subsource"|"manual"|"upload", score, validation, validatedAt, shiftApplied }.
+// Entries written before v4 have none of these; the worker's idle audit stamps (or rejects) them once.
+async function recordDownloaded(mediaId, { lang, filename, destPath, ...extra }) {
     if (!_meta) await _loadMeta();
     if (!_meta[mediaId]) _meta[mediaId] = { downloaded: [] };
     _meta[mediaId].downloaded = _meta[mediaId].downloaded.filter((d) => d.lang !== lang);
@@ -183,9 +186,51 @@ async function recordDownloaded(mediaId, { lang, filename, destPath }) {
         filename,
         path: destPath,
         addedAt: new Date().toISOString(),
+        ...extra,
     });
     _available.add(`${mediaId}:${lang}`);
     _metaWriter.schedule();
+}
+
+/** Next stored subtitle that has never been validated (skips user uploads and anything in `skip`). */
+function nextUnvalidated(skip = new Set()) {
+    if (!_meta) return null;
+    for (const [mediaId, entry] of Object.entries(_meta)) {
+        for (const dl of entry.downloaded || []) {
+            if (dl.validatedAt || dl.source === "upload") continue;
+            if (skip.has(`${mediaId}:${dl.lang}`)) continue;
+            return { mediaId, lang: dl.lang, path: dl.path, filename: dl.filename, source: dl.source || null };
+        }
+    }
+    return null;
+}
+
+async function markValidated(mediaId, lang, info = {}) {
+    if (!_meta) await _loadMeta();
+    const dl = (_meta[mediaId]?.downloaded || []).find((d) => d.lang === lang);
+    if (!dl) return;
+    Object.assign(dl, info, { validatedAt: new Date().toISOString() });
+    _metaWriter.schedule();
+}
+
+/** Forget one language of one media (the file itself is handled by the caller). */
+async function removeDownloaded(mediaId, lang) {
+    if (!_meta) await _loadMeta();
+    if (_meta[mediaId]) _meta[mediaId].downloaded = (_meta[mediaId].downloaded || []).filter((d) => d.lang !== lang);
+    _available.delete(`${mediaId}:${lang}`);
+    _metaWriter.schedule();
+}
+
+/** Put an already-known queue entry back to pending (fresh attempts) so a rejected file is downloaded again. */
+function requeueForRedownload(mediaId) {
+    const e = _queueIndex.get(mediaId);
+    if (!e) return false;
+    e.status = "pending";
+    e.attempts = 0;
+    e.lastError = null;
+    e.nextRetryAt = null;
+    _queueWriter.schedule();
+    return true;
 }
 
 async function removeMediaSubtitles(mediaId) {
@@ -389,6 +434,47 @@ async function _loadQueue() {
 }
 
 /**
+ * Backfill: a finished (done/skipped) title is queued again when some ENABLED language was never looked up for it
+ * and is not on disk. Entries from before language tracking get langsChecked reconstructed: English was always
+ * looked up, Bangla only for Bangla-language films (old rule). A title SubSource had no match for at all
+ * ("no_results") is never retried here.
+ */
+/**
+ * Deleted-file awareness. entry.langsStored = languages we actually stored for this title. If one of them is no
+ * longer on disk (you deleted the subtitles), forget that it was "checked" so it is downloaded again. Entries from
+ * before language tracking count English (and Bangla for Bangla films) as stored when the title finished "done".
+ */
+function reconcileLangs(entry) {
+    if (!Array.isArray(entry.langsChecked)) {
+        if (entry.status === "skipped" && entry.lastError === "no_results") return false; // never matched on SubSource at all
+        if (entry.status !== "done" && entry.status !== "skipped") return false; // brand-new entry: nothing is checked yet
+        const spoken = String(entry.spokenLanguage || "").toLowerCase();
+        const legacy = ["en", ...(/^(bn|ben|bangla|bengali)$/.test(spoken) ? ["bn"] : [])];
+        entry.langsChecked = [...legacy];
+        if (entry.status === "done") entry.langsStored = [...legacy];
+    }
+    const stored = Array.isArray(entry.langsStored) ? entry.langsStored : [];
+    const gone = stored.filter((l) => !hasDownloadedSubtitle(entry.mediaId, l));
+    if (gone.length) {
+        entry.langsStored = stored.filter((l) => !gone.includes(l));
+        entry.langsChecked = (entry.langsChecked || []).filter((l) => !gone.includes(l));
+    }
+    return true;
+}
+
+function _backfill(entry) {
+    if (!BACKFILL || (entry.status !== "done" && entry.status !== "skipped")) return false;
+    if (!reconcileLangs(entry)) return false;
+    const missing = SUPPORTED_LANGS.filter((l) => !entry.langsChecked.includes(l) && !hasDownloadedSubtitle(entry.mediaId, l));
+    if (!missing.length) return false;
+    entry.status = "pending";
+    entry.attempts = 0;
+    entry.lastError = null;
+    entry.nextRetryAt = null;
+    return true;
+}
+
+/**
  * Bulk enqueue — single disk write.
  * Skips items where BOTH langs already exist on disk (_available).
  * items: [{ mediaId, title, year, imdbId, tmdbId, season, episode, part, type }]
@@ -404,6 +490,10 @@ async function enqueueBatch(items) {
 
         const existing = _queueIndex.get(item.mediaId);
         if (existing) {
+            if (_backfill(existing)) {
+                added++;
+                continue;
+            }
             if (existing.status === "done" || existing.status === "pending" || existing.status === "downloading" || existing.status === "skipped") continue;
             if (existing.status === "failed") {
                 existing.status = "pending";
@@ -446,6 +536,10 @@ async function enqueue(mediaId, meta = {}) {
 
     const existing = _queueIndex.get(mediaId);
     if (existing) {
+        if (_backfill(existing)) {
+            _queueWriter.schedule();
+            return existing;
+        }
         if (existing.status === "done" || existing.status === "skipped") return existing;
         if (existing.status === "failed") {
             existing.status = "pending";
@@ -641,6 +735,75 @@ function requeueEntry(entry) {
     _queueWriter.schedule();
 }
 
+// ─── Dashboard / fallback-upgrade helpers ────────────────────────────────────
+
+/** Every stored subtitle as a flat list: [{ mediaId, lang, filename, path, source, score, quality, … }] */
+function listAllDownloaded() {
+    const out = [];
+    for (const [mediaId, m] of Object.entries(_meta || {})) for (const dl of m.downloaded || []) out.push({ mediaId, ...dl });
+    return out;
+}
+
+function getDownloadedInfo(mediaId, lang) {
+    return ((_meta || {})[mediaId]?.downloaded || []).find((d) => d.lang === lang) || null;
+}
+
+/** Live queue entry (mutable — call touchQueue() after changing it) or null. */
+function getEntry(mediaId) {
+    return _queueIndex.get(mediaId) || null;
+}
+
+function touchQueue() {
+    _queueWriter.schedule();
+}
+
+function touchMeta() {
+    _metaWriter.schedule();
+}
+
+function getSubtitleRoot() {
+    return SUB_DIR;
+}
+
+/** Languages whose stored file is only a "nearest usable" fallback and whose next quality re-check is due. */
+function upgradeDueLangs(mediaId) {
+    const now = Date.now();
+    return ((_meta || {})[mediaId]?.downloaded || []).filter((d) => d.quality === "fallback" && d.nextUpgradeAt && Date.parse(d.nextUpgradeAt) <= now).map((d) => d.lang);
+}
+
+function deferUpgrade(mediaId, lang, days = 14) {
+    const dl = getDownloadedInfo(mediaId, lang);
+    if (!dl) return;
+    dl.nextUpgradeAt = new Date(Date.now() + days * 86_400_000).toISOString();
+    _metaWriter.schedule();
+}
+
+/** Re-queue finished titles whose fallback subtitle is due for another look at better candidates. Returns count. */
+function requeueUpgradesDue() {
+    let n = 0;
+    for (const mediaId of Object.keys(_meta || {})) {
+        if (!upgradeDueLangs(mediaId).length) continue;
+        const e = _queueIndex.get(mediaId);
+        if (e && (e.status === "done" || e.status === "skipped")) {
+            e.status = "pending";
+            e.attempts = 0;
+            e.lastError = null;
+            n++;
+        }
+    }
+    if (n) _queueWriter.schedule();
+    return n;
+}
+
+/** Drop the validation stamp so the idle audit judges the file again. */
+async function markUnvalidated(mediaId, lang) {
+    const dl = getDownloadedInfo(mediaId, lang);
+    if (!dl) return false;
+    delete dl.validatedAt;
+    _metaWriter.schedule();
+    return true;
+}
+
 module.exports = {
     init,
     reconcile,
@@ -648,6 +811,21 @@ module.exports = {
     // meta
     getMediaMeta,
     recordDownloaded,
+    reconcileLangs, // sync — language bookkeeping (deleted files → look again)
+    listAllDownloaded, // sync — dashboard
+    getDownloadedInfo, // sync
+    getEntry, // sync
+    touchQueue, // sync
+    touchMeta, // sync
+    getSubtitleRoot, // sync
+    upgradeDueLangs, // sync
+    deferUpgrade, // sync
+    requeueUpgradesDue, // sync
+    markUnvalidated,
+    nextUnvalidated, // sync — audit helper
+    markValidated,
+    removeDownloaded,
+    requeueForRedownload, // sync
     removeMediaSubtitles,
     removeLibrarySubtitles,
     hasDownloadedSubtitle, // sync

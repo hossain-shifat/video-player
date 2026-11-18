@@ -24,11 +24,14 @@ import {
     Hash,
     Layers,
     PlayCircle,
+    AlertCircle,
+    Link2,
 } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
 import { api } from "../../Api/client";
 import { getMediaById } from "../../Api";
 import { shareMedia, shareStream, copyToClipboard, getStreamUrl } from "../../Utils/shareMedia";
+import { routeId } from "../../Utils/shortId.js";
 
 const MENU_W = 208; // w-52
 const MENU_EST_H = 340; // fallback height before the first measurement
@@ -411,7 +414,10 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
     const [visible, setVisible] = useState(false);
     const [mounted, setMounted] = useState(false);
     const [pos, setPos] = useState({ top: 0, left: 0, up: false });
-    const [copied, setCopied] = useState(false);
+    // Menu items close the menu the moment they are clicked, so feedback can not live in the item label —
+    // this toast is rendered by the menu itself (portal) and works on every page that uses the menu.
+    const [toast, setToast] = useState(null); // { text, kind: "busy" | "ok" | "error" }
+    const toastTimer = useRef(null);
     const [localWatched, setLocalWatched] = useState(false);
     const [showInfoModal, setShowInfoModal] = useState(false);
     const [showTrailerModal, setShowTrailerModal] = useState(false);
@@ -421,17 +427,54 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
     const watchlisted = isInWatchlist(media.id);
     const isWatched = watched ?? localWatched;
     const payload = { name: media.title, poster: media.poster, type: media.type };
-    const detailsUrl = `${window.location.origin}/media/${encodeURIComponent(media.id)}`;
+    // Series page: the playable file is the current episode (infoId), not the series id.
+    const streamId = infoId ?? media.id;
+    const detailsUrl = `${window.location.origin}/media/${routeId(media.id)}`;
 
     function close() {
         setVisible(false);
         setTimeout(() => setMounted(false), 150);
     }
 
+    function showToast(text, kind = "ok", ms = 2200) {
+        clearTimeout(toastTimer.current);
+        setToast({ text, kind });
+        if (kind !== "busy") toastTimer.current = setTimeout(() => setToast(null), ms);
+    }
+    useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+    // Plain "Share" (the page link). A page may pass onCopyFallback to show its own toast; otherwise we show ours.
     function handleShare(fn, arg) {
         fn(arg)
-            .then((r) => r === "copied" && onCopyFallback?.())
-            .catch(() => {});
+            .then((r) => {
+                if (r === "copied") onCopyFallback ? onCopyFallback() : showToast("Link copied");
+            })
+            .catch((err) => {
+                if (err?.name !== "AbortError") showToast("Couldn't share", "error", 3000);
+            });
+    }
+
+    // Stream links for external players (VLC, MX Player …). Creates a short share link on the server
+    // (POST /stream/share/:id — never starts a transcode) and copies / shares it.
+    //   copy  → http://host/s/<code>/<Title>.mkv   the file itself, seekable, any codec
+    //   hls   → http://host/s/<code>/h/stream.m3u8 for players that want an .m3u8
+    //   share → system share sheet where available, clipboard otherwise
+    async function streamAction(kind) {
+        showToast("Creating stream link…", "busy");
+        try {
+            if (kind === "share") {
+                const r = await shareStream({ id: streamId, poster: media.poster });
+                showToast(r === "copied" ? "Stream link copied" : "Stream shared");
+            } else {
+                const url = await getStreamUrl(streamId, { mode: kind === "hls" ? "hls" : "direct" });
+                await copyToClipboard(url);
+                showToast(kind === "hls" ? "HLS (.m3u8) link copied" : "Stream link copied");
+            }
+        } catch (err) {
+            if (err?.name === "AbortError") return setToast(null); // user closed the share sheet — not an error
+            const status = err?.response?.status;
+            showToast(status === 404 ? "No playable file for this item" : status === 403 ? "You don't have access to this" : "Couldn't create stream link", "error", 3500);
+        }
     }
 
     // ── EDIT THE OPTION LIST HERE — this is the single source of truth ─────
@@ -450,26 +493,12 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
             label: "Watch Trailer",
             onClick: () => (onWatchTrailer ? onWatchTrailer(media) : setShowTrailerModal(true)),
         },
-        {
-            // Same link Share Stream shares — both call getStreamUrl(), which
-            // hits GET /stream/video/:id?info=1 (the real backend decision),
-            // not a guessed/placeholder URL.
-            icon: copied ? Check : Copy,
-            label: copied ? "Copied!" : "Copy Stream Link",
-            active: copied,
-            onClick: () =>
-                getStreamUrl(media.id)
-                    .then((url) => copyToClipboard(url))
-                    .then(() => {
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                    })
-                    .catch(() => {}),
-        },
+        { icon: Copy, label: "Copy Stream Link", onClick: () => streamAction("copy") },
+        { icon: Link2, label: "Copy HLS Link (.m3u8)", onClick: () => streamAction("hls") },
         // url-only payload (no title/text before the link) + poster attached as a
         // share file when the browser/target supports it — see utils/shareMedia.js
         { icon: Share2, label: "Share", onClick: () => handleShare(shareMedia, { url: detailsUrl, poster: media.poster }) },
-        { icon: Cast, label: "Share Stream", onClick: () => handleShare(shareStream, { id: media.id, poster: media.poster }) },
+        { icon: Cast, label: "Share Stream", onClick: () => streamAction("share") },
         { icon: Info, label: "Info", onClick: () => setShowInfoModal(true) },
         // ↓ page-specific — only appears where a page hands us onRemove
         onRemove && { divider: true },
@@ -579,6 +608,17 @@ export default function FloatingActionMenu({ open, anchorRef, onClose, media, wa
                                 />
                             ),
                         )}
+                    </div>,
+                    document.body,
+                )}
+            {toast &&
+                createPortal(
+                    <div
+                        role="status"
+                        aria-live="polite"
+                        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-110 flex items-center gap-2 px-4 py-2.5 rounded-full bg-[oklch(15%_0.01_260/0.97)] border border-white/10 shadow-2xl pointer-events-none max-w-[90vw]">
+                        {toast.kind === "busy" ? <Loader2 size={14} className="animate-spin text-primary shrink-0" /> : toast.kind === "error" ? <AlertCircle size={14} className="text-error shrink-0" /> : <Check size={14} className="text-success shrink-0" />}
+                        <span className="text-xs font-medium text-white/92 truncate">{toast.text}</span>
                     </div>,
                     document.body,
                 )}

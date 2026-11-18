@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { Users, ChevronLeft, ChevronRight } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
 import { getMediaById } from "../../Api";
+import { useMediaRouteId } from "../../Hooks/Query/useMediaRouteId.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function mergeCrewJobs(crewList) {
@@ -114,7 +115,7 @@ function PersonCarousel({ people, onPersonClick }) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 // metadata (optional): pass directly for titles that are not in the library (tmdb-* ids)
 const CastAndCrew = ({ metadata } = {}) => {
-    const { id } = useParams();
+    const id = useMediaRouteId();
     const navigate = useNavigate();
     const decodedId = decodeURIComponent(id);
     const { movies, series, anime } = useApi();

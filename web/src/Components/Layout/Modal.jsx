@@ -21,6 +21,7 @@ import { useAuth } from "../../Auth/AuthContext";
 import { getReminder, setReminder, removeReminder } from "../../Api/notifications";
 import { useMedia } from "../../Hooks/Query/useMedia";
 import { useNotificationDetail, NOTIFICATION_KEYS } from "../../Hooks/Query/useNotifications";
+import { routeId } from "../../Utils/shortId.js";
 
 // ─── Modal registry ───────────────────────────────────────────────────────────
 // Every dialog in the app that lives here has its own id + name, written on the dialog element
@@ -850,7 +851,7 @@ function MediaContext({ ctx, media, onAction, when }) {
                                     <p className="break-words text-[13px] font-medium leading-snug text-base-content">{m.bare}</p>
                                     <p className="mt-0.5 break-words text-xs text-base-content/60">{[cap(m.kind), m.isShow ? m.subtitle || m.code : yr, ctx.library].filter(Boolean).join(" · ")}</p>
                                 </div>
-                                <ModalButton variant="primary" className="!h-8 !px-3" onClick={() => onAction(`/player/${encodeURIComponent(m.id)}`)} aria-label={`Watch ${m.title}`}>
+                                <ModalButton variant="primary" className="!h-8 !px-3" onClick={() => onAction(`/player/${routeId(m.id)}`)} aria-label={`Watch ${m.title}`}>
                                     <Play size={12} strokeWidth={2.4} /> Watch
                                 </ModalButton>
                             </li>
@@ -1372,8 +1373,8 @@ export function NotificationModal({ id, onClose: onCloseNow, onAction, markRead 
     let primary = null;
     let secondary = null;
     if (single) {
-        primary = { label: "Watch now", icon: Play, path: `/player/${encodeURIComponent(single.id)}` };
-        if (single.detailsId != null) secondary = { label: "View details", path: `/media/${encodeURIComponent(single.detailsId)}` };
+        primary = { label: "Watch now", icon: Play, path: `/player/${routeId(single.id)}` };
+        if (single.detailsId != null) secondary = { label: "View details", path: `/media/${routeId(single.detailsId)}` };
     } else if (ctx && DEST_BY_KIND[ctx.kind] && (n.destination || ctx.kind === "storage")) {
         primary = { ...DEST_BY_KIND[ctx.kind], icon: ArrowRight };
     } else if (n?.destination && !(ctx?.kind === "media" && mediaItems && playable.length === 0)) {

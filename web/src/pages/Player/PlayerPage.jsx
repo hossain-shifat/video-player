@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { useParams, useNavigate, useLocation } from "react-router";
+import { useNavigate, useLocation } from "react-router";
 import { PlayerProvider, usePlayerState } from "../../Hooks/Player/usePlayerState";
 import VideoCore from "./Components/VideoCore";
 import PlayerControls from "./Components/PlayerControls";
@@ -13,6 +13,7 @@ import { getResumePoint } from "../../Api/history";
 import { resolvePlayback, heartbeatSession, stopSession } from "../../Api/stream";
 import { useAuth } from "../../Auth/AuthContext";
 import { useIsMobile } from "../../Hooks/Player/useIsMobile";
+import { useMediaRouteId } from "../../Hooks/Query/useMediaRouteId.js";
 
 // ─── Mobile playback init state machine ──────────────────────────────────────
 // Module-scope constant (stable reference, never recreated) so effects that
@@ -1929,7 +1930,7 @@ async function pollSessionProbe(sessionId, clientId, timeoutMs = 6000) {
 }
 
 export default function PlayerPage() {
-    const { id } = useParams();
+    const id = useMediaRouteId();
     const location = useLocation();
     const mediaId = decodeURIComponent(id);
     const knownResumePosition = location.state?.knownResumePosition ?? null;

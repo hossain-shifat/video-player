@@ -869,4 +869,13 @@ router.patch("/media/:id", (req, res) => {
     }
 });
 
+// ─── Overview analytics (read-only, isolated) ────────────────────────────────
+// GET /api/admin-dashboard/analytics and /analytics/live. Loaded inside try/catch so
+// a problem in this optional module can never stop the routes above from working.
+try {
+    router.use("/analytics", require("./adminAnalytics"));
+} catch (err) {
+    console.error("[AdminDash] analytics routes unavailable:", err.message);
+}
+
 module.exports = router;

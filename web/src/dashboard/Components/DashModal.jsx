@@ -33,6 +33,7 @@ import {
     Copy,
     Crown,
     Database,
+    Download,
     Eye,
     EyeOff,
     FileText,
@@ -41,7 +42,7 @@ import {
     Folder,
     FolderOpen,
     FolderPlus,
-    Gauge,
+    Gauge as Gauge2,
     Globe,
     Globe2,
     HardDrive,
@@ -63,6 +64,7 @@ import {
     RefreshCw,
     RotateCcw,
     Satellite,
+    Scissors,
     Search,
     Server,
     Shield,
@@ -77,6 +79,7 @@ import {
     Trash2,
     TrendingUp,
     Tv,
+    Timer,
     Tv2,
     Upload,
     User,
@@ -87,7 +90,8 @@ import {
 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { api } from "../Shared";
-import { dashApi } from "../Api/dashboardApi";
+import { dashApi, subtitleApi } from "../Api/dashboardApi";
+import { AreaChart, BarChart, CHART, Gauge, Ring } from "./DashCharts";
 import { storageApi } from "../Api/storageApi";
 
 // ─── Modal registry ───────────────────────────────────────────────────────────
@@ -289,6 +293,25 @@ export const DASH_MODALS = {
         name: "iptv-channel-delete",
         source: "pages/DashIPTV.jsx (Channels tab: Delete action)",
         purpose: "Confirm hiding a channel everywhere in FLUX",
+    },
+    // Subtitles
+    subtitlePreview: {
+        id: "dash-modal-subtitle-preview",
+        name: "subtitle-preview",
+        source: "pages/DashSubtitles.jsx (table: Preview action / row click)",
+        purpose: "Details of one stored subtitle plus its first cues",
+    },
+    subtitleShift: {
+        id: "dash-modal-subtitle-shift",
+        name: "subtitle-shift",
+        source: "pages/DashSubtitles.jsx (⋮ menu / bulk bar: Shift timing)",
+        purpose: "Move every cue of the selected subtitles earlier or later",
+    },
+    subtitleConfirm: {
+        id: "dash-modal-subtitle-confirm",
+        name: "subtitle-confirm",
+        source: "pages/DashSubtitles.jsx (delete, re-download, clear rejected files)",
+        purpose: "Confirm a subtitle action before it runs",
     },
 };
 
@@ -2182,7 +2205,7 @@ export function MediaDetailsModal({ media, onClose }) {
 
     const specs = [
         { label: "Resolution", icon: Monitor, tone: "text-info", value: realResolution },
-        { label: "Frame rate", icon: Gauge, tone: "text-success", value: realFps || null },
+        { label: "Frame rate", icon: Gauge2, tone: "text-success", value: realFps || null },
         { label: "Bitrate", icon: Database, tone: "text-warning", value: realBitrate ? `${(realBitrate / 1_000_000).toFixed(1)} Mbps` : null },
         { label: "Audio", icon: Volume2, tone: "text-accent", value: realChannels ? `${realChannels}ch${realAudioLang ? ` · ${realAudioLang}` : ""}` : null },
     ].filter((x) => x.value);
@@ -4299,5 +4322,541 @@ export function IptvChannelDeleteModal({ confirmHideChannel, hideChannelMutation
                 ]}
             />
         </IptvModal>
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Subtitles modals — used by pages/DashSubtitles.jsx
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SUB_QUALITY = {
+    good: { tone: "success", label: "High quality", icon: CheckCircle2 },
+    fallback: { tone: "warning", label: "Nearest usable", icon: AlertTriangle },
+    unvalidated: { tone: "neutral", label: "Not checked yet", icon: Clock },
+    upload: { tone: "info", label: "Uploaded", icon: Upload },
+};
+
+function subClock(sec) {
+    const t = Math.max(0, Math.floor(Number(sec) || 0));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = t % 60;
+    return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/** Everything known about one stored subtitle — five tabs, details loaded from /details (cues from /preview). */
+export function SubtitlePreviewModal({ row, onClose, onDownload }) {
+    const [tab, setTab] = useState("overview");
+    const [d, setD] = useState(null);
+    const [derr, setDerr] = useState(null);
+    const [cues, setCues] = useState([]);
+    const [total, setTotal] = useState(row?.cues ?? 0);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState(null);
+
+    useEffect(() => {
+        if (!row) return;
+        let live = true;
+        setD(null);
+        setDerr(null);
+        subtitleApi
+            .details(row.mediaId, row.lang)
+            .then((x) => live && setD(x))
+            .catch((e) => live && setDerr(e?.message || "Couldn’t load the details"));
+        return () => {
+            live = false;
+        };
+    }, [row?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const load = useCallback(
+        async (from) => {
+            setLoading(true);
+            setErr(null);
+            try {
+                const x = await subtitleApi.preview(row.mediaId, row.lang, { from, n: 60 });
+                setCues((c) => (from === 0 ? x.cues : [...c, ...x.cues]));
+                setTotal(x.total);
+            } catch (e) {
+                setErr(e?.message || "Couldn’t load the cues");
+            } finally {
+                setLoading(false);
+            }
+        },
+        [row?.mediaId, row?.lang],
+    );
+
+    useEffect(() => {
+        if (row && tab === "cues" && !cues.length && !loading) load(0);
+    }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (!row) return null;
+    const q = SUB_QUALITY[row.quality] || SUB_QUALITY.unvalidated;
+    const st = d?.stats;
+    const v = d?.validation;
+    const score = row.score;
+    const ringTone = score == null ? CHART.muted : score >= 0.85 ? CHART.success : score >= 0.6 ? CHART.warning : CHART.error;
+    const na = <span className="text-base-content/45">—</span>;
+    const skel = (h = "h-16") => <div className={`skeleton ${h} w-full rounded-lg`} />;
+
+    // pass / warn / fail row for one validation check
+    const LEVEL = { pass: { icon: CheckCircle2, cls: "text-success", word: "Pass" }, warn: { icon: AlertTriangle, cls: "text-warning", word: "Borderline" }, fail: { icon: AlertTriangle, cls: "text-error", word: "Fails" } };
+    const lvl = (good, ok) => (good ? "pass" : ok ? "warn" : "fail");
+    const checks = v?.checks
+        ? [
+              { id: "sync", label: "Timing match", value: v.checks.sync, fmt: (x) => `${Math.round(x * 100)}%`, level: lvl(v.checks.sync >= 0.6, v.checks.sync >= 0.35), help: "Share of cue start times that line up with the embedded track (±1 s) after removing any constant offset." },
+              { id: "ratio", label: "Cue count vs reference", value: v.checks.ratio, fmt: (x) => `${x.toFixed(2)}×`, level: lvl(v.checks.ratio >= 0.55 && v.checks.ratio <= 1.8, v.checks.ratio >= 0.4 && v.checks.ratio <= 2.2), help: `Cue count divided by the reference's ${v.checks.ref ?? "—"} cues. Near 1.0 means the same segmentation.` },
+              { id: "recall", label: "Coverage of reference cues", value: v.checks.recall, fmt: (x) => `${Math.round(x * 100)}%`, level: lvl(v.checks.recall >= 0.75, v.checks.recall >= 0.5), help: "How many reference cues have a matching cue here. Low = missing dialogue." },
+              ...(v.checks.words != null ? [{ id: "words", label: "Text similarity", value: v.checks.words, fmt: (x) => x.toFixed(2), level: lvl(v.checks.words >= 0.2, v.checks.words >= 0.08), help: "Word overlap with the reference. A translation of another language track scores lower but is fine." }] : []),
+              { id: "drift", label: "Drift over the film", value: v.checks.drift ?? 0, fmt: (x) => `${x.toFixed(2)}s`, level: lvl((v.checks.drift ?? 0) <= 1, (v.checks.drift ?? 0) <= 3), help: "Difference in offset between the first and last third. Large drift = wrong frame rate / cut." },
+              { id: "tail", label: "Last cue vs reference", value: v.checks.tailGap ?? 0, fmt: (x) => `${Math.round(x)}s`, level: lvl((v.checks.tailGap ?? 0) <= 600, (v.checks.tailGap ?? 0) <= 1500), help: "Distance between the last cue here and the reference. Large = the subtitle ends early or late." },
+              { id: "offset", label: "Constant offset", value: v.checks.offset ?? 0, fmt: (x) => `${x > 0 ? "+" : ""}${x.toFixed(2)}s`, level: lvl(Math.abs(v.checks.offset ?? 0) <= 1.5, Math.abs(v.checks.offset ?? 0) <= v.thresholds.maxOffsetSec), help: "Measured before correction. Offsets up to 30 s are corrected automatically when stored." },
+          ]
+        : [];
+
+    return (
+        <ModalShell modal={DASH_MODALS.subtitlePreview} onClose={onClose} labelledBy="sub-prev-t">
+            <ModalHeader
+                id="sub-prev-t"
+                icon={Languages}
+                tone={TONE[q.tone]}
+                title={row.title}
+                subtitle={<span className="font-mono">{row.filename}</span>}
+                badges={
+                    <>
+                        <ModalBadge tone="primary">{row.label}</ModalBadge>
+                        <ModalBadge tone={q.tone} icon={q.icon}>
+                            {q.label}
+                        </ModalBadge>
+                        {score != null && <ModalBadge>Score {score.toFixed(2)}</ModalBadge>}
+                    </>
+                }
+                onClose={onClose}
+            />
+            <ModalTabs
+                value={tab}
+                onChange={setTab}
+                tabs={[
+                    { id: "overview", label: "Overview", icon: Info },
+                    { id: "quality", label: "Quality", icon: ShieldCheck },
+                    { id: "timing", label: "Timing", icon: Clock },
+                    { id: "cues", label: "Cues", icon: FileText, count: total || null },
+                    { id: "file", label: "File", icon: Database },
+                ]}
+            />
+            <ModalContent>
+                {derr && (
+                    <ModalCallout tone="error" icon={AlertTriangle} compact>
+                        {derr}
+                    </ModalCallout>
+                )}
+
+                {/* ── Overview ── */}
+                {tab === "overview" && (
+                    <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" className="flex shrink-0 flex-col gap-4">
+                        <div className={`${PANEL} flex items-center gap-4 p-4`}>
+                            <Ring value={score ?? 0} size={72} stroke={7} color={ringTone} label={score != null ? `Score ${score.toFixed(2)}` : "No score"}>
+                                {score != null ? score.toFixed(2) : "—"}
+                            </Ring>
+                            <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold">{q.label}</p>
+                                <p className="mt-0.5 text-xs leading-snug text-base-content/65">
+                                    {row.quality === "good" && "Passed every check against the reference."}
+                                    {row.quality === "fallback" && "Nearest usable — below the quality bar but close enough to use."}
+                                    {row.quality === "unvalidated" && "Not judged yet — Re-validate to score it."}
+                                    {row.quality === "upload" && "Uploaded by an admin — never judged automatically."}
+                                </p>
+                                {v && score != null && (
+                                    <div className="mt-2.5">
+                                        <Gauge value={score} marks={[{ at: v.thresholds.fallbackMin, label: "usable" }, { at: v.thresholds.accept, label: "high quality" }]} color={ringTone} />
+                                        <div className="mt-1.5 flex justify-between text-[10px] text-base-content/55">
+                                            <span>0</span>
+                                            <span>usable {v.thresholds.fallbackMin}</span>
+                                            <span>high quality {v.thresholds.accept}</span>
+                                            <span>1</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <ModalStats
+                            items={[
+                                { icon: FileText, tone: "text-info", label: "Cues", value: row.cues != null ? row.cues.toLocaleString() : "—" },
+                                { icon: Gauge2, tone: "text-success", label: "Cues / second", value: row.cuePerSec != null ? row.cuePerSec.toFixed(3) : "—" },
+                                { icon: Database, tone: "text-warning", label: "File size", value: row.sizeBytes != null ? fmtBytes(row.sizeBytes) : "—" },
+                                { icon: Clock, tone: "text-accent", label: "Avg cue", value: row.avgCueSec != null ? `${row.avgCueSec}s` : "—" },
+                            ]}
+                        />
+
+                        {row.quality === "fallback" && (
+                            <ModalCallout tone="warning" icon={AlertTriangle} compact>
+                                No candidate reached the quality bar{row.reasons?.length ? ` (${row.reasons.join(", ")})` : ""}. {row.nextUpgradeAt ? `A better one is looked for again ${fmtDate(row.nextUpgradeAt)}.` : ""}
+                            </ModalCallout>
+                        )}
+
+                        {!d && !derr ? (
+                            skel("h-40")
+                        ) : (
+                            d && (
+                                <>
+                                    <ModalSection label="Runtime coverage" hint={st.coveragePct != null ? `${st.coveragePct}% of the video` : "video length unknown"}>
+                                        <div className={`${PANEL} p-4`}>
+                                            <Gauge value={st.coveragePct ?? 0} max={100} color={CHART.info} />
+                                            <div className="mt-2 flex justify-between text-xs tabular-nums text-base-content/65">
+                                                <span>first cue {subClock(st.firstAt)}</span>
+                                                <span>last cue {subClock(st.lastAt)}</span>
+                                                <span>video {d.video.durationSec ? subClock(d.video.durationSec) : "—"}</span>
+                                            </div>
+                                        </div>
+                                    </ModalSection>
+                                    <ModalSection label="Origin">
+                                        <ModalRows>
+                                            <ModalKV icon={Layers} label="Source">
+                                                {d.origin.source}
+                                            </ModalKV>
+                                            {d.origin.releaseName && (
+                                                <ModalKV icon={FileText} label="Release" mono action={<ModalCopyButton text={d.origin.releaseName} label="release name" />}>
+                                                    <span title={d.origin.releaseName}>{d.origin.releaseName}</span>
+                                                </ModalKV>
+                                            )}
+                                            {d.origin.subtitleId && (
+                                                <ModalKV icon={Info} label="SubSource ID" mono>
+                                                    {d.origin.subtitleId}
+                                                </ModalKV>
+                                            )}
+                                            <ModalKV icon={Calendar} label="Added">
+                                                {fmtDate(d.origin.addedAt)}
+                                            </ModalKV>
+                                            <ModalKV icon={Check} label="Validated">
+                                                {fmtDate(v.validatedAt)}
+                                            </ModalKV>
+                                            <ModalKV icon={ShieldCheck} label="Checked against">
+                                                {v.mode === "reference" ? "Embedded subtitle track" : v.mode === "generic" ? "Video length & cue rules" : "Not checked yet"}
+                                            </ModalKV>
+                                        </ModalRows>
+                                    </ModalSection>
+                                </>
+                            )
+                        )}
+                    </div>
+                )}
+
+                {/* ── Quality ── */}
+                {tab === "quality" && (
+                    <div role="tabpanel" id="panel-quality" aria-labelledby="tab-quality" className="flex shrink-0 flex-col gap-4">
+                        {!d && !derr ? (
+                            skel("h-72")
+                        ) : d ? (
+                            <>
+                                {v.reasons?.length > 0 && (
+                                    <ModalCallout tone={row.quality === "fallback" ? "warning" : "info"} icon={AlertTriangle} compact>
+                                        Why it is not “high quality”: {v.reasons.join(" · ")}
+                                    </ModalCallout>
+                                )}
+                                {checks.length === 0 ? (
+                                    <ModalCallout tone="info" icon={Info} compact>
+                                        No check breakdown is stored for this file ({v.mode ? "it was judged before details were recorded" : "it has not been judged yet"}). Use Re-validate to record it.
+                                    </ModalCallout>
+                                ) : (
+                                    <ModalSection label="Checks against the reference" hint={`${checks.filter((c) => c.level === "pass").length} of ${checks.length} pass`}>
+                                        <div className={`${PANEL} divide-y divide-base-content/10`}>
+                                            {checks.map((c) => {
+                                                const L = LEVEL[c.level];
+                                                return (
+                                                    <div key={c.id} className="flex items-start gap-3 px-4 py-3">
+                                                        <L.icon size={16} className={`mt-0.5 shrink-0 ${L.cls}`} />
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <p className="text-sm font-medium">{c.label}</p>
+                                                                <p className="shrink-0 text-sm font-semibold tabular-nums">{c.fmt(c.value)}</p>
+                                                            </div>
+                                                            <p className="mt-0.5 text-xs leading-snug text-base-content/60">{c.help}</p>
+                                                        </div>
+                                                        <span className={`mt-0.5 shrink-0 text-[11px] font-medium ${L.cls}`}>{L.word}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </ModalSection>
+                                )}
+                                <ModalSection label="Cleanup applied">
+                                    <ModalRows>
+                                        <ModalKV icon={Timer} label="Timing shift">
+                                            {d.origin.shiftApplied ? `${d.origin.shiftApplied > 0 ? "+" : ""}${d.origin.shiftApplied}s` : "None"}
+                                        </ModalKV>
+                                        <ModalKV icon={Scissors} label="Watermark cues removed">
+                                            {d.origin.removedPromo || "None found"}
+                                        </ModalKV>
+                                    </ModalRows>
+                                </ModalSection>
+                            </>
+                        ) : null}
+                    </div>
+                )}
+
+                {/* ── Timing ── */}
+                {tab === "timing" && (
+                    <div role="tabpanel" id="panel-timing" aria-labelledby="tab-timing" className="flex shrink-0 flex-col gap-4">
+                        {!d && !derr ? (
+                            skel("h-80")
+                        ) : d ? (
+                            <>
+                                <ModalSection label="Cue density across the film" hint="cues per slice of the runtime">
+                                    <div className={`${PANEL} p-4`}>
+                                        <AreaChart points={d.timeline.map((t) => ({ label: subClock(t.at), value: t.count }))} color={CHART.info} height={120} />
+                                    </div>
+                                </ModalSection>
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <ModalSection label="Cue length">
+                                        <div className={`${PANEL} p-4`}>
+                                            <BarChart data={d.durationHist.map((b) => ({ label: b.label, value: b.count }))} height={110} color={CHART.primary} highlight={(b) => /^(1–2|2–3|3–5)$/.test(b.label)} />
+                                        </div>
+                                    </ModalSection>
+                                    <ModalSection label="Reading speed" hint="characters / second">
+                                        <div className={`${PANEL} p-4`}>
+                                            <BarChart data={d.cpsHist.map((b) => ({ label: b.label, value: b.count }))} height={110} color={CHART.warning} highlight={(b) => /^(<8|8–12|12–17)$/.test(b.label)} />
+                                        </div>
+                                    </ModalSection>
+                                </div>
+                                <ModalSection label="Timing statistics">
+                                    <ModalRows>
+                                        <ModalKV icon={Clock} label="Cue length (min / avg / p95 / max)">
+                                            {st.durMin}s · {st.durAvg}s · {st.durP95}s · {st.durMax}s
+                                        </ModalKV>
+                                        <ModalKV icon={Timer} label="Gap between cues (avg / longest)">
+                                            {st.gapAvg}s · {subClock(st.gapMax)}
+                                        </ModalKV>
+                                        <ModalKV icon={Gauge2} label="Reading speed (avg / p95)">
+                                            {st.cpsAvg} · {st.cpsP95} chars/s
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={st.fastReading ? "text-warning" : undefined} label="Cues faster than 21 chars/s">
+                                            {st.fastReading} {st.total ? <span className="text-base-content/55">({Math.round((st.fastReading / st.total) * 100)}%)</span> : null}
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={st.shortCues ? "text-warning" : undefined} label="Flash cues (< 0.5 s)">
+                                            {st.shortCues}
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={st.longCues ? "text-warning" : undefined} label="Very long cues (> 7 s)">
+                                            {st.longCues}
+                                        </ModalKV>
+                                        <ModalKV icon={Clock} label="Silences longer than 60 s">
+                                            {st.longGaps}
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={st.overlaps ? "text-warning" : undefined} label="Overlapping cues">
+                                            {st.overlaps}
+                                        </ModalKV>
+                                    </ModalRows>
+                                </ModalSection>
+                            </>
+                        ) : null}
+                    </div>
+                )}
+
+                {/* ── Cues ── */}
+                {tab === "cues" && (
+                    <div role="tabpanel" id="panel-cues" aria-labelledby="tab-cues" className="flex min-h-0 flex-1 flex-col gap-3">
+                        {err && (
+                            <ModalCallout tone="error" icon={AlertTriangle} compact>
+                                {err}
+                            </ModalCallout>
+                        )}
+                        <div className={`${PANEL} min-h-0 flex-1 overflow-y-auto`}>
+                            <table className="w-full table-fixed border-collapse text-left text-[13px]">
+                                <thead className="sticky top-0 z-10 bg-base-200">
+                                    <tr className="border-b border-base-content/10 text-xs text-base-content/65">
+                                        <th className="w-14 px-4 py-2.5 font-medium">#</th>
+                                        <th className="w-24 px-4 py-2.5 font-medium">Start</th>
+                                        <th className="px-4 py-2.5 font-medium">Text</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {cues.map((c) => (
+                                        <tr key={c.i} className="border-b border-base-content/10 last:border-b-0">
+                                            <td className="px-4 py-2 align-top text-xs tabular-nums text-base-content/55">{c.i}</td>
+                                            <td className="px-4 py-2 align-top font-mono text-xs tabular-nums text-base-content/75">{subClock(c.start)}</td>
+                                            <td className="break-words px-4 py-2 align-top text-base-content">{c.text || <span className="text-base-content/40">(empty)</span>}</td>
+                                        </tr>
+                                    ))}
+                                    {!cues.length && !loading && (
+                                        <tr>
+                                            <td colSpan={3} className="px-4 py-8 text-center text-base-content/60">
+                                                No cues to show
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                            {loading && <div className="skeleton m-3 h-8 rounded-md" />}
+                        </div>
+                        {cues.length < total && (
+                            <ModalButton className="shrink-0 self-center" onClick={() => load(cues.length)} loading={loading} loadingText="Loading…">
+                                Show 60 more · {cues.length.toLocaleString()} of {total.toLocaleString()}
+                            </ModalButton>
+                        )}
+                    </div>
+                )}
+
+                {/* ── File ── */}
+                {tab === "file" && (
+                    <div role="tabpanel" id="panel-file" aria-labelledby="tab-file" className="flex shrink-0 flex-col gap-4">
+                        {!d && !derr ? (
+                            skel("h-80")
+                        ) : d ? (
+                            <>
+                                <ModalSection label="File">
+                                    <ModalRows>
+                                        <ModalKV icon={FileText} label="Name" mono>
+                                            {d.file.langFolder}/{d.file.filename}
+                                        </ModalKV>
+                                        <ModalKV icon={Database} label="Title folder" mono>
+                                            {d.file.folder}
+                                        </ModalKV>
+                                        <ModalKV icon={Database} label="Size">
+                                            {fmtBytes(d.file.bytes)} <span className="text-base-content/55">({d.file.bytes.toLocaleString()} bytes)</span>
+                                        </ModalKV>
+                                        <ModalKV icon={Info} label="Format">
+                                            {d.file.ext.replace(".", "").toUpperCase()}
+                                        </ModalKV>
+                                        <ModalKV icon={Languages} label="Encoding">
+                                            {d.file.encoding}
+                                        </ModalKV>
+                                        <ModalKV icon={Info} label="Line endings">
+                                            {d.file.lineEndings}
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={d.file.invalidCharPct ? "text-warning" : undefined} label="Unreadable characters">
+                                            {d.file.invalidCharPct}%
+                                        </ModalKV>
+                                    </ModalRows>
+                                </ModalSection>
+                                <ModalSection label="Content">
+                                    <ModalRows>
+                                        <ModalKV icon={FileText} label="Cues / words / characters">
+                                            {st.total.toLocaleString()} · {st.words.toLocaleString()} · {st.chars.toLocaleString()}
+                                        </ModalKV>
+                                        <ModalKV icon={FileText} label="Per cue (avg words / chars)">
+                                            {st.avgWords} · {st.avgChars}
+                                        </ModalKV>
+                                        <ModalKV icon={FileText} label="Longest line">
+                                            {st.longestLine} characters
+                                        </ModalKV>
+                                        <ModalKV icon={Layers} label="Two-line cues">
+                                            {st.multiLinePct != null ? `${st.multiLinePct}%` : na}
+                                        </ModalKV>
+                                        <ModalKV icon={Layers} label="Italic / coloured cues">
+                                            {st.italicPct != null ? `${st.italicPct}% · ${st.coloredPct}%` : na}
+                                        </ModalKV>
+                                        <ModalKV icon={Layers} label="Sound-effect cues  [ … ]">
+                                            {st.soundCues}
+                                        </ModalKV>
+                                        <ModalKV icon={AlertTriangle} tone={st.emptyCues || st.duplicateCues ? "text-warning" : undefined} label="Empty / duplicate cues">
+                                            {st.emptyCues} · {st.duplicateCues}
+                                        </ModalKV>
+                                    </ModalRows>
+                                </ModalSection>
+                                <ModalSection label="Video & history">
+                                    <ModalRows>
+                                        <ModalKV icon={Eye} label="Video">
+                                            {d.video.resolution || "Unknown"}
+                                            {d.video.width ? <span className="text-base-content/55"> · {d.video.width}×{d.video.height}</span> : null}
+                                            {d.video.durationSec ? <span className="text-base-content/55"> · {subClock(d.video.durationSec)}</span> : null}
+                                        </ModalKV>
+                                        <ModalKV icon={Languages} label="Embedded subtitle tracks">
+                                            {d.video.embeddedText} text · {d.video.embeddedImage} picture
+                                        </ModalKV>
+                                        {d.queue && (
+                                            <>
+                                                <ModalKV icon={Activity} label="Worker status">
+                                                    {d.queue.status} <span className="text-base-content/55">· {d.queue.attempts} attempt{d.queue.attempts === 1 ? "" : "s"}</span>
+                                                </ModalKV>
+                                                <ModalKV icon={Languages} label="Languages checked">
+                                                    {d.queue.langsChecked.length ? d.queue.langsChecked.join(", ").toUpperCase() : na}
+                                                </ModalKV>
+                                                {d.queue.lastError && (
+                                                    <ModalKV icon={AlertTriangle} tone="text-warning" label="Last note">
+                                                        {d.queue.lastError}
+                                                    </ModalKV>
+                                                )}
+                                            </>
+                                        )}
+                                        <ModalKV icon={Download} label="Rejected earlier versions">
+                                            {d.rejected.files ? `${d.rejected.files} (${fmtBytes(d.rejected.bytes)})` : "None"}
+                                        </ModalKV>
+                                    </ModalRows>
+                                </ModalSection>
+                            </>
+                        ) : null}
+                    </div>
+                )}
+            </ModalContent>
+            <ModalFooter note={<span className="font-mono">{row.mediaId.slice(0, 24)}…</span>}>
+                <ModalButton onClick={onClose}>Close</ModalButton>
+                <ModalButton variant="primary" className="gap-1.5" onClick={() => onDownload(row)}>
+                    <Download size={14} />
+                    Download file
+                </ModalButton>
+            </ModalFooter>
+        </ModalShell>
+    );
+}
+
+/** Shift the timing of one or many subtitles. onApply(seconds) does the work. */
+export function SubtitleShiftModal({ rows, onClose, onApply, busy = false }) {
+    const [val, setVal] = useState("");
+    if (!rows?.length) return null;
+    const sec = Number(val);
+    const valid = val.trim() !== "" && Number.isFinite(sec) && sec !== 0 && Math.abs(sec) <= 300;
+    const unsupported = rows.filter((r) => !/\.(srt|vtt)$/.test(r.ext || r.filename || "")).length;
+    const nudge = (d) => setVal((v) => String(Math.round(((Number(v) || 0) + d) * 10) / 10));
+
+    return (
+        <ModalShell modal={DASH_MODALS.subtitleShift} onClose={onClose} busy={busy} labelledBy="sub-shift-t">
+            <ModalHeader id="sub-shift-t" icon={Timer} tone="text-warning" title="Shift timing" subtitle={rows.length === 1 ? rows[0].title : `${rows.length} subtitles selected`} onClose={onClose} busy={busy} />
+            <ModalContent>
+                <ModalSection label="Seconds to move every cue" hint="positive = later, negative = earlier">
+                    <input
+                        type="number"
+                        step="0.1"
+                        min={-300}
+                        max={300}
+                        data-autofocus
+                        value={val}
+                        onChange={(e) => setVal(e.target.value)}
+                        className={`${MODAL_INPUT} !h-[42px] ${val ? "!border-primary/60" : ""}`}
+                        placeholder="e.g. 1.5 or -0.8"
+                    />
+                </ModalSection>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                    {[-5, -1, -0.5, 0.5, 1, 5].map((d) => (
+                        <ModalButton key={d} onClick={() => nudge(d)}>
+                            {d > 0 ? "+" : ""}
+                            {d}s
+                        </ModalButton>
+                    ))}
+                    <ModalButton onClick={() => setVal("")}>Reset</ModalButton>
+                </div>
+                <ModalStats
+                    items={[
+                        { icon: FileText, tone: "text-info", label: "Subtitles", value: rows.length },
+                        { icon: Timer, tone: "text-warning", label: "Shift", value: valid ? `${sec > 0 ? "+" : ""}${sec}s` : "—" },
+                    ]}
+                />
+                {unsupported > 0 && (
+                    <ModalCallout tone="warning" icon={AlertTriangle} compact>
+                        {unsupported} selected {unsupported === 1 ? "file is" : "files are"} not .srt / .vtt and will be skipped.
+                    </ModalCallout>
+                )}
+                <ModalCallout tone="info" compact className="mt-auto">
+                    The file on disk is rewritten with the new timestamps (text and formatting untouched). Shift back by the same amount to undo.
+                </ModalCallout>
+            </ModalContent>
+            <ModalFooter note={valid ? `Every cue moves ${Math.abs(sec)}s ${sec > 0 ? "later" : "earlier"}` : "Enter a non-zero number within ±300"}>
+                <ModalButton onClick={onClose} disabled={busy}>
+                    Cancel
+                </ModalButton>
+                <ModalButton variant="primary" className="gap-1.5" onClick={() => onApply(sec)} disabled={!valid} loading={busy} loadingText="Shifting…">
+                    <Timer size={14} />
+                    Apply shift
+                </ModalButton>
+            </ModalFooter>
+        </ModalShell>
     );
 }

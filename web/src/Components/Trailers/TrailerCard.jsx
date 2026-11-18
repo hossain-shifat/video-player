@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Film } from "lucide-react";
+import { Film, Play } from "lucide-react";
 import HorizontalCard from "../Media/HorizontalCard";
 
 // Icon fallback — only if backdrop AND poster both fail
@@ -43,8 +43,11 @@ function TrailerModal({ trailerKey, onClose }) {
  *
  * onPlay(item, videoKey) — optional override; when omitted, clicking opens
  * the in-page trailer modal instead of leaving the site to YouTube.
+ *
+ * variant — card style id to force (settings preview); default follows the user setting.
+ * Props are given for every card style (classic + rich); each style's shell uses what it needs.
  */
-export default function TrailerCard({ item, onPlay }) {
+export default function TrailerCard({ item, onPlay, variant }) {
     const [imgError, setImgError] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
 
@@ -80,9 +83,34 @@ export default function TrailerCard({ item, onPlay }) {
         </p>
     );
 
+    // ── Rich props (flat designs) ──
+    const typeLabel = item.type === "anime" ? "Anime" : item.type === "series" ? "Series" : "Movie";
+    const year = item.releaseDate ? item.releaseDate.slice(0, 4) : null;
+    const bottomTile = (
+        <span className="inline-flex items-center gap-1 rounded-sm bg-base-200 px-1.5 py-[3px] font-mono text-[11px] uppercase text-base-content group-hover:bg-base-300">
+            <Play size={11} fill="currentColor" />
+            Trailer
+        </span>
+    );
+
     return (
         <>
-            <HorizontalCard onClick={handleClick} thumbnail={thumbnail} badge={badge} footerText={footerText} title={title} ring={false} />
+            <HorizontalCard
+                variant={variant}
+                onClick={handleClick}
+                thumbnail={thumbnail}
+                // classic
+                badge={badge}
+                footerText={footerText}
+                title={title}
+                ring={false}
+                // rich
+                tone={isSeries ? "accent" : "primary"}
+                tag={{ text: typeLabel }}
+                bottomTile={bottomTile}
+                heading={item.title}
+                meta={year || item.company?.name || null}
+            />
             {modalOpen && videoKey && <TrailerModal trailerKey={videoKey} onClose={() => setModalOpen(false)} />}
         </>
     );

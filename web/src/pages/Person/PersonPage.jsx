@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Minus, Plus, Share2, Check, Users, Search, X, P
 import { useApi } from "../../Context/apiContext";
 import MediaRow from "../../Components/Media/MediaRow";
 import SeeAllPage from "../../Components/Media/SeeAllPage";
+import { routeId } from "../../Utils/shortId.js";
 
 const TMDB_KEY = import.meta.env.VITE_TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -214,7 +215,7 @@ function loadGenreMap() {
 }
 const mediaPath = (c, libIndex) => {
     const lib = libIndex.get(creditKey(c));
-    return lib ? `/media/${encodeURIComponent(lib.id)}` : `/media/tmdb-${c.media_type}-${c.id}`;
+    return lib ? `/media/${routeId(lib.id)}` : `/media/tmdb-${c.media_type}-${c.id}`;
 };
 
 function buildInsights(person, libIndex, genreMap) {
@@ -450,7 +451,7 @@ function LibraryProgress({ owned, total, marathon }) {
                 <div className="sm:ml-auto min-w-0">
                     {marathon.next ? (
                         <Link
-                            to={`/media/${encodeURIComponent(marathon.next.id)}`}
+                            to={`/media/${routeId(marathon.next.id)}`}
                             className="inline-flex max-w-full items-center justify-center gap-2 h-10 px-5 rounded-md bg-primary text-primary-content text-xs font-bold hover:opacity-90 active:scale-95 transition w-full sm:w-auto">
                             <Play size={14} fill="currentColor" className="shrink-0" />
                             <span className="truncate">
@@ -887,7 +888,7 @@ function FilmographySection({ title, rows, total, defaultOpen, forceOpen, view, 
                         <ul className="timeline timeline-vertical border-t border-white/8 px-2 sm:px-5 py-4 [&>li>hr]:w-0.5 [&>li>hr]:min-h-3 [&>li>hr]:bg-white/10">
                             {shown.map((r, i) => {
                                 // Owned → real media page. Not owned → same page via tmdb-* id (shows "Not in library")
-                                const to = r.libId ? `/media/${encodeURIComponent(r.libId)}` : `/media/tmdb-${r.mediaType}-${r.tmdbId}`;
+                                const to = r.libId ? `/media/${routeId(r.libId)}` : `/media/tmdb-${r.mediaType}-${r.tmdbId}`;
                                 return (
                                     <li key={r.key} className="grid-cols-[2.5rem_auto_minmax(0,1fr)] sm:grid-cols-[3.25rem_auto_minmax(0,1fr)]">
                                         {i > 0 && <hr />}
@@ -926,7 +927,7 @@ function FilmographySection({ title, rows, total, defaultOpen, forceOpen, view, 
                         <ul className="border-t border-white/8 py-1.5 sm:py-2">
                             {shown.map((r) => {
                                 // Owned → real media page. Not owned → same page via tmdb-* id (shows "Not in library")
-                                const to = r.libId ? `/media/${encodeURIComponent(r.libId)}` : `/media/tmdb-${r.mediaType}-${r.tmdbId}`;
+                                const to = r.libId ? `/media/${routeId(r.libId)}` : `/media/tmdb-${r.mediaType}-${r.tmdbId}`;
                                 return (
                                     <li key={r.key}>
                                         {/* year | title · as role — text wraps under itself, never under the year */}

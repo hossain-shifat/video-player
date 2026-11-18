@@ -60,6 +60,7 @@ const INDEX = [
     ["appearance", "Font scale", "a-scale", "text size zoom"],
     ["appearance", "Line height", "a-line", "spacing"],
     ["appearance", "Density", "a-density", "compact comfortable spacing"],
+    ["appearance", "Card style", "a-cards", "cards posters classic flux continue watching design layout"],
     ["appearance", "Border radius", "a-radius", "rounded corners"],
     ["appearance", "Sidebar width", "a-sidebar", "layout"],
     ["appearance", "Reduced motion", "a-motion", "animation accessibility"],
@@ -532,7 +533,7 @@ export default function Settings() {
                     </div>
                 );
             case "appearance":
-                return <AppearanceSection />;
+                return <AppearanceSection setPref={setPref} />;
             case "library":
                 return isAdmin ? (
                     <LibrarySection
