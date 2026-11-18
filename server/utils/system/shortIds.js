@@ -166,8 +166,11 @@ function expandDeep(v, depth = 0) {
 
 function middleware(req, res, next) {
     try {
-        const rewritten = req.url.replace(TOKEN, (t) => toLong.get(t) || t);
-        if (rewritten !== req.url) req.url = rewritten;
+        // /api/ids/<alias> is the alias LOOKUP itself — rewriting it to the long id would make it 404.
+        if (!req.path.startsWith("/api/ids/")) {
+            const rewritten = req.url.replace(TOKEN, (t) => toLong.get(t) || t);
+            if (rewritten !== req.url) req.url = rewritten;
+        }
         if (req.body && typeof req.body === "object") req.body = expandDeep(req.body);
 
         if (req.method === "GET" && OBSERVE_PREFIXES.some((p) => req.path === p || req.path.startsWith(p + "/"))) {

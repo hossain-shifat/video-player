@@ -297,6 +297,18 @@ async function runSweep(label) {
             const last = k?.syncedAt ? Date.parse(k.syncedAt) : 0;
             if (now - last >= SYNC_TTL_MS) due.push({ t, last });
         }
+        // Titles whose last file left the library: keep their reviews, but stop publishing them / their file link.
+        // Skipped when the sweep found NO titles at all (an unplugged drive must not wipe the whole feed).
+        let delisted = 0;
+        if (titles.size > 0) {
+            for (const [key, k] of Object.entries(known)) {
+                if (k?.inLibrary && !titles.has(key)) {
+                    await store.upsertTitle(key, { inLibrary: false, fileId: null });
+                    delisted++;
+                }
+            }
+            if (delisted) invalidateFeeds();
+        }
         due.sort((a, b) => a.last - b.last); // never-synced first, then the oldest
         const batch = due.slice(0, SYNC_BATCH);
         let added = 0;
@@ -539,6 +551,10 @@ async function createReview(req, res) {
         const users = await resolveUsers([req.user.id]);
         return res.status(201).json({ review: serializeReview(review, ctx, users, 0) });
     } catch (err) {
+        if (err?.code === "ALREADY_REVIEWED") {
+            // lost the race against a concurrent request from the same user
+            return res.status(409).json({ error: "You already reviewed this title — edit your review instead", code: "ALREADY_REVIEWED", id: err.existing?.id });
+        }
         console.error("[Reviews] create error:", err);
         return res.status(500).json({ error: "Failed to save review" });
     }

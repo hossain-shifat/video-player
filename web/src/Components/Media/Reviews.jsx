@@ -205,11 +205,12 @@ const SORTS = [
 /**
  * Props:
  *   tmdbId     {number}  TMDB id of the title (movie or show)
- *   mediaType  {string}  "movie" | "series" | "anime"  (series + anime → tv)
+ *   mediaType  {string}  "movie" | "series" | "anime"  (fallback only — anime can be a film OR a show)
+ *   kind       {string}  "movie" | "tv" — the TITLE's real TMDB namespace; wins over mediaType when given
  *   title, poster, backdrop — only used to label a review written for a title that is not in the library
  */
-export default function Reviews({ tmdbId, mediaType, title, poster, backdrop }) {
-    const kind = mediaType === "movie" ? "movie" : "tv";
+export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, poster, backdrop }) {
+    const kind = kindProp === "movie" || kindProp === "tv" ? kindProp : mediaType === "movie" ? "movie" : "tv";
     const { isAuthenticated } = useAuth();
     const { openAuthModal } = useAuthModal();
     const navigate = useNavigate();

@@ -68,12 +68,33 @@ async function loadStore() {
                 };
             }
             console.log(`[Reviews] Loaded store (titles=${Object.keys(data.titles).length}, reviews=${Object.keys(data.reviews).length}, replies=${Object.keys(data.replies).length})`);
-        } catch (err) {
-            if (err.code !== "ENOENT") console.error("[Reviews] Failed to load store:", err.message);
-            data = { version: 1, titles: {}, reviews: {}, replies: {} };
-        } finally {
-            rebuildIndexes();
             loaded = true;
+        } catch (err) {
+            if (err.code === "ENOENT") {
+                data = { version: 1, titles: {}, reviews: {}, replies: {} };
+                rebuildIndexes();
+                loaded = true;
+            } else if (err instanceof SyntaxError) {
+                // Corrupt JSON can never become valid by retrying — keep a copy for manual recovery, then start empty.
+                const bak = `${STORE_FILE}.corrupt-${Date.now()}`;
+                try {
+                    await fs.promises.copyFile(STORE_FILE, bak);
+                    console.error(`[Reviews] reviews.json is corrupt — copied to ${bak}, starting empty:`, err.message);
+                } catch (copyErr) {
+                    console.error("[Reviews] reviews.json is corrupt and could not be backed up — leaving it untouched:", copyErr.message);
+                    throw err;
+                }
+                data = { version: 1, titles: {}, reviews: {}, replies: {} };
+                rebuildIndexes();
+                loaded = true;
+            } else {
+                // EACCES / EBUSY / bad JSON …: do NOT start from an empty store (the next save would
+                // overwrite the real file). Leave `loaded` false so the next call retries.
+                console.error("[Reviews] Failed to load store (will retry on next access):", err.message);
+                throw err;
+            }
+        } finally {
+            if (loaded) rebuildIndexes();
             loadPromise = null;
         }
     })();
@@ -81,10 +102,16 @@ async function loadStore() {
 }
 
 // ─── persistence: debounced, single writer, atomic ────────────────────────────
+// `dirty` stays true until a write has really reached disk (rename ok). A failed write keeps it true,
+// retries later, and flush() on shutdown tries again — so an acknowledged review is never silently lost.
 let saveTimer = null;
 let writing = Promise.resolve();
+let dirty = false;
+const RETRY_MS = 5000;
 
 async function writeNow() {
+    if (!dirty) return;
+    dirty = false; // anything mutated from here on sets it again
     try {
         await fs.promises.mkdir(path.dirname(STORE_FILE), { recursive: true });
         const tmp = `${STORE_FILE}.tmp.${process.pid}.${Date.now()}`;
@@ -97,26 +124,29 @@ async function writeNow() {
         }
         await fs.promises.rename(tmp, STORE_FILE);
     } catch (err) {
-        console.error("[Reviews] Save failed:", err.message);
+        dirty = true; // not persisted — keep it pending
+        console.error("[Reviews] Save failed (will retry):", err.message);
+        scheduleSave(RETRY_MS);
     }
 }
 
-function scheduleSave() {
+function scheduleSave(delay = 800) {
+    dirty = true;
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
         saveTimer = null;
         writing = writing.then(writeNow);
-    }, 800);
+    }, delay);
     saveTimer.unref?.();
 }
 
-/** Write any pending change right now (used on shutdown). */
+/** Write any pending change right now (used on shutdown). Retries a previously failed save too. */
 async function flush() {
     if (saveTimer) {
         clearTimeout(saveTimer);
         saveTimer = null;
-        writing = writing.then(writeNow);
     }
+    writing = writing.then(writeNow);
     await writing;
 }
 
@@ -184,6 +214,19 @@ async function findUserReview(key, userId) {
 
 async function addReview({ key, userId, author, rating, content }) {
     await loadStore();
+    // Uniqueness is enforced HERE, after the load and with no await before the insert, so two concurrent
+    // requests from one user cannot both pass (the controller's earlier check is only a fast path).
+    if (userId) {
+        for (const rid of byKey.get(key) || []) {
+            const dup = data.reviews[rid];
+            if (dup && dup.userId === userId) {
+                const e = new Error("User already reviewed this title");
+                e.code = "ALREADY_REVIEWED";
+                e.existing = dup;
+                throw e;
+            }
+        }
+    }
     const t = nowIso();
     const review = { id: newId("rv"), key, source: "local", externalId: null, userId, author, rating, content, createdAt: t, updatedAt: t, edited: false, reactions: {} };
     data.reviews[review.id] = review;

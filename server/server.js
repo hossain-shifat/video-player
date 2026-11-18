@@ -271,12 +271,37 @@ async function shutdown(signal) {
     stopDaemon();
     stopTrailerScheduler();
     stopReviewScheduler();
-    await flushReviews(); // write any review/reaction/reply still waiting for its debounced save
+    // Stop taking NEW requests and give in-flight ones (review writes, imports) a moment to finish,
+    // so nothing can schedule a save after the final flush below. Capped — long HLS streams must not stall exit.
+    await new Promise((resolve) => {
+        const cap = setTimeout(resolve, 3000);
+        cap.unref?.();
+        try {
+            server.close(() => {
+                clearTimeout(cap);
+                resolve();
+            });
+            server.closeIdleConnections?.();
+        } catch {
+            clearTimeout(cap);
+            resolve();
+        }
+    });
+    try {
+        await flushReviews(); // write any review/reaction/reply still waiting for its debounced save
+    } catch (err) {
+        console.error("[Server] Review flush failed:", err?.message || err);
+    }
     stopStorageMonitor();
     stopAccountPurgeScheduler();
     notificationService.stopMaintenance();
     subtitleWorker.stop();
     await transcoderService.killAllSessions();
+    try {
+        await flushReviews(); // last chance: anything that slipped in while sessions were closing
+    } catch (err) {
+        console.error("[Server] Final review flush failed:", err?.message || err);
+    }
     console.log("[Server] All transcoding sessions terminated. Bye.");
     process.exit(0);
 }

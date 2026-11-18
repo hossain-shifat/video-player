@@ -5,7 +5,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Info, ChevronLeft, ChevronRight, Check, Image as ImageIcon } from "lucide-react";
+import { Info, ChevronLeft, ChevronRight, Check, Film, Image as ImageIcon } from "lucide-react";
 import { fmtHours, pad2, pct } from "./mediaDashUtils";
 
 // ─── Tone maps ────────────────────────────────────────────────────────────────
@@ -31,6 +31,8 @@ export const BADGE_OUTLINE = {
     error: "badge-outline badge-error",
 };
 export const BORDER = { neutral: "border-base-300", primary: "border-primary", secondary: "border-secondary", accent: "border-accent", info: "border-info", success: "border-success", warning: "border-warning", error: "border-error" };
+// Solid chip colours for labels that sit on top of a poster.
+export const SOLID = { neutral: "bg-neutral text-neutral-content", primary: "bg-primary text-primary-content", secondary: "bg-secondary text-secondary-content", accent: "bg-accent text-accent-content", info: "bg-info text-info-content", success: "bg-success text-success-content", warning: "bg-warning text-warning-content", error: "bg-error text-error-content" };
 export const FILL = { neutral: "bg-neutral", primary: "bg-primary", secondary: "bg-secondary", accent: "bg-accent", info: "bg-info", success: "bg-success", warning: "bg-warning", error: "bg-error" };
 // Solid segment colour + readable label colour for the quality bars.
 export const SEGMENT = {
@@ -305,6 +307,61 @@ export function FormatTile({ label, tone = "success", selectMode, checked, onTog
                 <span className="h-2 w-0.5 rounded-full bg-current" />
             </span>
             <span className="max-w-full truncate font-mono text-[10px] font-semibold leading-none">{label}</span>
+        </div>
+    );
+}
+
+// One poster image that quietly falls back to a placeholder when it is missing or fails to load.
+function PosterImg({ src, className = "" }) {
+    const [failed, setFailed] = useState(false);
+    if (!src || failed) {
+        return (
+            <span className={`flex items-center justify-center bg-base-300 text-base-content/65 ${className}`}>
+                <Film size={14} />
+            </span>
+        );
+    }
+    return <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className={`object-cover ${className}`} />;
+}
+
+// Subtitle preview: the title's poster with a caption strip across the bottom, like a frame with the subtitle burned
+// in, and the format as a chip in the corner. 40×56.
+export function SubtitlePreview({ poster, ext, tone = "secondary", selectMode, checked, onToggle }) {
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-10" />;
+    return (
+        <div className="relative h-14 w-10 shrink-0 overflow-hidden rounded-md border border-base-300 bg-base-300">
+            <PosterImg src={poster} className="size-full" />
+            <span className={`absolute left-0.5 top-0.5 rounded px-1 font-mono text-[10px] font-semibold leading-4 ${SOLID[tone]}`}>{ext}</span>
+            <span className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-0.5 bg-base-100 px-1.5 py-1">
+                <span className="h-0.5 w-full rounded-full bg-base-content" />
+                <span className="h-0.5 w-2/3 rounded-full bg-base-content" />
+            </span>
+        </div>
+    );
+}
+
+// Format preview: a fan of up to three posters from titles in this container, with the extension as a chip on the
+// last poster. Rows without posters keep the plain tile in the same 64px slot so names stay aligned. 64×56.
+export function FormatPreview({ posters = [], label, tone = "success", selectMode, checked, onToggle }) {
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-16" />;
+    const stack = posters.slice(0, 3);
+    if (stack.length === 0)
+        return (
+            <div className="flex h-14 w-16 shrink-0 items-center">
+                <FormatTile label={label} tone={tone} />
+            </div>
+        );
+    const right = (stack.length - 1) * 9 + 33;
+    return (
+        <div className="relative h-14 w-16 shrink-0">
+            {stack.map((src, i) => (
+                <span key={src + i} className="absolute top-0.5 overflow-hidden rounded border border-base-200 bg-base-300 shadow-md" style={{ left: i * 9, zIndex: i + 1, width: 33, height: 50 }}>
+                    <PosterImg src={src} className="size-full" />
+                </span>
+            ))}
+            <span className={`absolute bottom-0 z-10 rounded px-1.5 font-mono text-[10px] font-semibold leading-4 ${SOLID[tone]}`} style={{ left: right, transform: "translateX(calc(-100% + 6px))" }}>
+                {label}
+            </span>
         </div>
     );
 }

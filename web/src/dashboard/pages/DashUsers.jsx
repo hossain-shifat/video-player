@@ -256,7 +256,12 @@ function computeInsights(list, ctx) {
 }
 
 function exportCsv(list) {
-    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // Neutralise spreadsheet formulas (=, +, -, @, tab, CR) so an account name like "=1+1" cannot execute when opened in Excel.
+    const esc = (v) => {
+        let t = String(v ?? "");
+        if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+        return `"${t.replace(/"/g, '""')}"`;
+    };
     const day = (iso) => (iso ? new Date(iso).toISOString().slice(0, 10) : "");
     const head = ["Name", "Email", "Role", "Status", "Email verified", "Access", "Access expires", "Devices", "Joined"];
     const rows = list.map((u) =>
@@ -2178,7 +2183,9 @@ export default function DashUsers() {
     }, []);
 
     // load every user once (all pages) → stat strip, tab counts, banner and account mix
+    const insightGen = useRef(0); // only the LATEST load may publish — a slow older one must not restore stale (e.g. pending) users
     const loadInsights = useCallback(async () => {
+        const gen = ++insightGen.current;
         try {
             const first = await dashApi.users({ page: 1, limit: 100 });
             let all = first.users ?? [];
@@ -2194,9 +2201,11 @@ export default function DashUsers() {
                 );
                 all = all.concat(...rest);
             }
+            if (gen !== insightGen.current) return; // superseded by a newer load
             setAllUsers(all);
             setInsState("ready");
         } catch {
+            if (gen !== insightGen.current) return;
             setInsState((s) => (s === "ready" ? s : "error"));
         }
     }, []);

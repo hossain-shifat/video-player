@@ -9,7 +9,7 @@ import { Captions, Eye, Download, Ellipsis, SquareCheck, WandSparkles, RefreshCw
 import { subtitleApi } from "../../Api/dashboardApi";
 import { ConfirmModal, DASH_MODALS, SubtitlePreviewModal, SubtitleShiftModal } from "../DashModal";
 import { fmtBytes, fmtDay, fmtYear, sl } from "./mediaDashUtils";
-import { Panel, Badge, Seg, SearchBox, SelectBox, ToolBtn, IconBtn, ActionBtn, SubtitleTile, Pagination, PortalMenu, Empty, Skel } from "./MediaDashParts";
+import { Panel, Badge, Seg, SearchBox, SelectBox, ToolBtn, IconBtn, ActionBtn, SubtitlePreview, Pagination, PortalMenu, Empty, Skel } from "./MediaDashParts";
 
 const PAGE_SIZE = 8;
 const EXT_TONE = { SRT: "secondary", VTT: "accent", ASS: "info", SSA: "info" };
@@ -58,7 +58,7 @@ function confirmFor(action, targets) {
     };
 }
 
-export default function SubtitlesTable({ onToast }) {
+export default function SubtitlesTable({ posterIndex, onToast }) {
     const qc = useQueryClient();
     const [tab, setTab] = useState("all");
     const [search, setSearch] = useState("");
@@ -341,7 +341,7 @@ export default function SubtitlesTable({ onToast }) {
                                     <td className="px-3 py-2.5 text-sm tabular-nums text-base-content/75">{sl(base + i + 1)}</td>
                                     <td className="px-2 py-2.5">
                                         <div className="flex min-w-0 items-center gap-2.5">
-                                            <SubtitleTile ext={ext} tone={EXT_TONE[ext] || "secondary"} selectMode={selectMode} checked={selected.has(r.key)} onToggle={() => toggle(r.key)} />
+                                            <SubtitlePreview poster={posterIndex?.get(r.mediaId)} ext={ext} tone={EXT_TONE[ext] || "secondary"} selectMode={selectMode} checked={selected.has(r.key)} onToggle={() => toggle(r.key)} />
                                             <div className="min-w-0">
                                                 <p className="truncate text-sm font-medium text-base-content" title={r.title}>
                                                     {r.title}

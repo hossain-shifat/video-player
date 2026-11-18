@@ -775,6 +775,8 @@ export default function MediaDetails() {
     const isSeries = Boolean(item?.seasons);
     const isAnime = item?.type === "anime";
     const mediaType = isAnime ? "anime" : isSeries ? "series" : "movie";
+    // Real TMDB namespace for reviews: an anime FILM is "movie", an anime SHOW is "tv" (mediaType alone cannot tell them apart).
+    const reviewKind = isSeries ? "tv" : "movie";
 
     const m = item?.metadata;
 
@@ -1312,7 +1314,7 @@ export default function MediaDetails() {
                 {m?.tmdbId && (
                     <>
                         <Divider />
-                        <Reviews tmdbId={m.tmdbId} mediaType={mediaType} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
+                        <Reviews tmdbId={m.tmdbId} mediaType={mediaType} kind={reviewKind} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
                     </>
                 )}
 

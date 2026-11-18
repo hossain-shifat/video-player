@@ -5,7 +5,7 @@
 import { useMemo, useState } from "react";
 import { List, Ellipsis, SquareCheck, FileDown, X, Info } from "lucide-react";
 import { fmtBytes, fmtBitrate, pct, downloadCsv, sl } from "./mediaDashUtils";
-import { Panel, Seg, SearchBox, SelectBox, ToolBtn, IconBtn, FormatTile, Badge, PortalMenu, Empty, PLAYBACK_TONE, PLAYBACK_LABEL } from "./MediaDashParts";
+import { Panel, Seg, SearchBox, SelectBox, ToolBtn, IconBtn, FormatPreview, Badge, PortalMenu, Empty, PLAYBACK_TONE, PLAYBACK_LABEL } from "./MediaDashParts";
 
 // Auto table layout: every column gets at least its content width plus a fixed gutter, and the leftover width is
 // shared between the columns in proportion to their content — no single column swallows the free space.
@@ -129,8 +129,8 @@ export default function FormatsTable({ formats, source, totalTitles, onShowTitle
                             <th className={`${TH} text-right`}>Titles</th>
                             <th className={`${TH} hidden text-right @xl:table-cell`}>Size</th>
                             <th className={`${TH} hidden text-right @4xl:table-cell`}>Avg bitrate</th>
-                            <th className={`${TH} hidden @min-[780px]:table-cell`}>Codecs (video / audio)</th>
-                            <th className={`${TH} hidden @5xl:table-cell`}>Subs</th>
+                            <th className={`${TH} hidden @min-[820px]:table-cell`}>Codecs (video / audio)</th>
+                            <th className={`${TH} hidden @min-[1060px]:table-cell`}>Subs</th>
                             <th className={`${TH}`}>Playback</th>
                             <th className={`${TH} text-right`}>Actions</th>
                         </tr>
@@ -141,7 +141,7 @@ export default function FormatsTable({ formats, source, totalTitles, onShowTitle
                                 <td className={`${TD} tabular-nums text-base-content/75`}>{sl(i + 1)}</td>
                                 <td className={TD}>
                                     <div className="flex items-center gap-3">
-                                        <FormatTile label={f.label === "UNKNOWN" ? "?" : f.label.slice(0, 4)} tone={PLAYBACK_TONE[f.status]} selectMode={selectMode} checked={selected.has(f.label)} onToggle={() => toggle(f.label)} />
+                                        <FormatPreview posters={f.posters} label={f.label === "UNKNOWN" ? "?" : f.label.slice(0, 4)} tone={PLAYBACK_TONE[f.status]} selectMode={selectMode} checked={selected.has(f.label)} onToggle={() => toggle(f.label)} />
                                         <div className="max-w-32">
                                             <p className="truncate text-sm font-semibold text-base-content" title={f.name}>{f.name}</p>
                                             <p className="truncate text-xs text-base-content/70">{f.label === "UNKNOWN" ? "no media info" : f.label === "OTHER" ? "other containers" : `.${f.label.toLowerCase()}`}</p>
@@ -154,7 +154,7 @@ export default function FormatsTable({ formats, source, totalTitles, onShowTitle
                                 </td>
                                 <td className={`${TD} hidden text-right tabular-nums text-base-content @xl:table-cell`}>{fmtBytes(f.bytes)}</td>
                                 <td className={`${TD} hidden text-right tabular-nums text-base-content @4xl:table-cell`}>{fmtBitrate(f.avgBitrate)}</td>
-                                <td className="hidden whitespace-nowrap px-4 py-3 text-xs leading-relaxed text-base-content/90 @min-[780px]:table-cell">
+                                <td className="hidden whitespace-nowrap px-4 py-3 text-xs leading-relaxed text-base-content/90 @min-[820px]:table-cell">
                                     <p>
                                         <span className="mr-1.5 font-semibold text-primary">V</span>
                                         {f.vcodecs.join(" · ") || "—"}
@@ -164,7 +164,7 @@ export default function FormatsTable({ formats, source, totalTitles, onShowTitle
                                         {f.acodecs.join(" · ") || "—"}
                                     </p>
                                 </td>
-                                <td className={`${TD} hidden text-xs text-base-content/90 @5xl:table-cell`}>{f.subs.join(" · ") || "None"}</td>
+                                <td className={`${TD} hidden text-xs text-base-content/90 @min-[1060px]:table-cell`}>{f.subs.join(" · ") || "None"}</td>
                                 <td className={TD}>
                                     <Badge tone={PLAYBACK_TONE[f.status]}>{PLAYBACK_LABEL[f.status]}</Badge>
                                     {f.needWork > 0 && f.status !== "transcode" && <p className="mt-0.5 text-xs text-base-content/70">{f.needWork} need transcode</p>}

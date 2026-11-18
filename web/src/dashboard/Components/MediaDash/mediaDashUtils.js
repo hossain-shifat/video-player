@@ -462,12 +462,20 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
     const typeShare = ["movie", "series", "anime"].map((type) => ({ type, bytes: bytesByType[type], share: pct(bytesByType[type], totalSize) }));
 
     // ── formats ──
+    const postersByFormat = new Map();
+    for (const it of items) {
+        if (!it._poster) continue;
+        const list = postersByFormat.get(it._container) || [];
+        if (list.length < 3) list.push(it._poster);
+        postersByFormat.set(it._container, list);
+    }
     const formats = [...formatMap.values()]
         .map((r) => {
             const total = r.status.direct + r.status.remux + r.status.transcode;
             const status = total === 0 ? "unknown" : r.status.transcode > 0 && r.status.transcode >= r.status.remux && r.status.transcode >= r.status.direct ? "transcode" : r.status.remux > r.status.direct ? "remux" : "direct";
             return {
                 label: r.label,
+                posters: postersByFormat.get(r.label) || [],
                 name: formatName(r.label),
                 titles: r.titles,
                 files: r.files,
@@ -513,6 +521,25 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
         typeShare,
         libraries: (mediaData.folders || []).map((f) => ({ id: f.id, label: f.label || f.path })),
     };
+}
+
+// ─── Posters ──────────────────────────────────────────────────────────────────
+
+const posterUrl = (p) => (p && p.startsWith("/") ? `https://image.tmdb.org/t/p/w200${p}` : p || null);
+
+// File id → poster url. The subtitle store is keyed by FILE id (movie id, or episode id for series/anime), so every
+// episode maps to its series poster.
+export function buildPosterIndex(mediaData) {
+    const index = new Map();
+    if (!mediaData) return index;
+    (mediaData.movies?.items || []).forEach((m) => index.set(m.id, posterUrl(m.metadata?.poster)));
+    for (const type of ["series", "anime"]) {
+        (mediaData[type]?.items || []).forEach((s) => {
+            const poster = posterUrl(s.metadata?.poster);
+            for (const season of Object.values(s.seasons || {})) for (const ep of season.episodes || []) index.set(ep.id, poster);
+        });
+    }
+    return index;
 }
 
 // ─── CSV export (client-side) ─────────────────────────────────────────────────

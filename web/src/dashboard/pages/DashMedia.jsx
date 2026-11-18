@@ -36,7 +36,7 @@ import {
     quietWindow,
     QUALITY_TONE,
 } from "../Components/MediaDash/MediaDashParts";
-import { buildLibrary, downloadCsv, fmtBytes, fmtDay, fmtYear, pad2, pct, num, runBatch, sl, TYPE_META } from "../Components/MediaDash/mediaDashUtils";
+import { buildLibrary, buildPosterIndex, downloadCsv, fmtBytes, fmtDay, fmtYear, pad2, pct, num, runBatch, sl, TYPE_META } from "../Components/MediaDash/mediaDashUtils";
 
 const PAGE_SIZE = 8;
 const WEEK = 7 * 86400000;
@@ -265,6 +265,7 @@ export default function DashMedia({ onNavigate } = {}) {
     const lib = useMemo(() => buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDatesMap }), [mediaData, mediaInfoData, permissionsData, addedDatesData]); // eslint-disable-line react-hooks/exhaustive-deps
     const { allMedia, metrics, stats, formats, formatSource, quality, causes, typeShare, libraries } = lib;
 
+    const posterIndex = useMemo(() => buildPosterIndex(mediaData), [mediaData]);
     const addedThisWeek = useMemo(() => allMedia.filter((m) => m._added && Date.now() - m._added.getTime() < WEEK).length, [allMedia]);
 
     // streams: shape is defensive on purpose (array, or { streams | items | active })
@@ -358,6 +359,13 @@ export default function DashMedia({ onNavigate } = {}) {
     const bulk = async (kind) => {
         const list = selMedia;
         if (!list.length) return;
+        // The server has no DELETE /api/media/:id route yet — every request would 404 and report "failed".
+        // Refuse here instead of firing N doomed calls. Re-enable together with a real server-side delete.
+        if (kind === "delete") {
+            setBulkConfirm(false);
+            showToast("Deleting titles is not supported by the server yet", "error");
+            return;
+        }
         setBusy(true);
         let res;
         if (kind === "refresh") {
@@ -745,7 +753,7 @@ export default function DashMedia({ onNavigate } = {}) {
 
             {/* ── Subtitles ── */}
             <SectionLabel>Subtitles</SectionLabel>
-            <SubtitlesTable onToast={showToast} />
+            <SubtitlesTable posterIndex={posterIndex} onToast={showToast} />
 
             {/* ── File formats ── */}
             <SectionLabel>File formats</SectionLabel>

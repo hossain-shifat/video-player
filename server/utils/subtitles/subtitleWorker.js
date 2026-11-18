@@ -76,6 +76,17 @@ const IMAGE_CODECS = new Set(["hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dv
 
 let _timer = null;
 let _running = false;
+
+// Per media+language ownership counter. An admin delete / redownload bumps it; background work that STARTED earlier
+// compares it right before committing, so a slow fallback-upgrade download can never resurrect a subtitle the admin
+// just deleted or replaced. (_running only serialises worker ticks — it does not guard admin mutations.)
+const _subEpoch = new Map();
+const _epochKey = (mediaId, lang) => `${mediaId}:${lang}`;
+const subEpoch = (mediaId, lang) => _subEpoch.get(_epochKey(mediaId, lang)) || 0;
+function invalidateSubtitleWork(mediaId, lang) {
+    const k = _epochKey(mediaId, lang);
+    _subEpoch.set(k, (_subEpoch.get(k) || 0) + 1);
+}
 let _retryAfter = 0; // short 429 cooldown / daily-quota pause
 let _started = false;
 let _stopped = false;
@@ -261,8 +272,10 @@ function nearestIdx(sorted, x) {
     return lo;
 }
 
+// \p{M} keeps combining marks (Bangla/Hindi vowel signs, virama …). Without it "আমি" splits into 2-letter
+// fragments, every word is dropped, and two IDENTICAL cues compare as "unrelated".
 function words(t) {
-    return new Set((t.toLowerCase().match(/[\p{L}\p{N}']{3,}/gu) || []).map((w) => w.replace(/^'+|'+$/g, "")));
+    return new Set((t.toLowerCase().match(/[\p{L}\p{M}\p{N}']{3,}/gu) || []).map((w) => w.replace(/^'+|'+$/g, "")));
 }
 
 function jaccard(a, b) {
@@ -273,6 +286,42 @@ function jaccard(a, b) {
 }
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+/**
+ * Offset (seconds, candidate − reference) of ONE group of cue starts: vote in 0.1 s bins over ±MAX_OFFSET_SEC,
+ * then refine with the median of nearest-cue differences. null when too few cues support a clear offset.
+ */
+function sectionOffset(starts, rs) {
+    if (!starts.length || !rs.length) return null;
+    const BIN = 0.1;
+    const votes = new Map();
+    for (const c of starts) {
+        let j = nearestIdx(rs, c - MAX_OFFSET_SEC);
+        while (j > 0 && rs[j - 1] >= c - MAX_OFFSET_SEC) j--;
+        for (; j < rs.length && rs[j] <= c + MAX_OFFSET_SEC; j++) {
+            const b = Math.round((c - rs[j]) / BIN);
+            votes.set(b, (votes.get(b) || 0) + 1);
+        }
+    }
+    let peakBin = 0;
+    let peakVotes = -1;
+    for (const [b, v] of votes) {
+        const w = v + (votes.get(b - 1) || 0) + (votes.get(b + 1) || 0);
+        if (w > peakVotes) {
+            peakVotes = w;
+            peakBin = b;
+        }
+    }
+    if (peakVotes < 0) return null;
+    const coarse = peakBin * BIN;
+    const d = [];
+    for (const c of starts) {
+        const x = c - rs[nearestIdx(rs, c - coarse)];
+        if (Math.abs(x - coarse) <= 0.5) d.push(x);
+    }
+    if (d.length < Math.max(5, starts.length * 0.3)) return null;
+    return median(d);
+}
 
 /**
  * evaluate(cues, opts) → { ok, score, mode, reasons[], offset, shift, stats }
@@ -387,17 +436,21 @@ function evaluateRaw(cuesIn, opts = {}) {
         else if (sync < 0.6) reasons.push(`timing_mismatch(sync=${sync.toFixed(2)})`);
         if (Math.abs(offset) > MAX_OFFSET_SEC) reasons.push(`offset_too_large(${offset.toFixed(1)}s)`);
 
-        // Drift: constant offset of first third vs last third
+        // Drift: offset of the first third vs the last third. Each section finds ITS OWN offset by voting, independent of
+        // the ±0.5 s refinement window above (that window only keeps cues near the overall offset, so it can never
+        // show a section that sits several seconds away from it).
         let driftScore = 1;
-        if (matched.length >= 30) {
-            const third = Math.floor(matched.length / 3);
-            const a = median(matched.slice(0, third).map((x) => x[1]));
-            const b = median(matched.slice(-third).map((x) => x[1]));
-            const drift = Math.abs(b - a);
-            stats.drift = +drift.toFixed(3);
-            if (drift > 3.0) reasons.push(`drift_extreme(${drift.toFixed(2)}s)`);
-            else if (drift > 1.0) reasons.push(`drift(${drift.toFixed(2)}s)`);
-            driftScore = clamp01(1 - drift / 1.0);
+        if (n >= 30) {
+            const third = Math.floor(n / 3);
+            const a = sectionOffset(cues.slice(0, third).map((c) => c.s), rs);
+            const b = sectionOffset(cues.slice(-third).map((c) => c.s), rs);
+            if (a != null && b != null) {
+                const drift = Math.abs(b - a);
+                stats.drift = +drift.toFixed(3);
+                if (drift > 3.0) reasons.push(`drift_extreme(${drift.toFixed(2)}s)`);
+                else if (drift > 1.0) reasons.push(`drift(${drift.toFixed(2)}s)`);
+                driftScore = clamp01(1 - drift / 1.0);
+            }
         }
 
         // Last cue position
@@ -413,7 +466,12 @@ function evaluateRaw(cuesIn, opts = {}) {
         if (ref.lang === lang) {
             const sims = [];
             for (const [i, , j] of matched) {
-                if (Math.abs(cues[i].s - offset - rs[j]) <= 1.0) sims.push(jaccard(words(cues[i].t), words(R[j].t)));
+                if (Math.abs(cues[i].s - offset - rs[j]) <= 1.0) {
+                    const wa = words(cues[i].t);
+                    const wb = words(R[j].t);
+                    if (!wa.size || !wb.size) continue; // nothing comparable (music cue, "…", too-short words) → not evidence either way
+                    sims.push(jaccard(wa, wb));
+                }
             }
             if (sims.length >= 20) {
                 const med = median(sims);
@@ -629,6 +687,7 @@ async function commitText(langDir, ext, text) {
  */
 async function pickAndStore({ mediaId, lang, candidates, langDir, getRef, minScore = 0 }) {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "flux-sub-"));
+    const epoch0 = subEpoch(mediaId, lang); // ownership at the start — see invalidateSubtitleWork()
     let best = null; // best GOOD candidate
     let nearest = null; // best FALLBACK candidate — nearest usable thing when nothing is good
     let hadError = false;
@@ -685,7 +744,14 @@ async function pickAndStore({ mediaId, lang, candidates, langDir, getRef, minSco
             text = shiftTimestamps(text, best.ev.shift);
             console.log(`[SubtitleWorker]   timing corrected by ${best.ev.shift > 0 ? "+" : ""}${best.ev.shift.toFixed(2)}s`);
         }
+        // An admin delete / redownload happened while we were downloading → this work is stale. Commit nothing.
+        if (subEpoch(mediaId, lang) !== epoch0) return { stored: null, hadError, rateLimited: false, reasons, superseded: true };
         const out = await commitText(langDir, best.ext, text);
+        if (subEpoch(mediaId, lang) !== epoch0) {
+            // the admin acted during the write itself — take our file back out
+            await fsp.rm(out.destPath, { force: true }).catch(() => {});
+            return { stored: null, hadError, rateLimited: false, reasons, superseded: true };
+        }
         return {
             stored: {
                 ...out,
@@ -786,6 +852,7 @@ async function processEntry(entry) {
 
         let stored = 0;
         let hadError = false;
+        let superseded = false; // an admin delete/redownload overtook our work for some language
         const rejectedReasons = [];
 
         for (const lang of langsNeeded) {
@@ -810,6 +877,15 @@ async function processEntry(entry) {
                 store.requeueEntry(entry);
                 console.warn(`[SubtitleWorker] rate limit during download — pausing ${Math.round((r.retryMs || RATE_LIMIT_RETRY_MS) / 1000)}s, entry re-queued`);
                 return;
+            }
+            if (r.superseded) {
+                // Take the admin's decision as it now stands (deleted on purpose → checked; redownload → look again).
+                superseded = true;
+                const live = store.getEntry(entry.mediaId) || entry;
+                if ((live.langsChecked || []).includes(lang)) checked.add(lang);
+                else checked.delete(lang);
+                console.log(`[SubtitleWorker] ${lang.toUpperCase()} "${entry.title}" — an admin delete/replace happened meanwhile; discarding this download`);
+                continue;
             }
             hadError ||= r.hadError;
             if (!r.hadError) checked.add(lang); // stored, or every candidate judged and rejected — either way settled
@@ -849,6 +925,10 @@ async function processEntry(entry) {
         }
 
         entry.langsChecked = [...new Set([...checked])];
+        if (superseded) {
+            store.requeueEntry(entry); // let the queue re-evaluate with the admin's decision (no markDone over a requeue)
+            return;
+        }
         if (search.failedLangs?.length) {
             // Some language lookups were cut off by the SubSource limit — they are NOT "unavailable". Pause, then finish them.
             _retryAfter = Date.now() + (search.pauseMs || RATE_LIMIT_RETRY_MS);
@@ -856,8 +936,10 @@ async function processEntry(entry) {
             console.warn(`[SubtitleWorker] limit hit while looking up ${search.failedLangs.join(",")} — pausing ${Math.round((search.pauseMs || RATE_LIMIT_RETRY_MS) / 60000)}min, "${entry.title}" re-queued`);
             return;
         }
-        if (stored) store.markDone(entry);
-        else if (hadError) store.markFailed(entry, "all_downloads_failed");
+        // A transient failure in ANY language keeps the entry on the retry/backoff path — even when another language
+        // was stored. Stored files stay; only the unchecked language is looked up again (it is not in langsChecked).
+        if (hadError) store.markFailed(entry, stored ? "partial_downloads_failed" : "all_downloads_failed");
+        else if (stored) store.markDone(entry);
         else {
             _stats.lastReason = rejectedReasons.join(" ; ").slice(0, 400);
             store.markSkipped(entry, rejectedReasons.length ? "no_valid_candidate" : "no_language_available");
@@ -1511,6 +1593,7 @@ async function adminAction(action, items, params = {}) {
                     res.message = "no library entry (uploaded file) — cannot look for another";
                     continue;
                 }
+                invalidateSubtitleWork(mediaId, lang); // any download already in flight for this slot is now stale
                 await fsp.mkdir(path.join(dir, "_rejected"), { recursive: true });
                 await fsp.rename(dl.path, path.join(dir, "_rejected", `${Date.now()}-${path.basename(dl.path)}`)).catch(() => {});
                 await store.removeDownloaded(mediaId, lang);
@@ -1520,6 +1603,7 @@ async function adminAction(action, items, params = {}) {
                 res.ok = true;
                 res.message = "old file kept in _rejected · queued to download again (when idle)";
             } else if (action === "delete") {
+                invalidateSubtitleWork(mediaId, lang); // a fallback upgrade still downloading must not bring it back
                 await fsp.rm(dl.path, { force: true });
                 await store.removeDownloaded(mediaId, lang);
                 _entryForget(mediaId, lang, { lookAgain: false });
@@ -1774,6 +1858,7 @@ function getStatus() {
 }
 
 module.exports = {
+    invalidateSubtitleWork,
     start,
     stop,
     getStatus,
