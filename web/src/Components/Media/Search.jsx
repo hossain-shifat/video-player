@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
-import { Search as SearchIcon, X, Film, Tv, Loader2, Star, ArrowLeft, Sparkles } from "lucide-react";
+import { Search as SearchIcon, X, Film, Tv, Loader2, Star, ArrowLeft, Clock, Compass, CornerDownLeft } from "lucide-react";
 import { useApi } from "../../Context/apiContext";
 import { routeId } from "../../Utils/shortId.js";
 
@@ -240,193 +241,252 @@ const TYPE_CONFIG = {
     anime: { label: "Anime", color: "bg-secondary/20 text-secondary border border-secondary/30", icon: Tv },
 };
 
-// ─── Result row ───────────────────────────────────────────────────────────────
-function ResultRow({ item, query, onClick }) {
-    const title = item._displayTitle;
+// ─── Recent searches (per browser) ────────────────────────────────────────────
+const RECENT_KEY = "flux.recentSearches";
+const RECENT_MAX = 6;
+
+function readRecent() {
+    try {
+        const v = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+        return Array.isArray(v) ? v.filter((s) => typeof s === "string").slice(0, RECENT_MAX) : [];
+    } catch {
+        return [];
+    }
+}
+
+function writeRecent(list) {
+    try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+    } catch {
+        /* storage blocked — recents just won't persist */
+    }
+}
+
+const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60";
+// Keycap — high-contrast so shortcuts are readable at a glance
+const KEYCAP =
+    "inline-flex items-center justify-center min-w-[26px] h-[26px] px-1.5 rounded-md bg-white/[0.07] border border-white/10 border-b-2 text-white/60 text-xs font-semibold font-mono leading-none";
+const PAGE_LIMIT = 8; // "More results" rows shown before "Show N more"
+
+function isTypingTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+}
+
+// Highlights the first occurrence of `query` inside `text`
+function Highlight({ text, query }) {
     const q = query.toLowerCase().trim();
+    if (!q || !text) return text;
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx === -1) return text;
+    return (
+        <>
+            {text.slice(0, idx)}
+            <mark className="bg-primary/25 text-primary rounded-sm not-italic font-semibold">{text.slice(idx, idx + q.length)}</mark>
+            {text.slice(idx + q.length)}
+        </>
+    );
+}
+
+// ─── Result row (poster, highlight, type badge, year, seasons, rating, "Matched: …") ──
+function ResultRow({ item, query, id, active, featured = false, onSelect, onHover }) {
+    const title = item._displayTitle;
     const cfg = TYPE_CONFIG[item._type] ?? TYPE_CONFIG.movie;
     const Icon = cfg.icon;
-
-    function highlight(text) {
-        if (!q || !text) return text;
-        const idx = text.toLowerCase().indexOf(q);
-        if (idx === -1) return text;
-        return [
-            text.slice(0, idx),
-            <mark key="hl" className="bg-primary/25 text-primary rounded-sm not-italic font-semibold">
-                {text.slice(idx, idx + q.length)}
-            </mark>,
-            text.slice(idx + q.length),
-        ];
-    }
-
     const poster = item.metadata?.poster ?? null;
     const year = item.metadata?.year ?? item.parsed?.year ?? null;
     const rating = item.metadata?.rating ?? null;
-    // Extra info for series: season count
     const seasons = item.seasons ? Object.keys(item.seasons).length : (item.metadata?.totalSeasons ?? null);
+    const overview = featured ? item.metadata?.overview : null;
 
     return (
-        <button
-            onClick={onClick}
-            className="w-full flex items-center gap-3 px-4 py-2.5
-                       hover:bg-base-300/50 active:bg-base-300/80
-                       transition-colors duration-100 text-left group cursor-pointer">
-            {/* Poster */}
-            <div className="w-9 h-13 rounded-lg overflow-hidden shrink-0 bg-base-300 ring-1 ring-white/5">
+        <div
+            id={id}
+            role="option"
+            aria-selected={active}
+            onClick={() => onSelect(item)}
+            onMouseMove={onHover}
+            className={`flex items-center gap-3 mx-2 md:mx-3 rounded-xl cursor-pointer transition-colors duration-100 ${featured ? "p-3" : "px-3 py-2.5"} ${
+                active ? "bg-white/[0.08] ring-1 ring-inset ring-white/10" : "hover:bg-white/[0.04]"
+            }`}>
+            <div className={`${featured ? "w-14 h-20" : "w-10 h-14"} rounded-lg overflow-hidden shrink-0 bg-base-300 ring-1 ring-white/5`}>
                 {poster ? (
-                    <img src={poster} alt={title} className="w-full h-full object-cover" loading="lazy" />
+                    <img src={poster} alt="" className="w-full h-full object-cover" loading="lazy" />
                 ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                        <Icon size={14} className="text-base-content/25" />
+                        <Icon size={16} className="text-base-content/25" />
                     </div>
                 )}
             </div>
 
-            {/* Info */}
             <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-base-content truncate leading-snug">{highlight(title)}</p>
+                <p className={`${featured ? "text-base" : "text-sm"} font-medium text-base-content truncate leading-snug`}>
+                    <Highlight text={title} query={query} />
+                </p>
                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                    {/* Type badge */}
                     <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${cfg.color}`}>{cfg.label}</span>
-                    {year && <span className="text-[11px] text-base-content/40">{year}</span>}
-                    {seasons && seasons > 0 && (
-                        <span className="text-[11px] text-base-content/40">
+                    {year && <span className="text-[11px] text-base-content/45">{year}</span>}
+                    {seasons > 0 && (
+                        <span className="text-[11px] text-base-content/45">
                             {seasons} season{seasons !== 1 ? "s" : ""}
                         </span>
                     )}
                     {rating != null && (
                         <span className="flex items-center gap-0.5 ml-auto">
-                            <Star size={9} className="text-warning fill-warning" />
-                            <span className="text-[11px] text-base-content/50 font-medium">{rating.toFixed(1)}</span>
+                            <Star size={10} className="text-warning fill-warning" />
+                            <span className="text-[11px] text-base-content/60 font-medium">{Number(rating).toFixed(1)}</span>
                         </span>
                     )}
                 </div>
-                {/* Search-upgrade: only shown when the hit came from a secondary
-                    field (cast/collection/company/network/genre/keyword/language/
-                    country/certification) rather than the title itself — tells
-                    the user WHY an otherwise-unrelated-looking title matched. */}
-                {item._matchReason && <p className="text-[10px] text-primary/65 mt-1 truncate">Matched: {highlight(item._matchReason)}</p>}
+                {overview && <p className="text-xs text-base-content/50 mt-1.5 line-clamp-2 leading-snug">{overview}</p>}
+                {/* Only when the hit came from a secondary field (cast, genre, keyword…) — explains WHY it matched */}
+                {item._matchReason && (
+                    <p className="text-[10px] text-primary/70 mt-1 truncate">
+                        Matched: <Highlight text={item._matchReason} query={query} />
+                    </p>
+                )}
             </div>
-        </button>
+        </div>
     );
 }
 
-// ─── Empty state ──────────────────────────────────────────────────────────────
+function SectionLabel({ children, right }) {
+    return (
+        <div className="flex items-center justify-between px-5 md:px-6 pt-3 pb-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-base-content/40">{children}</p>
+            {right}
+        </div>
+    );
+}
+
 function EmptyState({ query }) {
     return (
-        <div className="flex flex-col items-center justify-center py-10 gap-2 px-4">
-            <SearchIcon size={24} className="text-base-content/15" />
-            <p className="text-sm text-base-content/40 text-center">
-                No results for <span className="text-base-content/60 font-medium">&ldquo;{query}&rdquo;</span>
+        <div className="flex flex-col items-center justify-center py-14 gap-2 px-4">
+            <SearchIcon size={26} className="text-base-content/15" />
+            <p className="text-sm text-base-content/50 text-center">
+                No results for <span className="text-base-content/70 font-medium">&ldquo;{query}&rdquo;</span>
             </p>
-            <p className="text-xs text-base-content/25">Try different keywords</p>
+            <p className="text-xs text-base-content/30">Try a title, actor, genre or year</p>
         </div>
     );
 }
 
-// ─── Results list ─────────────────────────────────────────────────────────────
-function ResultsList({ results, query, onSelect, limit = 12 }) {
-    const shown = results.slice(0, limit);
-    return (
-        <div className="flex flex-col" style={{ maxHeight: "320px" }}>
-            {/* sticky header */}
-            <div className="px-4 py-2 border-b border-base-300/50 flex items-center gap-2 shrink-0">
-                <Sparkles size={10} className="text-primary/60" />
-                <p className="text-[10px] text-base-content/40 font-semibold uppercase tracking-widest">
-                    {results.length} result{results.length !== 1 ? "s" : ""}
-                </p>
-            </div>
-            {/* scrollable list — scrollbar hidden */}
-            <div className="overflow-y-auto py-1 flex-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                {shown.map((item) => {
-                    const key = item.id ?? item.seriesKey ?? item._displayTitle;
-                    return <ResultRow key={key} item={item} query={query} onClick={() => onSelect(item)} />;
-                })}
-            </div>
-            {results.length > limit && (
-                <div className="px-4 py-2 border-t border-base-300/50 text-center shrink-0">
-                    <p className="text-[11px] text-base-content/30">+{results.length - limit} more — refine your search</p>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ─── Search component ─────────────────────────────────────────────────────────
+// ─── Search ───────────────────────────────────────────────────────────────────
+// One component, two surfaces:
+//   • md+  → centered command palette (680px)
+//   • <md  → full-screen search sheet
+// Trigger: pill with "/" hint on lg+ (when `compact` is false), otherwise an icon button.
+// Shortcuts: "/" or Ctrl/⌘+K open · ↑ ↓ move · Enter open · Esc close.
 // Props:
-//   className            — classes for the desktop (sm+) search field wrapper
-//   hideMobileBtn        — hide the built-in mobile icon trigger
-//   openMobileRef        — ref that receives an "open mobile search" function
-//   inlineMobile         — phones: instead of the full-screen overlay, render an inline pill that
-//                          expands inside the navbar (results drop down under the navbar)
-//   onMobileOpenChange   — (open: boolean) => void, fired whenever the mobile search opens/closes
-export default function Search({ className = "", hideMobileBtn = false, openMobileRef = null, closeMobileRef = null, inlineMobile = false, onMobileOpenChange = null }) {
+//   compact   — render the icon trigger even on lg+ (navbar passes true once the page is scrolled)
+//   className — extra classes for the trigger wrapper-less buttons
+export default function Search({ compact = false, className = "", hideMobileBtn = false, openMobileRef = null, closeMobileRef = null, inlineMobile = false, onMobileOpenChange = null }) {
+    // Page mode: any caller passing className / hideMobileBtn (Movies, Series, …) wants an in-page search FIELD at every breakpoint.
+    // The navbar passes neither, so it keeps the pill (lg+) / icon (below lg) triggers.
+    const fieldMode = hideMobileBtn || !!className;
     const { movies, series, anime, search, searchResults, loading } = useApi();
     const navigate = useNavigate();
 
-    const [query, setQuery] = useState("");
     const [open, setOpen] = useState(false);
-    const [mobileOpen, setMobileOpen] = useState(false);
+    const [query, setQuery] = useState("");
     const [results, setResults] = useState([]);
+    const [filter, setFilter] = useState("all");
+    const [active, setActive] = useState(0);
+    const [showAll, setShowAll] = useState(false);
+    const [recent, setRecent] = useState(readRecent);
 
     const inputRef = useRef(null);
-    const mobileInputRef = useRef(null);
-    const containerRef = useRef(null);
-    const inlineRef = useRef(null); // inline pill wrapper
-    const panelRef = useRef(null); // inline results panel
+    const dialogRef = useRef(null);
+    const lastTriggerRef = useRef(null);
     const debounceRef = useRef(null);
     const mountedRef = useRef(true);
 
-    // Single place that opens/closes mobile search and tells the parent
-    function setMobile(next) {
-        setMobileOpen(next);
-        if (onMobileOpenChange) onMobileOpenChange(next);
-    }
-
-    // Mount/unmount: wire openMobileRef, mark mounted, clear debounce on cleanup
     useEffect(() => {
         mountedRef.current = true;
-        if (openMobileRef) openMobileRef.current = () => setMobile(true);
         return () => {
             mountedRef.current = false;
             clearTimeout(debounceRef.current);
-            if (openMobileRef) openMobileRef.current = null;
         };
-        // openMobileRef is a stable ref object; setMobile only uses stable setters — no extra deps needed
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []);
 
-    // Expose close() so the navbar's morphing menu/close icon can collapse the search
+    const openSearch = useCallback((e) => {
+        if (e?.currentTarget) lastTriggerRef.current = e.currentTarget;
+        setOpen(true);
+    }, []);
+
+    const reset = useCallback(() => {
+        clearTimeout(debounceRef.current);
+        setQuery("");
+        setResults([]);
+        setFilter("all");
+        setActive(0);
+        setShowAll(false);
+    }, []);
+
+    const close = useCallback(
+        (restoreFocus = false) => {
+            setOpen(false);
+            reset();
+            if (restoreFocus) {
+                const el = lastTriggerRef.current;
+                if (el?.isConnected) requestAnimationFrame(() => el.focus());
+            }
+        },
+        [reset],
+    );
+
+    // Global shortcuts
     useEffect(() => {
-        if (closeMobileRef) closeMobileRef.current = closeMobile;
+        if (fieldMode) return; // the navbar instance owns the shortcuts — avoids two palettes opening at once
+        function onKey(e) {
+            if ((e.key === "k" || e.key === "K") && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (open) close(true);
+                else setOpen(true);
+                return;
+            }
+            if (e.key === "/" && !open && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e.target)) {
+                e.preventDefault();
+                setOpen(true);
+            }
+        }
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [open, close, fieldMode]);
+
+    // While open: lock page scroll + focus the field
+    useEffect(() => {
+        if (!open) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        const raf = requestAnimationFrame(() => inputRef.current?.focus());
         return () => {
-            if (closeMobileRef) closeMobileRef.current = null;
+            document.body.style.overflow = prev;
+            cancelAnimationFrame(raf);
         };
-    });
+    }, [open]);
 
     const runSearch = useCallback(
         (val) => {
             setQuery(val);
+            setActive(0);
+            setShowAll(false);
             clearTimeout(debounceRef.current);
 
             if (!val.trim()) {
                 setResults([]);
-                setOpen(false);
                 return;
             }
 
             // Instant client-side results from grouped context state
-            const ranked = rankResults(movies, series, anime, val);
-            setResults(ranked);
-            setOpen(true);
+            setResults(rankResults(movies, series, anime, val));
 
             // Debounced API call — catches files not yet surfaced
             debounceRef.current = setTimeout(async () => {
                 if (!mountedRef.current) return;
-                // Capture query at schedule time; abort if it changed by the time we run
-                const capturedVal = val;
                 try {
-                    await search(capturedVal);
+                    await search(val);
                 } catch {
                     /* silent */
                 }
@@ -435,289 +495,392 @@ export default function Search({ className = "", hideMobileBtn = false, openMobi
         [movies, series, anime, search],
     );
 
-    // Merge API flat results when they arrive
+    // Merge flat API results when they arrive
     useEffect(() => {
-        if (!query.trim() || !mountedRef.current) return;
+        if (!open || !query.trim() || !mountedRef.current) return;
         setResults((prev) => mergeApiResults(prev, searchResults, query));
-    }, [searchResults, query]); // query dep prevents stale merge after clear
+    }, [searchResults, query, open]);
 
-    // Outside click closes desktop dropdown
+    const counts = useMemo(() => {
+        const c = { all: results.length, movie: 0, series: 0, anime: 0 };
+        for (const r of results) if (c[r._type] != null) c[r._type] += 1;
+        return c;
+    }, [results]);
+
+    const filtered = useMemo(() => (filter === "all" ? results : results.filter((r) => r._type === filter)), [results, filter]);
+    const flat = useMemo(() => filtered.slice(0, showAll ? 60 : PAGE_LIMIT + 1), [filtered, showAll]);
+    const hiddenCount = filtered.length - flat.length;
+
+    // Keep the active row in view while arrowing
     useEffect(() => {
-        function handler(e) {
-            if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
-        }
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, []);
+        if (!open) return;
+        document.getElementById(`search-opt-${active}`)?.scrollIntoView({ block: "nearest" });
+    }, [active, open]);
 
-    // Auto-focus mobile input
-    useEffect(() => {
-        if (mobileOpen) setTimeout(() => mobileInputRef.current?.focus(), inlineMobile ? 0 : 80);
-    }, [mobileOpen, inlineMobile]);
+    function saveRecent(q) {
+        const term = q.trim();
+        if (!term) return;
+        setRecent((prev) => {
+            const next = [term, ...prev.filter((s) => s.toLowerCase() !== term.toLowerCase())].slice(0, RECENT_MAX);
+            writeRecent(next);
+            return next;
+        });
+    }
 
-    // Lock body scroll — full-screen overlay only (inline mode scrolls inside its own panel)
-    useEffect(() => {
-        if (!mobileOpen || inlineMobile) return;
-        const prev = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        return () => {
-            document.body.style.overflow = prev;
-        };
-    }, [mobileOpen, inlineMobile]);
+    function removeRecent(term) {
+        setRecent((prev) => {
+            const next = prev.filter((s) => s !== term);
+            writeRecent(next);
+            return next;
+        });
+    }
 
-    // Inline mode: click outside the pill + results panel collapses the search
-    useEffect(() => {
-        if (!inlineMobile || !mobileOpen) return;
-        function handler(e) {
-            const t = e.target;
-            if (inlineRef.current?.contains(t) || panelRef.current?.contains(t)) return;
-            if (t.closest?.("[data-search-toggle]")) return; // navbar morph icon handles its own close
-            clearTimeout(debounceRef.current);
-            setQuery("");
-            setResults([]);
-            setOpen(false);
-            setMobileOpen(false);
-            if (onMobileOpenChange) onMobileOpenChange(false);
-        }
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, [inlineMobile, mobileOpen, onMobileOpenChange]);
+    function clearRecent() {
+        setRecent([]);
+        writeRecent([]);
+    }
 
-    function navigateToResult(item) {
-        setOpen(false);
-        setMobile(false);
-        setQuery("");
-        setResults([]);
+    function selectItem(item) {
+        saveRecent(query);
+        close(false);
         const id = item.id ?? item.seriesKey ?? encodeURIComponent(item._displayTitle);
         navigate(`/media/${routeId(id)}`);
     }
 
-    function clear() {
-        clearTimeout(debounceRef.current);
-        setQuery("");
-        setResults([]);
-        setOpen(false);
+    function goTo(path) {
+        close(false);
+        navigate(path);
     }
 
-    // Collapse mobile search and reset it
-    function closeMobile() {
-        setMobile(false);
-        clear();
-        // drop focus so caret + keyboard go away
-        mobileInputRef.current?.blur();
-        if (document.activeElement instanceof HTMLElement && inlineRef.current?.contains(document.activeElement)) document.activeElement.blur();
-    }
-
-    function handleKeyDown(e) {
+    function onDialogKeyDown(e) {
         if (e.key === "Escape") {
-            setOpen(false);
-            inputRef.current?.blur();
+            e.preventDefault();
+            close(true);
+            return;
         }
-        if (e.key === "Enter" && results.length > 0) navigateToResult(results[0]);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            if (!flat.length) return;
+            e.preventDefault();
+            setActive((i) => (e.key === "ArrowDown" ? (i + 1) % flat.length : (i - 1 + flat.length) % flat.length));
+            return;
+        }
+        if (e.key === "Enter") {
+            if (e.target !== inputRef.current) return; // buttons handle their own Enter
+            if (flat[active]) {
+                e.preventDefault();
+                selectItem(flat[active]);
+            }
+            return;
+        }
+        if (e.key === "Tab" && dialogRef.current) {
+            const f = Array.from(dialogRef.current.querySelectorAll('button:not([disabled]), input, [tabindex]:not([tabindex="-1"])')).filter((el) => el.getClientRects().length > 0);
+            if (!f.length) return;
+            const first = f[0];
+            const last = f[f.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
     }
 
-    function handleMobileKeyDown(e) {
-        if (e.key === "Escape") closeMobile();
-        if (e.key === "Enter" && results.length > 0) navigateToResult(results[0]);
-    }
+    const hasQuery = query.trim().length > 0;
+    const best = flat[0];
+    const more = flat.slice(1);
+    const isSearching = loading?.search;
 
-    // Inline mode: tabbing away with an empty query collapses the pill
-    function handleInlineBlur(e) {
-        if (e.relatedTarget?.closest?.("[data-search-toggle]")) return;
-        if (!query.trim() && e.relatedTarget && inlineRef.current && !inlineRef.current.contains(e.relatedTarget)) closeMobile();
-    }
+    const browseCards = [
+        { label: "Movies", to: "/movies", count: movies?.length ?? 0, icon: Film },
+        { label: "Series", to: "/series", count: series?.length ?? 0, icon: Tv },
+        { label: "Anime", to: "/anime", count: anime?.length ?? 0, icon: Tv },
+        { label: "Discover", to: "/discover", count: null, icon: Compass },
+    ].filter((c) => c.count === null || c.count > 0);
 
-    const isSearching = loading.search;
+    const chips = [
+        { key: "all", label: "All" },
+        { key: "movie", label: "Movies" },
+        { key: "series", label: "Series" },
+        { key: "anime", label: "Anime" },
+    ];
+
+    const triggerBase = `items-center justify-center cursor-pointer focus-visible:outline-none`;
 
     return (
         <>
-            {/* ── Desktop ── */}
-            <div ref={containerRef} className={`relative hidden sm:block ${className}`}>
-                <div
-                    className={`flex items-center gap-2 bg-white/10 rounded-md px-3 h-9 w-full
-                                 transition-all duration-200 ${open ? "ring-1 ring-white/30 brightness-110" : ""}`}>
-                    {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
-                    <label htmlFor="desktop-search" className="sr-only">
-                        Search
-                    </label>
-                    <input
-                        id="desktop-search"
-                        name="q"
-                        ref={inputRef}
-                        type="text"
-                        placeholder="Search movies, series, anime..."
-                        value={query}
-                        onChange={(e) => runSearch(e.target.value)}
-                        onFocus={() => query.trim() && setOpen(true)}
-                        onKeyDown={handleKeyDown}
-                        className="bg-transparent outline-none text-sm text-white
-                                   placeholder-base-content/40 w-full min-w-0"
-                    />
-                    {query && (
-                        <button
-                            onMouseDown={(e) => e.preventDefault()} // keep input focused
-                            onClick={clear}
-                            className="shrink-0 text-base-content/35 hover:text-base-content
-                                       transition-colors rounded-full hover:bg-white/10 p-0.5">
-                            <X size={13} />
-                        </button>
-                    )}
-                </div>
-
-                {open && query && (
-                    <div
-                        className="absolute top-[calc(100%+6px)] left-0 w-full min-w-80 z-[99999]
-                                    bg-base-200/98 backdrop-blur-xl border border-base-300/80
-                                    rounded-2xl shadow-2xl overflow-hidden"
-                        style={{ animation: "sDrop .12s ease-out both" }}>
-                        <style>{`@keyframes sDrop{from{opacity:0;transform:translateY(-4px) scale(.97)}to{opacity:1;transform:none}}`}</style>
-                        {results.length > 0 ? <ResultsList results={results} query={query} onSelect={navigateToResult} limit={10} /> : <EmptyState query={query} />}
-                    </div>
-                )}
-            </div>
-
-            {/* ── Mobile inline pill (phones) — expands inside the navbar ── */}
-            {inlineMobile && (
-                <>
-                    <div ref={inlineRef} className="sm:hidden flex-1 min-w-0" onBlur={handleInlineBlur}>
-                        <style>{`
-                            @keyframes pillPulse{
-                                0%{box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
-                                100%{box-shadow:inset 0 0 0 1px rgba(255,255,255,0)}
-                            }
-                            .pill-pulse{animation:pillPulse 700ms cubic-bezier(.22,1,.36,1) backwards}
-                            @media (prefers-reduced-motion: reduce){.pill-pulse{animation:none !important}}
-                        `}</style>
-                        <div
-                            role={mobileOpen ? undefined : "button"}
-                            tabIndex={mobileOpen ? -1 : 0}
-                            aria-label={mobileOpen ? undefined : "Search"}
-                            onClick={() => {
-                                if (mobileOpen) return;
-                                setMobile(true);
-                                mobileInputRef.current?.focus(); // inside the tap gesture so iOS keyboard opens
-                            }}
-                            onKeyDown={(e) => {
-                                if (!mobileOpen && (e.key === "Enter" || e.key === " ")) {
-                                    e.preventDefault();
-                                    setMobile(true);
-                                    mobileInputRef.current?.focus();
-                                }
-                            }}
-                            className={`group relative flex items-center gap-2 h-9 px-3.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
-                                mobileOpen ? "" : "cursor-pointer"
-                            }`}>
-                            {/* Background layer — colour + ring fade; width spring comes from the navbar (x axis only) */}
-                            <span
-                                aria-hidden="true"
-                                className={`pointer-events-none absolute inset-0 rounded-full bg-white/[0.07] ${mobileOpen ? "pill-pulse" : "transition-colors duration-200 group-hover:bg-white/12"}`}
-                            />
-                            {isSearching ? (
-                                <Loader2 size={16} className="relative text-white/60 shrink-0 animate-spin" />
-                            ) : (
-                                <SearchIcon size={16} strokeWidth={2} className={`relative shrink-0 transition-colors duration-500 ${mobileOpen ? "text-white" : "text-white/60"}`} />
-                            )}
-                            <label htmlFor="mobile-search-inline" className="sr-only">
-                                Search
-                            </label>
-                            <input
-                                id="mobile-search-inline"
-                                name="q"
-                                ref={mobileInputRef}
-                                type="text"
-                                enterKeyHint="search"
-                                autoComplete="off"
-                                placeholder="Search"
-                                value={query}
-                                tabIndex={mobileOpen ? 0 : -1}
-                                onChange={(e) => runSearch(e.target.value)}
-                                onKeyDown={handleMobileKeyDown}
-                                // 16px typed text stops iOS zoom; placeholder is smaller
-                                className={`relative bg-transparent outline-none text-[16px] text-white w-full min-w-0 truncate placeholder:text-[13px] placeholder:font-medium placeholder:transition-colors placeholder:duration-500 ${
-                                    mobileOpen ? "placeholder:text-white/55" : "placeholder:text-white/50 pointer-events-none"
-                                }`}
-                            />
-                        </div>
-                    </div>
-
-                    {/* Results drop down right under the navbar row (positioned against the navbar row) */}
-                    {mobileOpen && query.trim() && (
-                        <div
-                            ref={panelRef}
-                            className="nav-anim-search sm:hidden absolute left-0 right-0 top-full z-[99999] bg-base-100 border-b border-base-300 shadow-2xl overflow-hidden"
-                            style={{ animation: "mIn .42s cubic-bezier(0.22,1,0.36,1) both", maxHeight: "calc(100dvh - 4rem)" }}>
-                            <style>{`@keyframes mIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}} @media (prefers-reduced-motion: reduce){.nav-anim-search{animation:none !important}}`}</style>
-                            {results.length > 0 ? <ResultsList results={results} query={query} onSelect={navigateToResult} limit={20} /> : <EmptyState query={query} />}
-                        </div>
-                    )}
-                </>
-            )}
-
-            {/* ── Mobile icon trigger ── */}
-            {!hideMobileBtn && !inlineMobile && (
+            {/* Trigger — pill on lg+ (top of page), icon everywhere else / when scrolled */}
+            {fieldMode && (
                 <button
-                    onClick={() => setMobile(true)}
-                    className="sm:hidden inline-flex items-center justify-center w-9 h-9
-                           rounded-md hover:bg-white/15 transition-colors text-base-content"
-                    aria-label="Search">
-                    <SearchIcon size={18} />
+                    type="button"
+                    onClick={openSearch}
+                    aria-label="Search"
+                    aria-haspopup="dialog"
+                    aria-keyshortcuts="/"
+                    className={`flex ${triggerBase} group justify-start gap-2.5 h-10 px-3.5 rounded-md bg-base-200 border border-base-300 focus-visible:outline-none text-base-content/55 w-full min-w-0 ${className}`}>
+                    <SearchIcon size={16} className="shrink-0" />
+                    <span className="flex-1 text-left text-sm truncate">Search</span>
+                </button>
+            )}
+            {!fieldMode && !compact && (
+                <button
+                    type="button"
+                    onClick={openSearch}
+                    aria-label="Search"
+                    aria-haspopup="dialog"
+                    aria-keyshortcuts="/"
+                    className={`hidden lg:flex ${triggerBase} group gap-2.5 h-10 w-[clamp(11rem,18vw,18rem)] pl-3.5 pr-2 rounded-md bg-base-100/60 border border-white/10 shadow-inner focus-visible:outline-none text-white/55 ${className}`}>
+                    <SearchIcon size={16} className="shrink-0" />
+                    <span className="flex-1 text-left text-sm truncate">Search</span>
+                    <kbd className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1 rounded-md bg-white/[0.06] border border-white/10 border-b-2 text-white/50 text-[11px] font-semibold font-mono leading-none">
+                        /
+                    </kbd>
+                </button>
+            )}
+            {!fieldMode && (
+                <button
+                    type="button"
+                    onClick={openSearch}
+                    aria-label="Search"
+                    aria-haspopup="dialog"
+                    className={`${compact ? "inline-flex" : "inline-flex lg:hidden"} ${triggerBase} w-10 h-10 md:w-9 md:h-9 rounded-full text-white/85 ${className}`}>
+                    <SearchIcon size={18} strokeWidth={1.8} />
                 </button>
             )}
 
-            {/* ── Mobile overlay (full screen) — used when not inline ── */}
-            {!inlineMobile && mobileOpen && (
-                <div className="sm:hidden fixed inset-0 z-[999999] bg-base-100 flex flex-col" style={{ animation: "mIn .15s ease-out both" }}>
-                    <style>{`@keyframes mIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}`}</style>
+            {/* Overlay is portalled: the navbar's blur layer must never become its containing block */}
+            {open &&
+                createPortal(
+                    <div className="fixed inset-0 z-[999999]">
+                        <style>{`
+                            @keyframes fxFade{from{opacity:0}to{opacity:1}}
+                            @keyframes fxPop{from{opacity:0;transform:translateY(-8px) scale(.985)}to{opacity:1;transform:none}}
+                            @media (prefers-reduced-motion: reduce){.fx-anim{animation:none !important}}
+                        `}</style>
+                        <div
+                            className="fx-anim absolute inset-0 bg-black/60 md:backdrop-blur-sm"
+                            style={{ animation: "fxFade .15s ease-out both" }}
+                            onMouseDown={() => close(true)}
+                            aria-hidden="true"
+                        />
 
-                    <div className="flex items-center gap-3 px-3 h-14 border-b border-base-300 shrink-0 bg-base-200">
-                        <button onClick={closeMobile} className="text-base-content/60 hover:text-base-content transition-colors p-1" aria-label="Close search">
-                            <ArrowLeft size={20} />
-                        </button>
-                        <div className={`flex-1 flex items-center gap-2 bg-base-300 rounded-md px-3 h-9`}>
-                            {isSearching ? <Loader2 size={15} className="text-base-content/50 shrink-0 animate-spin" /> : <SearchIcon size={15} className="text-base-content/50 shrink-0" />}
-                            <label htmlFor="mobile-search" className="sr-only">
-                                Search
-                            </label>
-                            <input
-                                id="mobile-search"
-                                name="q"
-                                ref={mobileInputRef}
-                                type="text"
-                                placeholder="Search movies, series, anime..."
-                                value={query}
-                                onChange={(e) => runSearch(e.target.value)}
-                                onKeyDown={handleMobileKeyDown}
-                                className="bg-transparent outline-none text-sm text-base-content
-                                           placeholder-base-content/40 w-full min-w-0"
-                            />
-                            {query && (
+                        <div
+                            ref={dialogRef}
+                            role="dialog"
+                            aria-modal="true"
+                            aria-label="Search"
+                            onKeyDown={onDialogKeyDown}
+                            className="fx-anim absolute inset-0 flex flex-col overflow-hidden bg-base-100 pt-[env(safe-area-inset-top)] md:pt-0 md:inset-auto md:left-1/2 md:top-[10vh] md:w-[min(680px,calc(100vw-2rem))] md:max-h-[min(640px,80dvh)] md:-translate-x-1/2 md:rounded-2xl md:bg-base-200 md:border md:border-white/10 md:shadow-2xl"
+                            style={{ animation: "fxPop .18s ease-out both" }}>
+                            {/* Field — original full-width row (icon · input · clear). Esc hint on lg+ only; no keycaps on touch sizes */}
+                            <div className="flex items-center gap-2 px-3 md:px-5 h-14 md:h-16 shrink-0 md:border-b md:border-white/[0.08]">
                                 <button
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={clear}
-                                    className="shrink-0 text-base-content/35 hover:text-base-content
-                                               transition-colors rounded-full p-0.5">
-                                    <X size={13} />
+                                    type="button"
+                                    onClick={() => close(true)}
+                                    aria-label="Close search"
+                                    className={`md:hidden inline-flex items-center justify-center w-10 h-10 -ml-1 rounded-full text-white/60 hover:bg-white/10 cursor-pointer ${FOCUS_RING}`}>
+                                    <ArrowLeft size={20} />
                                 </button>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                        {query.trim() ? (
-                            results.length > 0 ? (
-                                <ResultsList results={results} query={query} onSelect={navigateToResult} limit={20} />
-                            ) : (
-                                <EmptyState query={query} />
-                            )
-                        ) : (
-                            <div className="flex flex-col items-center justify-center h-48 gap-2">
-                                <SearchIcon size={28} className="text-base-content/10" />
-                                <p className="text-sm text-base-content/25">Start typing to search</p>
+                                <span className="hidden md:inline-flex shrink-0 text-base-content/50">{isSearching ? <Loader2 size={18} className="animate-spin" /> : <SearchIcon size={18} />}</span>
+                                <label htmlFor="flux-search-input" className="sr-only">
+                                    Search movies, series, anime
+                                </label>
+                                <input
+                                    id="flux-search-input"
+                                    ref={inputRef}
+                                    name="q"
+                                    type="text"
+                                    role="combobox"
+                                    aria-expanded={hasQuery && flat.length > 0}
+                                    aria-controls="flux-search-list"
+                                    aria-autocomplete="list"
+                                    aria-activedescendant={hasQuery && flat.length > 0 ? `search-opt-${active}` : undefined}
+                                    enterKeyHint="search"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    placeholder="Search movies, series, anime, people…"
+                                    value={query}
+                                    onChange={(e) => runSearch(e.target.value)}
+                                    // 16px stops iOS focus-zoom
+                                    className="flex-1 min-w-0 bg-transparent outline-none text-[16px] md:text-base text-white placeholder:text-base-content/35"
+                                />
+                                {isSearching && <Loader2 size={16} className="md:hidden animate-spin text-base-content/50 shrink-0" />}
+                                {query && (
+                                    <button
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                            reset();
+                                            inputRef.current?.focus();
+                                        }}
+                                        aria-label="Clear search"
+                                        className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-full text-base-content/50 hover:text-white hover:bg-white/10 cursor-pointer ${FOCUS_RING}`}>
+                                        <X size={15} />
+                                    </button>
+                                )}
+                                <kbd className={`hidden lg:inline-flex px-2 ${KEYCAP}`}>Esc</kbd>
                             </div>
-                        )}
-                    </div>
-                </div>
-            )}
+
+                            {/* Type chips with counts */}
+                            {hasQuery && results.length > 0 && (
+                                <div className="flex items-center gap-2 px-3 md:px-5 py-2.5 shrink-0 overflow-x-auto" role="group" aria-label="Filter by type">
+                                    {chips.map((c) => {
+                                        const on = filter === c.key;
+                                        const n = counts[c.key];
+                                        if (c.key !== "all" && !n) return null;
+                                        return (
+                                            <button
+                                                key={c.key}
+                                                type="button"
+                                                aria-pressed={on}
+                                                onClick={() => {
+                                                    setFilter(c.key);
+                                                    setActive(0);
+                                                    setShowAll(false);
+                                                    inputRef.current?.focus();
+                                                }}
+                                                className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer ${FOCUS_RING} ${
+                                                    on ? "bg-primary text-primary-content" : "bg-white/[0.07] text-white/70 hover:bg-white/[0.12] hover:text-white"
+                                                }`}>
+                                                {c.label}
+                                                <span className={`text-[10px] ${on ? "opacity-80" : "text-white/40"}`}>{n}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* Body */}
+                            <div className="flex-1 overflow-y-auto overscroll-contain pb-3" style={{ scrollbarWidth: "none" }}>
+                                {hasQuery ? (
+                                    results.length === 0 ? (
+                                        isSearching ? (
+                                            <div className="flex items-center justify-center gap-2 py-14 text-sm text-base-content/50">
+                                                <Loader2 size={16} className="animate-spin" /> Searching…
+                                            </div>
+                                        ) : (
+                                            <EmptyState query={query} />
+                                        )
+                                    ) : filtered.length === 0 ? (
+                                        <EmptyState query={query} />
+                                    ) : (
+                                        <div id="flux-search-list" role="listbox" aria-label="Search results">
+                                            <SectionLabel>Best match</SectionLabel>
+                                            <ResultRow item={best} query={query} id="search-opt-0" featured active={active === 0} onSelect={selectItem} onHover={() => active !== 0 && setActive(0)} />
+                                            {more.length > 0 && <SectionLabel>More results</SectionLabel>}
+                                            {more.map((item, i) => {
+                                                const idx = i + 1;
+                                                return (
+                                                    <ResultRow
+                                                        key={`${item._type}-${item.id ?? item.seriesKey ?? item._displayTitle}`}
+                                                        item={item}
+                                                        query={query}
+                                                        id={`search-opt-${idx}`}
+                                                        active={active === idx}
+                                                        onSelect={selectItem}
+                                                        onHover={() => active !== idx && setActive(idx)}
+                                                    />
+                                                );
+                                            })}
+                                            {hiddenCount > 0 && (
+                                                <div className="px-3 md:px-5 pt-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowAll(true)}
+                                                        className={`w-full h-10 rounded-xl text-xs font-semibold text-white/70 bg-white/[0.06] hover:bg-white/[0.1] hover:text-white transition-colors cursor-pointer ${FOCUS_RING}`}>
+                                                        Show {hiddenCount} more result{hiddenCount !== 1 ? "s" : ""}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                ) : (
+                                    <div>
+                                        {recent.length > 0 && (
+                                            <>
+                                                <SectionLabel
+                                                    right={
+                                                        <button
+                                                            type="button"
+                                                            onClick={clearRecent}
+                                                            className={`text-xs font-semibold text-primary hover:brightness-125 px-1.5 py-0.5 rounded cursor-pointer ${FOCUS_RING}`}>
+                                                            Clear all
+                                                        </button>
+                                                    }>
+                                                    Recent
+                                                </SectionLabel>
+                                                <ul className="px-2 md:px-3">
+                                                    {recent.map((term) => (
+                                                        <li key={term} className="group flex items-center rounded-xl hover:bg-white/[0.05]">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    runSearch(term);
+                                                                    inputRef.current?.focus();
+                                                                }}
+                                                                className={`flex-1 min-w-0 flex items-center gap-3 px-3 h-11 text-left text-sm text-white/80 rounded-xl cursor-pointer ${FOCUS_RING}`}>
+                                                                <Clock size={15} className="shrink-0 text-base-content/35" />
+                                                                <span className="truncate">{term}</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeRecent(term)}
+                                                                aria-label={`Remove ${term} from recent searches`}
+                                                                className={`mr-1 inline-flex items-center justify-center w-8 h-8 rounded-full text-base-content/40 hover:text-white hover:bg-white/10 cursor-pointer ${FOCUS_RING}`}>
+                                                                <X size={14} />
+                                                            </button>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </>
+                                        )}
+
+                                        <SectionLabel>Browse by type</SectionLabel>
+                                        <div className="grid grid-cols-2 gap-2.5 px-4 md:px-5">
+                                            {browseCards.map(({ label, to, count, icon: Icon }) => (
+                                                <button
+                                                    key={to}
+                                                    type="button"
+                                                    onClick={() => goTo(to)}
+                                                    className={`flex items-center gap-3 p-3 rounded-xl text-left bg-white/[0.05] hover:bg-white/[0.09] transition-colors cursor-pointer ${FOCUS_RING}`}>
+                                                    <span className="flex items-center justify-center w-10 h-10 rounded-lg bg-white/[0.07] text-white/80 shrink-0">
+                                                        <Icon size={18} strokeWidth={1.8} />
+                                                    </span>
+                                                    <span className="min-w-0">
+                                                        <span className="block text-sm font-semibold text-white truncate">{label}</span>
+                                                        <span className="block text-[11px] text-base-content/45">{count === null ? "Explore" : `${count} title${count !== 1 ? "s" : ""}`}</span>
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Keyboard hints — desktop only */}
+                            <div className="hidden lg:flex items-center gap-5 px-5 h-12 shrink-0 border-t border-white/10 bg-base-100/40 text-[13px] font-medium text-white/55">
+                                <span className="flex items-center gap-2">
+                                    <kbd className={KEYCAP}>↑</kbd>
+                                    <kbd className={KEYCAP}>↓</kbd>
+                                    Navigate
+                                </span>
+                                <span className="flex items-center gap-2">
+                                    <kbd className={KEYCAP}>
+                                        <CornerDownLeft size={13} strokeWidth={2.5} />
+                                    </kbd>
+                                    Open
+                                </span>
+                                {hasQuery && results.length > 0 && (
+                                    <span className="ml-auto text-white/60">
+                                        {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>,
+                    document.body,
+                )}
         </>
     );
 }

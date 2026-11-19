@@ -1,4 +1,4 @@
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, Outlet, ScrollRestoration } from "react-router";
 import Root from "../Layout/Root";
 import Home from "../Pages/Home/Home";
 import AllCategory from "../Pages/Category/AllCategory";
@@ -64,7 +64,19 @@ import MediaDetailsSkeleton from "../Components/Media/MediaDetailsSkeleton";
 const PlayerRoute = withResolvedMediaId(PlayerPage);
 const MediaDetailsRoute = withResolvedMediaId(MediaDetails, MediaDetailsSkeleton);
 
-export const router = createBrowserRouter([
+// Single, app-wide scroll restoration. Every route below is a child of this pathless shell, so the one
+// <ScrollRestoration /> covers main app, dashboard, auth, playback and error branches.
+// PUSH/REPLACE -> top of page. Back/Forward (POP) -> previous position.
+function AppShell() {
+    return (
+        <>
+            <Outlet />
+            <ScrollRestoration />
+        </>
+    );
+}
+
+const routes = [
     // ─── Authentication — full pages on their own layout (no Navbar / Footer) ─────────────────
     // /login and /register bounce signed-in users away (GuestOnly). /verify-email, /pending and
     // /access-* need a session but NOT an approved/verified one, so they are not behind AuthGate.
@@ -186,4 +198,6 @@ export const router = createBrowserRouter([
             { path: "*", Component: Error404 }, // Catch-all inside ErrorLayout defaults to 404
         ],
     },
-]);
+];
+
+export const router = createBrowserRouter([{ Component: AppShell, children: routes }]);

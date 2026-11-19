@@ -1,8 +1,8 @@
 // web/src/Dashboard/DashboardLayout.jsx
 // Admin shell — inherits global theme/CSS (DaisyUI tokens), NO dashboard.css
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigationType } from "react-router";
 import {
     LayoutDashboard,
     Users,
@@ -376,6 +376,22 @@ export default function DashboardLayout() {
 
     const toggle = useCallback(() => setCollapsed((c) => !c), []);
 
+    // <main> below is the dashboard's scroll container (the window never scrolls here), so the global
+    // <ScrollRestoration /> can't see it. New page -> top. Back/Forward -> the position it had when left.
+    const mainRef = useRef(null);
+    const scrollPositions = useRef(new Map());
+    const prevPath = useRef(null);
+    const { pathname, key: locationKey } = useLocation();
+    const navType = useNavigationType();
+    useLayoutEffect(() => {
+        const el = mainRef.current;
+        if (el) {
+            if (navType === "POP") el.scrollTop = scrollPositions.current.get(locationKey) ?? 0;
+            else if (prevPath.current !== null && prevPath.current !== pathname) el.scrollTop = 0;
+        }
+        prevPath.current = pathname;
+    }, [locationKey, pathname, navType]);
+
     // Persist collapsed state
     useEffect(() => {
         try {
@@ -478,7 +494,7 @@ export default function DashboardLayout() {
                     <AccountMenu user={user} logout={logout} />
                 </header>
 
-                <main className="flex-1 overflow-auto bg-base-100 p-4 sm:p-6">
+                <main ref={mainRef} onScroll={(e) => scrollPositions.current.set(locationKey, e.currentTarget.scrollTop)} className="flex-1 overflow-auto bg-base-100 p-4 sm:p-6">
                     <Outlet />
                 </main>
             </div>

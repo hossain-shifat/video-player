@@ -39,6 +39,9 @@ const MIN_REVIEW = 10;
 const MAX_REVIEW = 5000;
 const MAX_REPLY = 2000;
 const FEED_MAX = 30;
+// Home cards show only 2–3 lines, so the feeds never ship more text than this (the full review is one click away on its page)
+const FEED_REVIEW_CHARS = 280;
+const FEED_DISCUSSION_CHARS = 220;
 
 // ─── small helpers ────────────────────────────────────────────────────────────
 
@@ -75,6 +78,16 @@ function cleanImported(t) {
         .replace(/\n{3,}/g, "\n\n")
         .trim()
         .slice(0, 8000);
+}
+
+// short card excerpt: flat text, cut at a sentence end when one falls late enough, else at a word — never mid-word, never over `max`
+function excerpt(text, max) {
+    const flat = String(text || "").replace(/\s+/g, " ").trim();
+    if (flat.length <= max) return flat;
+    const cut = flat.slice(0, max);
+    const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    if (end >= max * 0.6) return cut.slice(0, end + 1);
+    return `${cut.replace(/\s+\S*$/, "")}…`;
 }
 
 // discussion cards need a headline — use the first sentence (or the first ~80 chars)
@@ -222,6 +235,15 @@ function topScore(r, replies) {
     const len = Math.min((r.content || "").length, 1500);
     const ageYears = Math.max(0, (Date.now() - Date.parse(r.createdAt || 0)) / (365 * 86400000));
     return reactionTotal(r) * 3 + replies * 4 + (r.rating != null ? r.rating / 2 : 3) + len / 500 + (r.source === "local" ? 1 : 0) + Math.max(0, 1.5 - ageYears * 0.3);
+}
+
+// Home-feed ranking: same as topScore, but a review is no longer rewarded for being long — it peaks around 900 chars and fades out
+// beyond that, so the rows are not filled with essays that the card can only show 3 lines of anyway
+function feedScore(r, replies) {
+    const len = (r.content || "").length;
+    const lengthBonusInTopScore = Math.min(len, 1500) / 500;
+    const readable = len <= 900 ? len / 450 : Math.max(0, 2 - (len - 900) / 900);
+    return topScore(r, replies) - lengthBonusInTopScore + readable;
 }
 
 // ─── TMDB import (one-way: TMDB → reviews.json) ───────────────────────────────
@@ -380,7 +402,7 @@ async function feedPool() {
         if (!t || !t.feedOk || !t.inLibrary) continue;
         if ((r.content || "").length < 80) continue;
         const replies = await store.replyCount(r.id);
-        const entry = { r, t, replies, top: topScore(r, replies), heat: reactionTotal(r) + replies * 3 };
+        const entry = { r, t, replies, top: feedScore(r, replies), heat: reactionTotal(r) + replies * 3 };
         const cur = perTitle.get(r.key);
         if (!cur || entry.top > cur.top) perTitle.set(r.key, entry);
     }
@@ -398,7 +420,7 @@ async function buildPopular() {
             author: a.name,
             avatar: a.avatar || null,
             rating: r.rating ?? null,
-            content: r.content.length > 700 ? `${r.content.slice(0, 700).replace(/\s+\S*$/, "")}…` : r.content,
+            content: excerpt(r.content, FEED_REVIEW_CHARS),
             createdAt: r.createdAt,
             likes: reactionTotal(r),
             comments: replies,
@@ -437,13 +459,25 @@ async function buildDiscussions() {
     return picks.map(({ r, t, replies }) => {
         const a = authorOf(r, users);
         const h = headlineOf(r.content);
-        return { id: r.id, title: h.title, body: h.body.length > 600 ? `${h.body.slice(0, 600).replace(/\s+\S*$/, "")}…` : h.body, author: a.name, avatar: a.avatar || null, rating: r.rating ?? null, createdAt: r.createdAt, likes: reactionTotal(r), comments: replies, media: mediaOf(r.key, t) };
+        return { id: r.id, title: h.title, body: excerpt(h.body, FEED_DISCUSSION_CHARS), author: a.name, avatar: a.avatar || null, rating: r.rating ?? null, createdAt: r.createdAt, likes: reactionTotal(r), comments: replies, media: mediaOf(r.key, t) };
     });
+}
+
+// The memoised feeds are shared by everybody, so the viewer's own reaction is added AFTER the memo: `mine` = "like" | "love" | … | null
+async function withViewer(items, req) {
+    if (!req.user?.id) return items;
+    return Promise.all(
+        items.map(async (it) => {
+            const r = await store.getReview(it.id);
+            return { ...it, mine: r?.reactions?.[req.user.id] || null };
+        }),
+    );
 }
 
 async function getPopular(req, res) {
     try {
-        const items = await memo("popular", buildPopular);
+        const items = await withViewer(await memo("popular", buildPopular), req);
+        if (req.user?.id) res.set("Cache-Control", "private, no-store");
         return res.json({ total: items.length, items });
     } catch (err) {
         console.error("[Reviews] popular error:", err);
@@ -453,7 +487,8 @@ async function getPopular(req, res) {
 
 async function getDiscussions(req, res) {
     try {
-        const items = await memo("discussions", buildDiscussions);
+        const items = await withViewer(await memo("discussions", buildDiscussions), req);
+        if (req.user?.id) res.set("Cache-Control", "private, no-store");
         return res.json({ total: items.length, items });
     } catch (err) {
         console.error("[Reviews] discussions error:", err);

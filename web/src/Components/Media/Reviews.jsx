@@ -1,18 +1,3 @@
-// ============================================================================
-// Reviews.jsx — the review system's UI
-// File: web/src/Components/Media/Reviews.jsx
-//
-//   DETAILS PAGE   <Reviews tmdbId mediaType title poster backdrop />      (default export)
-//     "Ratings & Reviews": compact Plex-style cards (avatar · name · date · text · 👍 · comments · reactions), no stars on the card. Tap a card → the review PAGE
-//     (/review/:id, Pages/Review/ReviewPage.jsx). Signed-in users can write / edit / delete THEIR review.
-//     Reviews come from this server's reviews.json (starter content = full TMDB reviews, imported by the server);
-//     nothing a user does here is sent to TMDB.
-//
-//   HOME PAGE      <PopularReviews />   and   <PopularDiscussions /> (PopularDiscussions.jsx)
-//     Plex-style tall cards. Each fetches its own feed, hides itself when empty and opens the review page.
-//     This file also exports the shared card pieces: PopularCardShell, PopularRow.
-// ============================================================================
-
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ChevronLeft, ChevronRight, MessageSquare, Heart, ThumbsUp, ThumbsDown, Star, PenLine, X } from "lucide-react";
@@ -23,7 +8,6 @@ import { StarRating, Avatar, useDominantColor, seedReactions, seedCount, fmtCoun
 
 export { usePopularFeed };
 
-
 // ─── write / edit a review ────────────────────────────────────────────────────
 
 function StarInput({ value, onChange }) {
@@ -32,7 +16,13 @@ function StarInput({ value, onChange }) {
     return (
         <div className="flex items-center gap-1" onMouseLeave={() => setHover(0)}>
             {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} type="button" aria-label={`${n} star${n > 1 ? "s" : ""}`} onMouseEnter={() => setHover(n)} onClick={() => onChange(n)} className="cursor-pointer p-0.5 transition-transform hover:scale-110">
+                <button
+                    key={n}
+                    type="button"
+                    aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                    onMouseEnter={() => setHover(n)}
+                    onClick={() => onChange(n)}
+                    className="cursor-pointer p-0.5 transition-transform hover:scale-110">
                     <Star size={30} className={n <= shown ? "fill-warning text-warning" : "fill-base-content/10 text-base-content/25"} />
                 </button>
             ))}
@@ -69,7 +59,12 @@ export function WriteReviewModal({ kind, tmdbId, meta, existing, onClose }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose} style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)" }}>
-            <div role="dialog" aria-modal="true" aria-label="Write a review" className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-base-200 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Write a review"
+                className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-base-200 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center justify-between border-b border-white/8 bg-base-300/30 px-6 py-4">
                     <div className="min-w-0">
                         <p className="truncate text-base font-bold text-white">{existing ? "Edit your review" : "Write a review"}</p>
@@ -104,7 +99,11 @@ export function WriteReviewModal({ kind, tmdbId, meta, existing, onClose }) {
                     <button type="button" onClick={onClose} className="cursor-pointer rounded-full px-4 py-1.5 text-xs font-semibold text-base-content/70 hover:text-white">
                         Cancel
                     </button>
-                    <button type="button" onClick={submit} disabled={pending} className="cursor-pointer rounded-full bg-primary px-5 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85 disabled:opacity-50">
+                    <button
+                        type="button"
+                        onClick={submit}
+                        disabled={pending}
+                        className="cursor-pointer rounded-full bg-primary px-5 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85 disabled:opacity-50">
                         {pending ? "Saving…" : existing ? "Save changes" : "Post review"}
                     </button>
                 </div>
@@ -115,9 +114,8 @@ export function WriteReviewModal({ kind, tmdbId, meta, existing, onClose }) {
 
 // ─── one review card (details page + "more reviews" on the review page) ───────
 // Compact Plex-style card: avatar · name · date on top, the first lines of the review, then 👍 · comments on the left and the
-// reaction badges + count on the right. Fixed width, height grows with the text (min 176px, text clamped to 4 lines, long words
-// wrap) so the text can never be cut off or sit under the footer. Cards in a row stretch to the same height.
-// `wide` = full-width card for a vertical list (review page: "More reviews of …"). No star rating on the card.
+// reaction badges + count on the right. Fixed size (so every card in a row lines up), text is clamped and long words wrap —
+// nothing can overflow. No star rating on the card (it is on the review page).
 
 const BADGE = {
     like: { bg: "bg-sky-500", icon: <ThumbsUp size={9} className="fill-white text-white" /> },
@@ -128,7 +126,7 @@ const BADGE = {
     dislike: { bg: "bg-violet-500", icon: <ThumbsDown size={9} className="fill-white text-white" /> },
 };
 
-export function ReactionCluster({ summary, ring = "ring-base-200" }) {
+export function ReactionCluster({ summary }) {
     const top = Object.entries(summary.counts || {})
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3);
@@ -137,7 +135,7 @@ export function ReactionCluster({ summary, ring = "ring-base-200" }) {
         <span className="flex items-center gap-1.5">
             <span className="flex -space-x-1.5">
                 {top.map(([t]) => (
-                    <span key={t} className={`flex h-[18px] w-[18px] items-center justify-center rounded-full ring-2 ${ring} ${BADGE[t]?.bg || "bg-base-300"}`}>
+                    <span key={t} className={`flex h-[18px] w-[18px] items-center justify-center rounded-full ring-2 ring-base-200 ${BADGE[t]?.bg || "bg-base-300"}`}>
                         {BADGE[t]?.icon}
                     </span>
                 ))}
@@ -147,31 +145,40 @@ export function ReactionCluster({ summary, ring = "ring-base-200" }) {
     );
 }
 
+/**
+ * ReviewCard
+ *   default → compact 258×176 card for the horizontal row on the details page
+ *   wide    → full-width card for the review / discussion pages ("More reviews of …"): one per row, grows with the text,
+ *             real avatar + rating + a longer excerpt — not the short row card
+ */
 export function ReviewCard({ review, onOpen, onLike, wide = false }) {
     const shown = seedReactions(review.reactions, review.id); // placeholder numbers until real reactions take over (see ReviewThread.jsx)
     const liked = review.reactions?.mine === "like";
+    const pad = wide ? "px-4" : "px-3.5";
 
     return (
         <div
             role="button"
             tabIndex={0}
             onClick={onOpen}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onOpen()}
-            className={`flex min-h-44 cursor-pointer select-text flex-col overflow-hidden rounded-xl bg-base-200 transition-colors duration-150 hover:bg-base-300 focus-visible:outline-2 focus-visible:outline-primary/60 ${wide ? "w-full" : "w-[258px] shrink-0"}`}>
-            <div className="flex items-center gap-2.5 px-3.5 pt-3.5">
-                <Avatar src={review.author?.avatar} name={review.author?.name} size={36} />
+            onKeyDown={(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && onOpen?.()}
+            className={`flex cursor-pointer select-text flex-col overflow-hidden rounded-xl bg-base-200 outline-none transition-colors duration-150 hover:bg-base-300 focus:outline-none focus-visible:outline-none ${wide ? "w-full" : "h-44 w-[258px] shrink-0"}`}>
+            <div className={`flex items-center gap-2.5 ${pad} ${wide ? "pt-4" : "pt-3.5"}`}>
+                <Avatar src={review.author?.avatar} name={review.author?.name} size={wide ? 40 : 36} />
                 <div className="min-w-0 flex-1 leading-tight">
-                    <p className="truncate text-[13px] font-semibold text-white">{review.author?.name}</p>
+                    <p className={`truncate font-semibold text-white ${wide ? "text-sm" : "text-[13px]"}`}>{review.author?.name}</p>
                     <p className="mt-0.5 truncate text-[11px] text-base-content/55">{smartDate(review.createdAt)}</p>
                 </div>
+                {wide && review.rating != null && <StarRating rating={review.rating} size={15} />}
                 {review.isMine && <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">You</span>}
             </div>
 
-            <div className="px-3.5 pt-3">
-                <p className={`text-[13px] leading-snug text-base-content/90 break-words [overflow-wrap:anywhere] ${wide ? "line-clamp-5" : "line-clamp-4"}`}>{review.content}</p>
-            </div>
+            <p
+                className={`${pad} break-words text-base-content/90 [overflow-wrap:anywhere] ${wide ? "line-clamp-6 whitespace-pre-line pt-3 text-[14px] leading-relaxed" : "min-h-0 flex-1 overflow-hidden pt-3 text-[13px] leading-snug line-clamp-4"}`}>
+                {review.content}
+            </p>
 
-            <div className="mt-auto flex items-center justify-between gap-2 px-3.5 pb-3 pt-3 text-base-content/65">
+            <div className={`flex items-center justify-between gap-2 ${pad} text-base-content/65 ${wide ? "pb-4 pt-3" : "pb-3 pt-1.5"}`}>
                 <div className="flex min-w-0 items-center gap-3.5">
                     <button
                         type="button"
@@ -181,7 +188,7 @@ export function ReviewCard({ review, onOpen, onLike, wide = false }) {
                             e.stopPropagation();
                             onLike?.(review);
                         }}
-                        className={`cursor-pointer transition-colors hover:text-white disabled:cursor-default ${liked ? "text-primary" : ""}`}>
+                        className={`cursor-pointer border-none bg-transparent outline-none transition-colors hover:text-white disabled:cursor-default ${liked ? "text-primary" : ""}`}>
                         <ThumbsUp size={18} className={liked ? "fill-current" : ""} />
                     </button>
                     <span className="flex items-center gap-1.5">
@@ -205,12 +212,11 @@ const SORTS = [
 /**
  * Props:
  *   tmdbId     {number}  TMDB id of the title (movie or show)
- *   mediaType  {string}  "movie" | "series" | "anime"  (fallback only — anime can be a film OR a show)
- *   kind       {string}  "movie" | "tv" — the TITLE's real TMDB namespace; wins over mediaType when given
+ *   mediaType  {string}  "movie" | "series" | "anime"  (series + anime → tv)
  *   title, poster, backdrop — only used to label a review written for a title that is not in the library
  */
-export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, poster, backdrop }) {
-    const kind = kindProp === "movie" || kindProp === "tv" ? kindProp : mediaType === "movie" ? "movie" : "tv";
+export default function Reviews({ tmdbId, mediaType, title, poster, backdrop }) {
+    const kind = mediaType === "movie" ? "movie" : "tv";
     const { isAuthenticated } = useAuth();
     const { openAuthModal } = useAuthModal();
     const navigate = useNavigate();
@@ -271,7 +277,11 @@ export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, post
 
                 <div className="flex items-center gap-2">
                     {items.length > 1 && (
-                        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort reviews" className="cursor-pointer rounded-full border border-white/8 bg-base-200 px-3 py-1.5 text-xs font-semibold text-base-content/80 focus:outline-none">
+                        <select
+                            value={sort}
+                            onChange={(e) => setSort(e.target.value)}
+                            aria-label="Sort reviews"
+                            className="cursor-pointer rounded-full border border-white/8 bg-base-200 px-3 py-1.5 text-xs font-semibold text-base-content/80 focus:outline-none">
                             {SORTS.map((s) => (
                                 <option key={s.value} value={s.value}>
                                     {s.label}
@@ -279,15 +289,24 @@ export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, post
                             ))}
                         </select>
                     )}
-                    <button type="button" onClick={onWrite} className="flex cursor-pointer items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85">
+                    <button
+                        type="button"
+                        onClick={onWrite}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85">
                         <PenLine size={12} />
                         {data?.mine ? "Edit your review" : "Write a review"}
                     </button>
                     <div className="hidden gap-1.5 sm:flex">
-                        <button onClick={() => scroll(-1)} className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300" aria-label="Scroll left">
+                        <button
+                            onClick={() => scroll(-1)}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300"
+                            aria-label="Scroll left">
                             <ChevronLeft size={14} className="text-base-content/70" />
                         </button>
-                        <button onClick={() => scroll(1)} className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300" aria-label="Scroll right">
+                        <button
+                            onClick={() => scroll(1)}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300"
+                            aria-label="Scroll right">
                             <ChevronRight size={14} className="text-base-content/70" />
                         </button>
                     </div>
@@ -345,9 +364,11 @@ export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, post
  *   headline  string   → bold thread title (discussions); omit for reviews
  *   rating    0–10     → big centred stars (reviews); omit for discussions
  *   body      string   → quote / excerpt
- *   author, avatar, date, likes (reactions), comments (replies), onMore
+ *   id        review id → the footer LIKE button reacts to it in place (login page if signed out)
+ *   mine      the viewer\'s own reaction from the feed ("like" | null) → thumb starts filled
+ *   author, avatar, date, likes (reactions), comments (replies), onMore (reactions / comments / More buttons + card click)
  */
-export function PopularCardShell({ media, headline, rating, body, author, avatar, date, likes, comments, onMore, bodyLines = 3 }) {
+export function PopularCardShell({ id, mine, media, headline, rating, body, author, avatar, date, likes, comments, onMore, bodyLines = 3 }) {
     const art = media?.backdrop || media?.poster || null;
     const rgb = useDominantColor(art);
     const tint = rgb ? `rgb(${Math.round(rgb[0] * 0.3)}, ${Math.round(rgb[1] * 0.3)}, ${Math.round(rgb[2] * 0.3)})` : "var(--color-base-300)";
@@ -355,16 +376,64 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
     const mask = "linear-gradient(to bottom, #000 30%, transparent 100%)";
     const clamp = bodyLines === 2 ? "line-clamp-2" : "line-clamp-3";
 
+    // ── like button: works IN the card (no redirect) and is saved on the server.
+    //    `mine` = the viewer's own reaction from the feed ("like" | … | null) → the thumb is filled after a reload too.
+    //    The count moves instantly (delta); useReact({ keepFeedOrder }) then patches the cached feed card in place.
+    const { isAuthenticated } = useAuth();
+    const { openAuthModal } = useAuthModal();
+    const react = useReact({ keepFeedOrder: true }); // feed stays put: no refetch → no re-rank, no skeleton, no scroll jump
+    const [liked, setLiked] = useState(mine === "like");
+    const [delta, setDelta] = useState(0);
+    useEffect(() => setLiked(mine === "like"), [mine]);
+    useEffect(() => setDelta(0), [likes]);
+    const shownLikes = Math.max(0, (likes ?? 0) + delta);
+
+    const toggleLike = () => {
+        if (!id || react.isPending) return;
+        if (!isAuthenticated) return openAuthModal({ view: "login" });
+        const next = !liked;
+        const prevLiked = liked;
+        const prevDelta = delta;
+        setLiked(next);
+        setDelta(prevDelta + (next ? 1 : -1));
+        react.mutate(
+            { kind: "review", id, type: next ? "like" : null },
+            {
+                onSuccess: (res) => res?.reactions && setLiked(res.reactions.mine === "like"),
+                onError: () => {
+                    setLiked(prevLiked);
+                    setDelta(prevDelta);
+                },
+            },
+        );
+    };
+
+    // every footer control stops the click so the card's own onClick never double-fires; "go" = open the page
+    const stop = (fn) => (e) => {
+        e.stopPropagation();
+        fn?.();
+    };
+    const footBtn =
+        "flex cursor-pointer items-center gap-1.5 border-none bg-transparent outline-none transition-colors duration-150 hover:bg-black/20 hover:text-white focus:outline-none focus-visible:outline-none";
+
     return (
         <div
             role="button"
             tabIndex={0}
             onClick={onMore}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onMore?.()}
-            className="group relative h-90 w-72 shrink-0 cursor-pointer select-none overflow-hidden rounded-2xl ring-1 ring-white/5 transition-all duration-200 hover:-translate-y-0.5 hover:ring-2 hover:ring-white/80 sm:w-80"
+            onKeyDown={(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && onMore?.()}
+            className="group relative h-90 w-72 shrink-0 cursor-pointer select-none overflow-hidden rounded-2xl outline-none transition-transform duration-200 [-webkit-tap-highlight-color:transparent] hover:-translate-y-0.5 focus:outline-none focus-visible:outline-none sm:w-80"
             style={{ background: tint }}>
             {art && !artError && (
-                <img src={art} alt="" loading="lazy" draggable={false} onError={() => setArtError(true)} className="absolute inset-x-0 top-0 h-[62%] w-full object-cover" style={{ WebkitMaskImage: mask, maskImage: mask }} />
+                <img
+                    src={art}
+                    alt=""
+                    loading="lazy"
+                    draggable={false}
+                    onError={() => setArtError(true)}
+                    className="absolute inset-x-0 top-0 h-[62%] w-full object-cover"
+                    style={{ WebkitMaskImage: mask, maskImage: mask }}
+                />
             )}
 
             <div className="absolute inset-x-0 top-[14%] flex justify-center px-6">
@@ -396,10 +465,18 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                 </div>
 
                 <div className="flex h-10 items-stretch border-t border-white/10 bg-black/25 text-[12px] text-white/80">
-                    <span className="flex w-10 items-center justify-center border-r border-white/10">
-                        <ThumbsUp size={14} />
-                    </span>
-                    <div className="flex items-center gap-1.5 border-r border-white/10 px-3">
+                    {/* LIKE — toggles in place, never navigates */}
+                    <button
+                        type="button"
+                        aria-label={liked ? "Remove like" : "Like"}
+                        aria-pressed={liked}
+                        disabled={react.isPending}
+                        onClick={stop(toggleLike)}
+                        className={`${footBtn} w-10 justify-center border-r border-white/10 disabled:cursor-default ${liked ? "text-primary hover:text-primary" : ""}`}>
+                        <ThumbsUp size={14} className={liked ? "fill-current" : ""} />
+                    </button>
+                    {/* REACTIONS count — opens the page */}
+                    <button type="button" aria-label="Reactions" onClick={stop(onMore)} className={`${footBtn} border-r border-white/10 px-3`}>
                         <span className="flex -space-x-1">
                             <span className="flex h-4 w-4 items-center justify-center rounded-full bg-pink-500 ring-1 ring-black/30">
                                 <Heart size={9} className="fill-white text-white" />
@@ -408,15 +485,17 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                                 <ThumbsUp size={9} className="fill-white text-white" />
                             </span>
                         </span>
-                        <span className="font-medium tabular-nums">{fmtCount(likes ?? 0)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 border-r border-white/10 px-3">
+                        <span className="font-medium tabular-nums">{fmtCount(shownLikes)}</span>
+                    </button>
+                    {/* COMMENTS — opens the page */}
+                    <button type="button" aria-label="Comments" onClick={stop(onMore)} className={`${footBtn} border-r border-white/10 px-3`}>
                         <MessageSquare size={13} />
                         <span className="font-semibold tabular-nums text-white">{fmtCount(comments ?? 0)}</span>
-                    </div>
-                    <span className="flex flex-1 items-center justify-end gap-0.5 pr-4 font-semibold text-white">
+                    </button>
+                    {/* MORE — opens the page */}
+                    <button type="button" aria-label="More" onClick={stop(onMore)} className={`${footBtn} flex-1 justify-end gap-0.5 pr-4 font-semibold text-white`}>
                         More <ChevronRight size={14} />
-                    </span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -439,10 +518,16 @@ export function PopularRow({ title, items = [], loading = false, renderCard, ske
                 {loading ? <div className="h-5 w-36 animate-pulse rounded bg-base-300" /> : <h2 className="text-base font-semibold text-base-content sm:text-lg">{title}</h2>}
                 {!loading && (
                     <div className="hidden items-center gap-1 sm:flex">
-                        <button onClick={() => scroll(-1)} className="flex h-7 w-7 items-center justify-center rounded-full bg-base-300 text-base-content/60 transition-colors duration-150 hover:bg-base-200 hover:text-base-content" aria-label="Scroll left">
+                        <button
+                            onClick={() => scroll(-1)}
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-base-300 text-base-content/60 transition-colors duration-150 hover:bg-base-200 hover:text-base-content"
+                            aria-label="Scroll left">
                             <ChevronLeft size={15} />
                         </button>
-                        <button onClick={() => scroll(1)} className="flex h-7 w-7 items-center justify-center rounded-full bg-base-300 text-base-content/60 transition-colors duration-150 hover:bg-base-200 hover:text-base-content" aria-label="Scroll right">
+                        <button
+                            onClick={() => scroll(1)}
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-base-300 text-base-content/60 transition-colors duration-150 hover:bg-base-200 hover:text-base-content"
+                            aria-label="Scroll right">
                             <ChevronRight size={15} />
                         </button>
                     </div>
@@ -474,6 +559,8 @@ export function PopularReviews({ items, loading, title = "Popular Reviews" }) {
             renderCard={(it) => (
                 <PopularCardShell
                     key={it.id}
+                    id={it.id}
+                    mine={it.mine}
                     media={it.media}
                     rating={it.rating}
                     body={it.content}

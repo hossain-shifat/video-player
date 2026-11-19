@@ -1,11 +1,42 @@
 // Same focus ring as Navbar
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams, Link } from "react-router";
-import { Bell, BellOff, CheckCheck, X, BellRing } from "lucide-react";
+import { Bell, BellOff, BellRing, CheckCheck, ChevronLeft, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useNotifications, usePushLifecycle, usePushState } from "../../Hooks/Query/useNotifications";
 import { enablePush } from "../../Utils/push";
-import { NotificationModal, FOCUS_RING, TONES, Visual, fmtDate, metaFor, timeAgo, useResolvedMedia } from "./Modal";
+import { NotificationModal, FOCUS_RING, Visual, fmtDate, timeAgo, useResolvedMedia } from "./Modal";
+
+// ── Config ────────────────────────────────────────────────────────────────────
+const GROUPS = ["Today", "Yesterday", "Earlier"];
+
+// Tabs. `test` decides which notifications a tab shows. Adjust isAccount() if your account-type names differ.
+const isMedia = (n) => n.type === "new_media";
+const isAccount = (n) => /account|access|role|approv|permission/i.test(`${n.type ?? ""} ${n.category ?? ""}`);
+
+function bucketOf(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "Earlier";
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diff = Math.round((today - day) / 86400000);
+    return diff <= 0 ? "Today" : diff === 1 ? "Yesterday" : "Earlier";
+}
+
+// true below the `md` breakpoint → the panel becomes a full-screen page
+function useIsMobile() {
+    const query = "(max-width: 767px)";
+    const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+    useEffect(() => {
+        const mq = window.matchMedia(query);
+        const onChange = () => setMobile(mq.matches);
+        mq.addEventListener("change", onChange);
+        return () => mq.removeEventListener("change", onChange);
+    }, []);
+    return mobile;
+}
 
 // Primary / secondary lines for a list row. Falls back to the stored (generic) text whenever media can't be resolved.
 function describeRow(n, media) {
@@ -25,40 +56,40 @@ function describeRow(n, media) {
     return { heading: n.title, summary: n.body, poster: null };
 }
 
+// One bar: [visual] [title + summary] [time] [bin]. Whole bar (minus the bin) opens the details modal.
 function NotificationRow({ n, onOpen, onDismiss }) {
     const { items } = useResolvedMedia(n.media?.ids, { serverItems: n.media?.items });
     const d = describeRow(n, items);
-    const tone = TONES[metaFor(n.type).tone];
 
     return (
-        <li className="group relative">
-            <button
-                onClick={() => onOpen(n)}
-                className={`w-full flex items-start gap-3 px-3 py-2.5 pr-9 rounded-lg text-left transition-colors duration-150 hover:bg-white/5 focus-visible:bg-white/5 cursor-pointer ${FOCUS_RING}`}>
-                <Visual poster={d.poster} type={n.type} size={d.poster ? 52 : 38} />
+        <li className={`flex items-center gap-1 rounded-md border border-base-300 pl-2.5 pr-1 py-2 transition-colors duration-150 ${n.read ? "bg-base-200" : "bg-base-300"}`}>
+            <button onClick={() => onOpen(n)} className={`group flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left cursor-pointer ${FOCUS_RING}`}>
+                <span className={`relative block size-10 shrink-0 overflow-hidden rounded-md ${n.read ? "opacity-70" : ""}`}>
+                    <Visual poster={d.poster} type={n.type} size={40} />
+                </span>
+
                 <span className="min-w-0 flex-1">
-                    <span className={`block text-sm leading-snug truncate ${n.read ? "text-white/60" : "text-white font-medium"}`}>
+                    <span className={`block truncate text-sm leading-[18px] ${n.read ? "font-medium text-base-content/85" : "font-semibold text-base-content"}`}>
                         {!n.read && <span className="sr-only">Unread: </span>}
                         {d.heading}
                     </span>
-                    {d.summary && <span className="block text-xs leading-snug mt-0.5 line-clamp-2 text-[oklch(66%_0.015_260)]">{d.summary}</span>}
-                    <span className="mt-1 flex items-center gap-1.5 text-[10px] text-[oklch(56%_0.015_260)]">
-                        <span className="font-semibold uppercase tracking-wider" style={{ color: tone.fg }}>
-                            {n.category}
-                        </span>
-                        <span aria-hidden="true">·</span>
-                        <time dateTime={n.createdAt} title={fmtDate(n.createdAt)}>
-                            {timeAgo(n.createdAt)}
-                        </time>
-                    </span>
+                    {d.summary && <span className="block truncate text-xs leading-[18px] text-base-content/80">{d.summary}</span>}
+                    {n.category && <span className="sr-only">{n.category}</span>}
                 </span>
-                {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: "oklch(58% 0.22 20)" }} aria-hidden="true" />}
+
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] leading-none text-base-content/80 whitespace-nowrap">
+                    {!n.read && <span className="size-2 rounded-full bg-primary" aria-hidden="true" />}
+                    <time dateTime={n.createdAt} title={fmtDate(n.createdAt)}>
+                        {timeAgo(n.createdAt)}
+                    </time>
+                </span>
             </button>
+
             <button
                 onClick={() => onDismiss(n.id)}
-                className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-md text-[oklch(62%_0.015_260)] hover:text-white hover:bg-white/10 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-all duration-150 cursor-pointer ${FOCUS_RING}`}
-                aria-label={`Dismiss: ${d.heading}`}>
-                <X size={13} strokeWidth={2.2} />
+                className={`flex size-9 md:size-7 shrink-0 items-center justify-center rounded-md text-error hover:bg-base-200 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}
+                aria-label={`Delete notification: ${d.heading}`}>
+                <Trash2 size={15} strokeWidth={2} />
             </button>
         </li>
     );
@@ -66,6 +97,8 @@ function NotificationRow({ n, onOpen, onDismiss }) {
 
 const Notifications = () => {
     const [open, setOpen] = useState(false);
+    const [tab, setTab] = useState("all");
+    const [confirmClear, setConfirmClear] = useState(false);
     const [pushBusy, setPushBusy] = useState(false);
     const [pushError, setPushError] = useState("");
 
@@ -74,6 +107,7 @@ const Notifications = () => {
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const [selectedId, setSelectedId] = useState(null);
+    const isMobile = useIsMobile();
 
     // Data comes from the backend now; this hook polls + updates optimistically.
     const { items, unreadCount: unread, isAuthenticated, markRead, markAllRead, remove, clearAll } = useNotifications();
@@ -104,6 +138,23 @@ const Notifications = () => {
             document.removeEventListener("keydown", onKey);
         };
     }, [open, close]);
+
+    // Full-screen page on mobile → lock the page behind it
+    useEffect(() => {
+        if (!open || !isMobile) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, [open, isMobile]);
+
+    // Reset transient UI whenever the panel closes
+    useEffect(() => {
+        if (open) return;
+        setConfirmClear(false);
+        setTab("all");
+    }, [open]);
 
     const dismiss = remove;
 
@@ -147,116 +198,173 @@ const Notifications = () => {
         }
     };
 
+    const TABS = [
+        { id: "all", label: "All" },
+        { id: "unread", label: unread > 0 ? `Unread ${unread}` : "Unread" },
+        { id: "media", label: "Media" },
+        { id: "account", label: "Account" },
+    ];
+
+    // Filter by tab, then bucket into Today / Yesterday / Earlier (keeps the server's newest-first order)
+    const grouped = useMemo(() => {
+        const keep = { all: () => true, unread: (n) => !n.read, media: isMedia, account: isAccount }[tab] ?? (() => true);
+        const buckets = { Today: [], Yesterday: [], Earlier: [] };
+        for (const n of items) if (keep(n)) buckets[bucketOf(n.createdAt)].push(n);
+        return GROUPS.map((g) => ({ label: g, rows: buckets[g] })).filter((g) => g.rows.length);
+    }, [items, tab]);
+
+    const handleClearAll = () => {
+        clearAll();
+        setConfirmClear(false);
+    };
+
+    const panel = open && (
+        <div
+            id="notifications-panel"
+            ref={panelRef}
+            role="dialog"
+            aria-label="Notifications"
+            className="nav-anim fixed inset-0 z-50 flex h-dvh w-full flex-col overflow-hidden bg-base-200 md:absolute md:inset-auto md:right-5 md:top-full md:mt-1.5 md:h-[min(35rem,calc(100dvh-5rem))] md:w-[22rem] md:rounded-md md:border md:border-base-300 md:shadow-2xl lg:right-6 xl:right-8"
+            style={{ animation: "dropdownIn 0.18s ease-out" }}>
+            {/* Header — one row: back (mobile) / title / mark all read / close (desktop) */}
+            <div className="flex items-center gap-1.5 px-3 pt-3 pb-2 md:px-4 md:pt-4">
+                <button
+                    onClick={() => close(true)}
+                    className={`flex size-10 shrink-0 items-center justify-center rounded-md text-base-content/85 hover:text-base-content hover:bg-base-300 transition-colors duration-150 cursor-pointer md:hidden ${FOCUS_RING}`}
+                    aria-label="Back">
+                    <ChevronLeft size={22} strokeWidth={2} />
+                </button>
+                <h2 className="flex-1 text-lg font-semibold text-base-content">Notifications</h2>
+                <button
+                    onClick={markAllRead}
+                    disabled={unread === 0}
+                    className={`flex size-10 md:size-8 shrink-0 items-center justify-center rounded-md bg-base-300 text-base-content/85 hover:text-base-content transition-colors duration-150 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`}
+                    aria-label="Mark all as read"
+                    title="Mark all as read">
+                    <CheckCheck size={17} strokeWidth={2} />
+                </button>
+                <button
+                    onClick={() => close(true)}
+                    className={`hidden size-8 shrink-0 items-center justify-center rounded-md text-base-content/85 hover:text-base-content hover:bg-base-300 transition-colors duration-150 cursor-pointer md:flex ${FOCUS_RING}`}
+                    aria-label="Close notifications">
+                    <X size={17} strokeWidth={2} />
+                </button>
+            </div>
+
+            {/* Tabs — the only filter layer */}
+            <div role="tablist" aria-label="Filter notifications" className="flex gap-2 overflow-x-auto px-3 pb-2 md:px-4" style={{ scrollbarWidth: "none" }}>
+                {TABS.map((t) => (
+                    <button
+                        key={t.id}
+                        role="tab"
+                        aria-selected={tab === t.id}
+                        onClick={() => setTab(t.id)}
+                        className={`h-10 md:h-8 shrink-0 rounded-md px-3.5 text-[13px] font-medium whitespace-nowrap transition-colors duration-150 cursor-pointer ${FOCUS_RING} ${tab === t.id ? "bg-primary text-primary-content" : "bg-base-300 text-base-content/85 hover:text-base-content"}`}>
+                        {t.label}
+                    </button>
+                ))}
+            </div>
+
+            {/* List — the only part that scrolls */}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-base-300 px-2.5 pb-2" style={{ scrollbarWidth: "none" }}>
+                {grouped.length === 0 ? (
+                    <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-4 text-base-content/80">
+                        <BellOff size={26} strokeWidth={1.6} />
+                        <p className="text-sm">{!isAuthenticated ? "Sign in to see notifications" : items.length === 0 ? "You're all caught up" : "Nothing in this tab"}</p>
+                    </div>
+                ) : (
+                    grouped.map((g) => (
+                        <section key={g.label} aria-label={g.label}>
+                            <h3 className="px-1 pt-3.5 pb-2 text-xs font-semibold text-base-content/80">{g.label}</h3>
+                            <ul className="flex flex-col gap-1">
+                                {g.rows.map((n) => (
+                                    <NotificationRow key={n.id} n={n} onOpen={openItem} onDismiss={dismiss} />
+                                ))}
+                            </ul>
+                        </section>
+                    ))
+                )}
+            </div>
+
+            {/* Footer — one row (push offer only appears when it applies) */}
+            {isAuthenticated && (
+                <div className="border-t border-base-300 bg-base-200 px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                    {canOfferPush && (
+                        <div className="pb-2">
+                            <button
+                                onClick={turnOnPush}
+                                disabled={pushBusy}
+                                className={`flex w-full items-center justify-center gap-1.5 rounded-md bg-base-300 px-3 h-10 md:h-9 text-xs font-medium text-base-content hover:text-base-content transition-colors duration-150 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`}>
+                                <BellRing size={13} strokeWidth={2} />
+                                {pushBusy ? "Enabling…" : "Get alerts outside the browser"}
+                            </button>
+                            {pushError && <p className="mt-1.5 px-1 text-[11px] leading-snug text-error">{pushError}</p>}
+                        </div>
+                    )}
+
+                    {confirmClear ? (
+                        <div className="flex items-center gap-2 px-1">
+                            <span className="flex-1 text-xs text-base-content/85">Delete all {items.length}?</span>
+                            <button
+                                onClick={() => setConfirmClear(false)}
+                                className={`h-10 md:h-9 rounded-md bg-base-300 px-3 text-xs font-medium text-base-content/85 hover:text-base-content transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
+                                Cancel
+                            </button>
+                            <button onClick={handleClearAll} className={`btn btn-error btn-sm h-10 md:h-9 rounded-md border-none text-xs cursor-pointer ${FOCUS_RING}`}>
+                                <Trash2 size={13} strokeWidth={2} />
+                                Delete all
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex items-center justify-between">
+                            {items.length > 0 ? (
+                                <button
+                                    onClick={() => setConfirmClear(true)}
+                                    className={`inline-flex h-10 md:h-9 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-error hover:bg-base-300 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
+                                    <Trash2 size={13} strokeWidth={2} />
+                                    Clear all
+                                </button>
+                            ) : (
+                                <span />
+                            )}
+                            <Link
+                                to="/settings?tab=notifications"
+                                onClick={() => setOpen(false)}
+                                className={`inline-flex h-10 md:h-9 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-base-content/85 hover:text-base-content hover:bg-base-300 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
+                                <SlidersHorizontal size={13} strokeWidth={2} />
+                                Settings
+                            </Link>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+
     return (
-        // `contents` wrapper → button stays a direct flex child of .nav-act, so
-        // the mobile reveal animation (.nav-act-item[data-i="2"]) still works.
+        // `contents` wrapper → bell stays a direct flex child of the navbar action row.
         <div className="contents">
-            {/* Bell — icon/button classes identical to the old navbar bell */}
+            {/* Bell — ghost icon button, same box as the other navbar actions */}
             <button
                 ref={btnRef}
-                data-i="2"
                 onClick={() => setOpen((v) => !v)}
-                className="nav-act-item relative inline-flex shrink-0 items-center justify-center w-9 h-9 lg:w-8 lg:h-8 rounded-full lg:rounded-md bg-white/[0.07] lg:bg-transparent text-white/80 lg:text-white/75 hover:text-white hover:bg-white/12 lg:hover:bg-white/5 active:scale-90 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                className={`relative inline-flex shrink-0 items-center justify-center w-10 h-10 md:w-9 md:h-9 rounded-full active:scale-90 transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${open ? "text-white bg-white/[0.07]" : "text-white/85 hover:text-white hover:bg-white/10"}`}
                 aria-label="Notifications"
                 aria-haspopup="dialog"
                 aria-expanded={open}
                 aria-controls={open ? "notifications-panel" : undefined}>
-                <Bell size={17} strokeWidth={1.8} />
+                <Bell size={18} strokeWidth={1.8} />
                 {unread > 0 && (
                     <span
-                        className="absolute top-0.5 right-0.5 lg:-top-0.5 lg:-right-0.5 flex items-center justify-center rounded-full text-[9px] font-bold text-white px-1 ring-2 ring-base-200"
+                        className="absolute top-1 right-0.5 md:top-0.5 md:right-0 flex items-center justify-center rounded-full text-[9px] font-bold text-white px-1 ring-2 ring-base-100"
                         style={{ background: "oklch(58% 0.22 20)", lineHeight: 1, minWidth: "16px", height: "16px" }}>
                         {unread > 9 ? "9+" : unread}
                     </span>
                 )}
             </button>
 
-            {/* Panel — anchored under the navbar row, same surface as Browse/Account panels */}
-            {open && (
-                <div
-                    id="notifications-panel"
-                    ref={panelRef}
-                    role="dialog"
-                    aria-label="Notifications"
-                    className="nav-anim absolute right-3 sm:right-5 lg:right-6 xl:right-8 top-full mt-1.5 w-[min(22rem,calc(100vw-1.5rem))] rounded-xl overflow-hidden"
-                    style={{
-                        background: "oklch(15% 0.012 260 / 0.97)",
-                        backdropFilter: "blur(24px) saturate(160%)",
-                        WebkitBackdropFilter: "blur(24px) saturate(160%)",
-                        border: "1px solid oklch(100% 0 0 / 0.08)",
-                        boxShadow: "0 12px 40px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(100% 0 0 / 0.04)",
-                        animation: "dropdownIn 0.18s ease-out",
-                    }}>
-                    {/* Header */}
-                    <div className="flex items-center justify-between px-4 pt-3.5 pb-2">
-                        <span className="text-[10px] font-semibold uppercase tracking-widest text-[oklch(62%_0.015_260)]">Notifications</span>
-                        <div className="flex items-center gap-1">
-                            {unread > 0 && (
-                                <button
-                                    onClick={markAllRead}
-                                    className={`flex items-center gap-1 px-2 h-6 rounded-md text-[11px] font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
-                                    <CheckCheck size={13} strokeWidth={2} />
-                                    Mark all read
-                                </button>
-                            )}
-                            <button
-                                onClick={() => close(true)}
-                                className={`w-6 h-6 flex items-center justify-center rounded-md text-[oklch(62%_0.015_260)] hover:text-white transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}
-                                aria-label="Close notifications">
-                                <X size={14} strokeWidth={2.5} />
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* List */}
-                    {items.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-[oklch(62%_0.015_260)]">
-                            <BellOff size={26} strokeWidth={1.6} />
-                            <p className="text-sm">{isAuthenticated ? "You're all caught up" : "Sign in to see notifications"}</p>
-                        </div>
-                    ) : (
-                        <ul className="max-h-[min(24rem,60dvh)] overflow-y-auto overscroll-contain px-1 pb-1" style={{ scrollbarWidth: "none" }}>
-                            {items.map((n) => (
-                                <NotificationRow key={n.id} n={n} onOpen={openItem} onDismiss={dismiss} />
-                            ))}
-                        </ul>
-                    )}
-
-                    {/* Footer */}
-                    {isAuthenticated && (
-                        <div className="px-2 pb-2">
-                            <div className="h-px mb-2 mx-1" style={{ background: "oklch(100% 0 0 / 0.07)" }} />
-                            {canOfferPush && (
-                                <div className="px-1 pb-1">
-                                    <button
-                                        onClick={turnOnPush}
-                                        disabled={pushBusy}
-                                        className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-white/10 hover:bg-white/15 disabled:opacity-50 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
-                                        <BellRing size={13} strokeWidth={2} />
-                                        {pushBusy ? "Enabling…" : "Get alerts outside the browser"}
-                                    </button>
-                                    {pushError && <p className="mt-1.5 px-1 text-[11px] leading-snug text-[oklch(70%_0.15_25)]">{pushError}</p>}
-                                </div>
-                            )}
-                            <div className="flex items-center gap-1">
-                                {items.length > 0 && (
-                                    <button
-                                        onClick={clearAll}
-                                        className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>
-                                        Clear all
-                                    </button>
-                                )}
-                                <Link
-                                    to="/settings?tab=notifications"
-                                    onClick={() => setOpen(false)}
-                                    className={`flex-1 px-3 py-2 rounded-lg text-center text-xs font-medium text-[oklch(70%_0.01_260)] hover:text-white hover:bg-white/5 transition-colors duration-150 ${FOCUS_RING}`}>
-                                    Settings
-                                </Link>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
+            {/* Panel — dropdown under the navbar on md+, full-screen page (portal) below md */}
+            {panel && (isMobile ? createPortal(panel, document.body) : panel)}
 
             {selectedId && <NotificationModal id={selectedId} onClose={closeModal} onAction={goTo} markRead={markRead} />}
         </div>

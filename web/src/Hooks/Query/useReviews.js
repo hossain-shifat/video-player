@@ -103,8 +103,21 @@ export function useDeleteReview() {
     return useMutation({ mutationFn: (id) => deleteReview(id), onSuccess: (_, id) => refresh(id) });
 }
 
-/** One hook for both targets: mutate({ kind: "review" | "reply", id, type }) */
-export function useReact() {
+// Home rows (cache = { total, items }): write the new reaction into the card IN PLACE — no refetch, so the row never re-ranks,
+// shows no skeleton and the page never jumps. (The server re-ranks on the next normal load.)
+function patchFeeds(qc, res) {
+    if (!res?.id || !res.reactions) return;
+    qc.setQueriesData({ queryKey: ["popular"] }, (old) => {
+        if (!old || !Array.isArray(old.items)) return old;
+        return { ...old, items: old.items.map((it) => (it.id === res.id ? { ...it, mine: res.reactions.mine, likes: res.reactions.total } : it)) };
+    });
+}
+
+/**
+ * One hook for both targets: mutate({ kind: "review" | "reply", id, type })
+ * useReact({ keepFeedOrder: true }) → Home cards: patch the feed cache in place instead of refetching it (see patchFeeds).
+ */
+export function useReact({ keepFeedOrder = false } = {}) {
     const qc = useQueryClient();
     const snap = useRef(null);
     return useMutation({
@@ -126,7 +139,8 @@ export function useReact() {
         },
         onSuccess: (res) => {
             if (res?.id && res.reactions) patchReactions(qc, res.id, res.reactions); // the server's numbers win
-            qc.invalidateQueries({ queryKey: ["popular"] });
+            if (keepFeedOrder) patchFeeds(qc, res);
+            else qc.invalidateQueries({ queryKey: ["popular"] });
         },
     });
 }

@@ -972,9 +972,9 @@ export default function MediaDetails() {
                 {/* Hero content — mobile: poster + title block side by side, everything else full width.
                     sm+: poster left (spans both rows), info stacked on the right. */}
                 <div className="relative px-4 sm:px-6 md:px-8 lg:px-12 pt-6 sm:pt-10 pb-8" style={{ zIndex: 1 }}>
-                    <div className="grid grid-cols-[8rem_1fr] sm:grid-cols-[11rem_1fr] md:grid-cols-[13rem_1fr] lg:grid-cols-[14rem_1fr] sm:grid-rows-[auto_1fr] gap-x-4 sm:gap-x-8 max-w-6xl">
+                    <div className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] md:grid-cols-[13rem_1fr] lg:grid-cols-[14rem_1fr] sm:grid-rows-[auto_1fr] sm:gap-x-8 max-w-6xl">
                         {/* ── Poster ──────────────────────────────────────── */}
-                        <div className="sm:row-span-2 min-w-0">
+                        <div className="w-44 mx-auto sm:w-auto sm:mx-0 sm:row-span-2 min-w-0">
                             <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl bg-base-300">
                                 {poster ? (
                                     <img src={poster} alt={title} className="w-full h-full object-cover" />
@@ -985,9 +985,9 @@ export default function MediaDetails() {
                                 )}
                             </div>
 
-                            {/* Rating below poster (sm+ only — on phones it sits under the overview) */}
+                            {/* Rating below poster — all screen sizes, bar width matches poster */}
                             {rating != null && (
-                                <div className="hidden sm:block mt-3 px-0.5">
+                                <div className="mt-3 px-0.5">
                                     <div className="flex items-end justify-between mb-1.5">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-base font-bold text-base-content">{rating.toFixed(1)}</span>
@@ -1001,7 +1001,7 @@ export default function MediaDetails() {
                         </div>
 
                         {/* ── Title block ─────────────────────────────────── */}
-                        <div className="min-w-0 self-start">
+                        <div className="min-w-0 self-start mt-5 sm:mt-0">
                             <div className="flex flex-wrap gap-1.5 mb-2.5">
                                 <Badge className={isAnime ? "bg-secondary text-secondary-content" : isSeries ? "bg-accent text-accent-content" : "bg-primary text-primary-content"}>
                                     {isAnime ? "Anime" : isSeries ? "Series" : "Movie"}
@@ -1053,7 +1053,7 @@ export default function MediaDetails() {
                         </div>
 
                         {/* ── Ratings, genres, actions, overview ──────────── */}
-                        <div className="col-span-2 sm:col-span-1 sm:col-start-2 min-w-0 mt-4 sm:mt-3 self-start">
+                        <div className="sm:col-start-2 min-w-0 mt-4 sm:mt-3 self-start">
                             {/* Inline rating badges — IMDb / RT / TMDB */}
                             {ratings && (ratings.tmdb != null || ratings.imdb != null || ratings.rottenTomatoes) && (
                                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3">
@@ -1191,20 +1191,6 @@ export default function MediaDetails() {
                                             {overviewExpanded ? "Show less" : "Read more"}
                                         </button>
                                     )}
-                                </div>
-                            )}
-
-                            {/* Rating — phones only (sm+ shows it under the poster) */}
-                            {rating != null && (
-                                <div className="sm:hidden mt-4">
-                                    <div className="flex items-end justify-between mb-1.5">
-                                        <div className="flex items-baseline gap-1">
-                                            <span className="text-lg font-bold text-base-content">{rating.toFixed(1)}</span>
-                                            <span className="text-xs text-base-content/60">/ 10</span>
-                                        </div>
-                                        {m?.votes ? <span className="text-[11px] text-base-content/60">{fmtVotes(m.votes)} votes</span> : null}
-                                    </div>
-                                    <RatingBar rating={rating} />
                                 </div>
                             )}
                         </div>
