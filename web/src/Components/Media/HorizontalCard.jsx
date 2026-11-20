@@ -118,7 +118,7 @@ function FluxHorizontalCard({ to, state, onClick, thumbnail, badge, progress, co
                     {bottomTile && <div className={`absolute left-2 z-10 ${progress != null && !completed ? "bottom-3" : "bottom-2"}`}>{bottomTile}</div>}
 
                     {/* bottom-right: menu tile — hover on lg+, always on touch */}
-                    {(renderMenu || menu) && <div className={`absolute right-2 z-10 opacity-100 transition-opacity duration-150 lg:opacity-0 lg:group-hover:opacity-100 ${progress != null && !completed ? "bottom-3" : "bottom-2"}`}>{renderMenu ? renderMenu(FLUX_MENU_BTN) : menu}</div>}
+                    {(renderMenu || menu) && <div className={`absolute right-2 z-10 opacity-100 transition-opacity duration-150 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 ${progress != null && !completed ? "bottom-3" : "bottom-2"}`}>{renderMenu ? renderMenu(FLUX_MENU_BTN) : menu}</div>}
 
                     {/* resume bar — flush to the frame bottom */}
                     {progress != null && !completed && (

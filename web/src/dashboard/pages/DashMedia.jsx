@@ -221,6 +221,10 @@ export default function DashMedia({ onNavigate } = {}) {
         },
     });
 
+    // The server has no DELETE /api/media/:id route yet, so Delete is hidden (row menu) / disabled (bulk bar).
+    // Flip to true together with a real server-side delete.
+    const DELETE_SUPPORTED = false;
+
     const deleteMutation = useMutation({
         mutationFn: (id) => api.delete(`/api/media/${id}`),
         onSuccess: () => {
@@ -228,35 +232,39 @@ export default function DashMedia({ onNavigate } = {}) {
             showToast("Media deleted");
             setDeleteMedia(null);
         },
-        onError: (err, id) => {
-            queryClient.setQueryData(["admin", "media"], (old) => {
-                if (!old) return old;
-                const copy = JSON.parse(JSON.stringify(old));
-                ["movies", "series", "anime"].forEach((key) => {
-                    if (copy[key]?.items) {
-                        copy[key].items = copy[key].items.filter((i) => i.id !== id);
-                        copy[key].total = copy[key].items.length;
-                    }
-                });
-                return copy;
-            });
-            showToast("Media deleted (optimistic)");
+        onError: (err) => {
+            // a failed delete must NOT remove the title from the cache or claim success — it is still there
+            showToast(err?.message || "Could not delete this title", "error");
             setDeleteMedia(null);
         },
     });
 
     // Access toggle in the table (permission only — the edit modal still does title/year).
     const permissionMutation = useMutation({
+        mutationKey: ["admin", "permission-write"],
         mutationFn: ({ id, allow }) => api.post(`/api/permissions/${id}`, { permission: allow }),
         onMutate: async ({ id, allow }) => {
             await queryClient.cancelQueries({ queryKey: ["admin", "permissions"] });
-            const previous = queryClient.getQueryData(["admin", "permissions"]);
+            const prevPerms = queryClient.getQueryData(["admin", "permissions"])?.permissions || {};
+            const had = Object.prototype.hasOwnProperty.call(prevPerms, id);
             queryClient.setQueryData(["admin", "permissions"], (old) => ({ ...old, permissions: { ...(old?.permissions || {}), [id]: allow } }));
-            return { previous };
+            return { id, allow, had, prev: prevPerms[id] }; // only THIS id's old value — never a whole-cache snapshot
         },
         onError: (err, _v, ctx) => {
-            if (ctx?.previous) queryClient.setQueryData(["admin", "permissions"], ctx.previous);
+            if (ctx) {
+                queryClient.setQueryData(["admin", "permissions"], (old) => {
+                    const perms = { ...(old?.permissions || {}) };
+                    if (perms[ctx.id] !== ctx.allow) return old; // a newer write already changed this id — leave it alone
+                    if (ctx.had) perms[ctx.id] = ctx.prev;
+                    else delete perms[ctx.id];
+                    return { ...old, permissions: perms };
+                });
+            }
             showToast(err?.message || "Could not change access", "error");
+        },
+        onSettled: () => {
+            // when the LAST pending change settles, reconcile with what the server really saved
+            if (queryClient.isMutating({ mutationKey: ["admin", "permission-write"] }) <= 1) queryClient.invalidateQueries({ queryKey: ["admin", "permissions"] });
         },
     });
 
@@ -320,7 +328,7 @@ export default function DashMedia({ onNavigate } = {}) {
             .filter((m) => {
                 if (activeTab !== "all" && m._type !== activeTab) return false;
                 if (library !== "all" && String(m._libraryId) !== library) return false;
-                if (containers && !containers.includes(m._container)) return false;
+                if (containers && !(m._containers || [m._container]).some((c) => containers.includes(c))) return false; // a series can use several formats
                 if (playback && m._playback.status !== playback) return false;
                 if (qualityFilter === "below1080" && !(m.res === "720p" || m.res === "480p")) return false;
                 if (issuesOnly && !(m._flags.noMeta || m._flags.noPoster || m._flags.dup)) return false;
@@ -417,8 +425,8 @@ export default function DashMedia({ onNavigate } = {}) {
             label: "Copy file path",
             onClick: () => navigator.clipboard?.writeText(m._path || m._filename).then(() => showToast("Path copied"), () => showToast("Clipboard is not available here", "error")),
         },
-        { divider: true },
-        { icon: Trash2, label: "Delete", tone: "error", onClick: () => setDeleteMedia(m) },
+        ...(DELETE_SUPPORTED ? [{ divider: true }] : []),
+        ...(DELETE_SUPPORTED ? [{ icon: Trash2, label: "Delete", tone: "error", onClick: () => setDeleteMedia(m) }] : []),
     ];
 
     // ─── Chart data ───────────────────────────────────────────────────────────
@@ -622,7 +630,7 @@ export default function DashMedia({ onNavigate } = {}) {
                                     <ToolBtn icon={Shield} disabled={busy || !selMedia.length} onClick={() => bulk("allow")}>
                                         Allow
                                     </ToolBtn>
-                                    <ToolBtn icon={Trash2} tone="error" disabled={busy || !selMedia.length} onClick={() => setBulkConfirm(true)}>
+                                    <ToolBtn icon={Trash2} tone="error" disabled={!DELETE_SUPPORTED || busy || !selMedia.length} title={DELETE_SUPPORTED ? undefined : "Deleting titles is not supported by the server yet"} onClick={() => setBulkConfirm(true)}>
                                         Delete
                                     </ToolBtn>
                                 </>

@@ -118,7 +118,53 @@ function register(longId) {
     return s;
 }
 
-/** short → long id, or null. Falls back to the library file index when the registry has not seen it yet. */
+// Series / season / part ids are NOT file ids, but they are pure functions of the file names (see grouper.js:
+// base64url of "<type>:<normalizedTitle>", "season:<seriesId>:<n>", "part:<normalizedTitle>:<n>"). Re-deriving them from the
+// library file index lets a copied series link resolve on a cold start (empty registry / another server instance).
+// Same normalisation as grouper.js — keep the two in sync. Cached; rebuilt only when the file index changes size.
+let _derived = { size: -1, map: new Map() };
+function _normKey(title) {
+    return String(title || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+function derivedGroupIds(fileIndex) {
+    if (_derived.size === fileIndex.size) return _derived.map;
+    const map = new Map();
+    try {
+        const { parseFilename } = require("../../metadata/nameParser");
+        const b64 = (t) => Buffer.from(t).toString("base64url");
+        const add = (longId) => {
+            const sh = shortOf(longId);
+            if (!map.has(sh)) map.set(sh, longId);
+        };
+        for (const f of fileIndex.values()) {
+            let parsed;
+            try {
+                parsed = parseFilename(f.name, f.path);
+            } catch {
+                continue; // one odd file name must not stop the others
+            }
+            if (!parsed) continue;
+            const key = _normKey(parsed.title);
+            if (parsed.type === "movie") {
+                if (parsed.part != null) add(b64(`part:${key}:${parsed.part}`));
+                continue;
+            }
+            const seriesId = b64(`${parsed.type}:${key}`);
+            add(seriesId);
+            add(b64(`season:${seriesId}:${parsed.season ?? 1}`));
+        }
+    } catch (err) {
+        console.warn("[ShortIds] could not derive series ids:", err.message);
+    }
+    _derived = { size: fileIndex.size, map };
+    return map;
+}
+
+/** short → long id, or null. Falls back to the library file index (and the ids derived from it) when the registry has not seen it yet. */
 function expand(short) {
     if (!isShortId(short)) return null;
     const hit = toLong.get(short);
@@ -126,6 +172,8 @@ function expand(short) {
     try {
         const { fileIndex } = require("../media/mediaCache");
         for (const id of fileIndex.keys()) if (shortOf(id) === short) { register(id); return id; }
+        const grouped = derivedGroupIds(fileIndex).get(short);
+        if (grouped) { register(grouped); return grouped; }
     } catch {}
     return null;
 }

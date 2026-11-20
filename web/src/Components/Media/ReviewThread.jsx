@@ -20,7 +20,8 @@ import { API_BASE_URL } from "../../Api/client";
 // TMDB (and OMDb) have no reactions for reviews, so a fresh review would show 0 everywhere. While
 // PLACEHOLDER_REACTIONS is true, every REVIEW shows at least a steady placeholder number (3–10, derived from its id,
 // so it never changes between reloads or users) and your users' real reactions take over:
-//     shown = max(real, placeholder)        → reaching the placeholder and above, the number IS the real count;
+//     shown = max(others, placeholder) + yours → YOUR own reaction is always added on top, so a like / unlike is
+//                                              visible (+1 / -1) at once; others' reactions fill the placeholder first and
 //                                              anything above 10 is always the real count.
 // It is display-only: nothing fake is ever sent to or stored on the server (reviews.json holds real reactions only).
 // Comments / replies are never padded. Set to false to show real numbers only.
@@ -37,14 +38,19 @@ export function placeholderBase(id) {
     return PLACEHOLDER_MIN + ((h >>> 0) % (PLACEHOLDER_MAX - PLACEHOLDER_MIN + 1));
 }
 
-/** a plain number (Home cards): max(real, placeholder) */
-export const seedCount = (n, id) => (PLACEHOLDER_REACTIONS ? Math.max(n || 0, placeholderBase(id)) : n || 0);
+/** a plain number (Home cards): max(others, placeholder) + yours — `own` = the viewer has reacted (that reaction is inside `n`) */
+export function seedCount(n, id, own = false) {
+    if (!PLACEHOLDER_REACTIONS) return n || 0;
+    const mine = own ? 1 : 0;
+    return Math.max(Math.max(0, (n || 0) - mine), placeholderBase(id)) + mine;
+}
 
-/** a reaction summary { counts, total, mine }: the missing part up to the placeholder is shown as 👍 / ❤️ */
+/** a reaction summary { counts, total, mine }: the missing part up to the placeholder is shown as 👍 / ❤️ (your own reaction never counts toward it) */
 export function seedReactions(summary, id) {
     const s = summary || { counts: {}, total: 0, mine: null };
     if (!PLACEHOLDER_REACTIONS) return s;
-    const rest = Math.max(0, placeholderBase(id) - (s.total || 0));
+    const others = Math.max(0, (s.total || 0) - (s.mine ? 1 : 0));
+    const rest = Math.max(0, placeholderBase(id) - others);
     if (!rest) return s;
     const like = Math.ceil(rest * 0.65);
     const counts = { ...s.counts };

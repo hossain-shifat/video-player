@@ -161,7 +161,13 @@ export function ReviewCard({ review, onOpen, onLike, wide = false }) {
             role="button"
             tabIndex={0}
             onClick={onOpen}
-            onKeyDown={(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && onOpen?.()}
+            onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return; // keys on the nested Like button belong to the button
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpen?.();
+                }
+            }}
             className={`flex cursor-pointer select-text flex-col overflow-hidden rounded-xl bg-base-200 outline-none transition-colors duration-150 hover:bg-base-300 focus:outline-none focus-visible:outline-none ${wide ? "w-full" : "h-44 w-[258px] shrink-0"}`}>
             <div className={`flex items-center gap-2.5 ${pad} ${wide ? "pt-4" : "pt-3.5"}`}>
                 <Avatar src={review.author?.avatar} name={review.author?.name} size={wide ? 40 : 36} />
@@ -212,11 +218,12 @@ const SORTS = [
 /**
  * Props:
  *   tmdbId     {number}  TMDB id of the title (movie or show)
- *   mediaType  {string}  "movie" | "series" | "anime"  (series + anime → tv)
+ *   mediaType  {string}  "movie" | "series" | "anime"  (fallback only — an anime title can be a film OR a show)
+ *   kind       {string}  "movie" | "tv" — the title's real TMDB namespace; wins over mediaType when given
  *   title, poster, backdrop — only used to label a review written for a title that is not in the library
  */
-export default function Reviews({ tmdbId, mediaType, title, poster, backdrop }) {
-    const kind = mediaType === "movie" ? "movie" : "tv";
+export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, poster, backdrop }) {
+    const kind = kindProp === "movie" || kindProp === "tv" ? kindProp : mediaType === "movie" ? "movie" : "tv";
     const { isAuthenticated } = useAuth();
     const { openAuthModal } = useAuthModal();
     const navigate = useNavigate();
@@ -316,6 +323,16 @@ export default function Reviews({ tmdbId, mediaType, title, poster, backdrop }) 
             <div ref={scrollRef} className="-mx-1 flex gap-3 overflow-x-auto px-1 py-2.5" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                 {!data && q.isLoading && [0, 1, 2].map((i) => <div key={i} className="h-44 w-[258px] shrink-0 animate-pulse rounded-xl bg-base-200" />)}
 
+                {!data && q.isError && (
+                    <div className="flex h-44 w-[258px] shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-base-200/50 p-5 text-center">
+                        <p className="text-sm font-bold text-white">Couldn&apos;t load reviews</p>
+                        <p className="text-xs text-base-content/60">Check your connection and try again.</p>
+                        <button type="button" onClick={() => q.refetch()} className="mt-1 cursor-pointer rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content hover:bg-primary/85">
+                            Retry
+                        </button>
+                    </div>
+                )}
+
                 {data && !items.length && data.importing && [0, 1, 2].map((i) => <div key={i} className="h-44 w-[258px] shrink-0 animate-pulse rounded-xl bg-base-200" />)}
 
                 {data && !items.length && !data.importing && (
@@ -378,31 +395,45 @@ export function PopularCardShell({ id, mine, media, headline, rating, body, auth
 
     // ── like button: works IN the card (no redirect) and is saved on the server.
     //    `mine` = the viewer's own reaction from the feed ("like" | … | null) → the thumb is filled after a reload too.
-    //    The count moves instantly (delta); useReact({ keepFeedOrder }) then patches the cached feed card in place.
+    //    The count moves instantly; useReact then patches the cached feed card in place (no refetch).
     const { isAuthenticated } = useAuth();
     const { openAuthModal } = useAuthModal();
     const react = useReact({ keepFeedOrder: true }); // feed stays put: no refetch → no re-rank, no skeleton, no scroll jump
     const [liked, setLiked] = useState(mine === "like");
-    const [delta, setDelta] = useState(0);
-    useEffect(() => setLiked(mine === "like"), [mine]);
-    useEffect(() => setDelta(0), [likes]);
-    const shownLikes = Math.max(0, (likes ?? 0) + delta);
+    const [own, setOwn] = useState(Boolean(mine)); // the viewer has ANY reaction on it (already inside the real total)
+    // `likes` = the REAL reaction total from the feed. We keep the real number and seed it only for display
+    // (max(real, placeholder) — the same rule as ReviewCard and the review page), so a click never mixes real and placeholder numbers.
+    const [real, setReal] = useState(likes ?? 0);
+    useEffect(() => {
+        setLiked(mine === "like");
+        setOwn(Boolean(mine));
+    }, [mine]);
+    useEffect(() => setReal(likes ?? 0), [likes]);
+    const shownLikes = seedCount(real, id, own); // your own like is added on top → every click moves the number by 1
 
     const toggleLike = () => {
         if (!id || react.isPending) return;
         if (!isAuthenticated) return openAuthModal({ view: "login" });
         const next = !liked;
         const prevLiked = liked;
-        const prevDelta = delta;
+        const prevReal = real;
+        const prevOwn = own;
         setLiked(next);
-        setDelta(prevDelta + (next ? 1 : -1));
+        setOwn(next);
+        setReal(Math.max(0, prevReal + (next ? 1 : 0) - (prevOwn ? 1 : 0)));
         react.mutate(
             { kind: "review", id, type: next ? "like" : null },
             {
-                onSuccess: (res) => res?.reactions && setLiked(res.reactions.mine === "like"),
+                onSuccess: (res) => {
+                    if (!res?.reactions) return;
+                    setLiked(res.reactions.mine === "like");
+                    setOwn(Boolean(res.reactions.mine));
+                    setReal(res.reactions.total ?? 0); // the server's real total is authoritative
+                },
                 onError: () => {
                     setLiked(prevLiked);
-                    setDelta(prevDelta);
+                    setOwn(prevOwn);
+                    setReal(prevReal);
                 },
             },
         );
@@ -567,7 +598,7 @@ export function PopularReviews({ items, loading, title = "Popular Reviews" }) {
                     author={it.author}
                     avatar={it.avatar}
                     date={it.createdAt}
-                    likes={seedCount(it.likes, it.id)}
+                    likes={it.likes}
                     comments={it.comments}
                     onMore={() => navigate(`/review/${it.id}`)}
                 />

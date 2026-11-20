@@ -42,6 +42,7 @@ export default function DiscussionPage() {
 
     useEffect(() => {
         window.scrollTo(0, 0);
+        setErr(""); // an error from the previous discussion must not follow us to the next one
     }, [id]);
 
     useEffect(() => {
@@ -306,7 +307,7 @@ export default function DiscussionPage() {
                             <div className="sticky bottom-4 z-20 mt-auto pt-6">
                                 <div className="rounded-2xl border border-white/10 bg-base-200 p-2 shadow-[0_8px_30px_rgba(0,0,0,0.55)]">
                                     {isAuthenticated ? (
-                                        <Composer key={id} variant="pill" user={user} placeholder="Leave a comment…" submitLabel="Send" onSubmit={postTop} pending={addMut.isPending && !replyTo} />
+                                        <Composer key={id} variant="pill" user={user} placeholder="Leave a comment…" submitLabel="Send" onSubmit={postTop} pending={addMut.isPending} />
                                     ) : (
                                         <button onClick={login} className="w-full cursor-pointer rounded-xl px-4 py-2.5 text-left text-sm text-base-content/60 transition-colors hover:text-white">
                                             Log in to leave a comment

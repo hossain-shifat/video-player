@@ -667,6 +667,9 @@ export default function DashOverview({ onNavigate } = {}) {
     const greeting = hour < 5 ? "Good night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
     const onlineSet = useMemo(() => new Set(live?.onlineUserIds ?? []), [live]);
+    // onlineSet holds USER ids: a user with one active and one stale session would show both as online. A session is
+    // online by ITS OWN activity (server flag if given, else last-seen within 5 min); user-level presence stays for account rows.
+    const isSessionOnline = (sess) => (typeof sess.online === "boolean" ? sess.online : !!sess.lastSeen && Date.now() - new Date(sess.lastSeen).getTime() < 5 * 60 * 1000);
     const onlineCount = live ? live.onlineUserIds.length : (stats?.sessions?.active ?? 0);
 
     const errors24h = useMemo(() => {
@@ -819,9 +822,10 @@ export default function DashOverview({ onNavigate } = {}) {
             .forEach((l, i) =>
                 rows.push({ id: `e-${i}-${l.ts}`, kind: "errors", tone: "error", icon: AlertTriangle, text: String(l.message || "").slice(0, 120), sub: l.category || "system", at: l.ts }),
             );
-        return rows.sort((x, y) => new Date(y.at) - new Date(x.at)).slice(0, 6);
+        return rows.sort((x, y) => new Date(y.at) - new Date(x.at)); // everything, newest first — the filter and the limit come AFTER
     }, [an, errors24h]);
-    const visibleFeed = feed.filter((f) => feedFilter === "all" || f.kind === feedFilter);
+    // filter first, then keep the six newest of what matches (otherwise six newer account events hide an available error)
+    const visibleFeed = feed.filter((f) => feedFilter === "all" || f.kind === feedFilter).slice(0, 6);
 
     const refreshAll = () => {
         statsQuery.refetch();
@@ -1719,12 +1723,12 @@ export default function DashOverview({ onNavigate } = {}) {
                         <ul className="flex flex-1 flex-col divide-y divide-base-300">
                             {activity.recentSessions.map((s) => (
                                 <li key={s.id} className="flex flex-1 items-center gap-3 px-4 py-2.5">
-                                    <Avatar name={s.user?.name || s.user?.email} online={onlineSet.has(s.user?.id)} />
+                                    <Avatar name={s.user?.name || s.user?.email} online={isSessionOnline(s)} />
                                     <div className="min-w-0 flex-1">
                                         <p className="truncate text-sm font-medium">{s.user?.name || s.user?.email || "—"}</p>
                                         <p className="truncate text-xs text-base-content/75">{[s.device, s.browser, s.os].filter(Boolean).join(" · ") || "Unknown device"}</p>
                                     </div>
-                                    <span className="text-xs text-base-content/75">{onlineSet.has(s.user?.id) ? "online" : fmtRel(s.lastSeen)}</span>
+                                    <span className="text-xs text-base-content/75">{isSessionOnline(s) ? "online" : fmtRel(s.lastSeen)}</span>
                                 </li>
                             ))}
                         </ul>

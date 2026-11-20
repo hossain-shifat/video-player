@@ -144,6 +144,33 @@ app.use("/api/categories", categoriesRouter);
 app.use("/api/admin-dashboard", adminDashboardRouter);
 app.use("/api/live", liveRouter);
 app.use("/api/trailers", trailersRouter);
+// Tracks in-flight review requests so shutdown can drain them separately from long-lived HLS connections.
+// reviewState.draining → new review requests are refused; reviewState.sealed → a still-running write may no longer be
+// acknowledged to the client (so the user is never told "saved" for something that missed the final snapshot).
+const reviewState = { inflight: 0, draining: false, sealed: false, waiters: [] };
+app.use("/api/reviews", (req, res, next) => {
+    if (reviewState.draining) return res.status(503).set("Retry-After", "5").json({ error: "Server is restarting — try again in a moment", code: "SHUTTING_DOWN" });
+    reviewState.inflight++;
+    let done = false;
+    const fin = () => {
+        if (done) return;
+        done = true;
+        if (--reviewState.inflight === 0) reviewState.waiters.splice(0).forEach((w) => w());
+    };
+    res.on("finish", fin);
+    res.on("close", fin);
+    if (req.method !== "GET" && req.method !== "HEAD") {
+        const send = res.json.bind(res);
+        res.json = (body) => {
+            if (reviewState.sealed && res.statusCode < 400) {
+                res.status(503);
+                return send({ error: "Server is restarting — this change was not saved", code: "SHUTTING_DOWN" });
+            }
+            return send(body);
+        };
+    }
+    next();
+});
 app.use("/api/reviews", reviewsRouter); // review system: reviews · reactions · discussions (data/media/reviews.json)
 app.use("/api/notifications", notificationsRouter);
 app.use("/stream", streamRouter);
@@ -271,24 +298,30 @@ async function shutdown(signal) {
     stopDaemon();
     stopTrailerScheduler();
     stopReviewScheduler();
-    // Stop taking NEW requests and give in-flight ones (review writes, imports) a moment to finish,
-    // so nothing can schedule a save after the final flush below. Capped — long HLS streams must not stall exit.
+    // 1) refuse NEW review requests and stop new connections (HLS streams may stay open — they are not waited for)
+    reviewState.draining = true;
+    try {
+        server.close();
+        server.closeIdleConnections?.();
+    } catch {
+        /* already closed */
+    }
+    // 2) let in-flight review handlers finish and commit, up to a deadline
     await new Promise((resolve) => {
+        if (reviewState.inflight === 0) return resolve();
         const cap = setTimeout(resolve, 3000);
         cap.unref?.();
-        try {
-            server.close(() => {
-                clearTimeout(cap);
-                resolve();
-            });
-            server.closeIdleConnections?.();
-        } catch {
+        reviewState.waiters.push(() => {
             clearTimeout(cap);
             resolve();
-        }
+        });
     });
+    // 3) deadline passed → whatever is still running can no longer acknowledge its write
+    reviewState.sealed = true;
+    // 4) final snapshot (retries failed saves until its own deadline)
     try {
-        await flushReviews(); // write any review/reaction/reply still waiting for its debounced save
+        const ok = await flushReviews();
+        if (!ok) console.error("[Server] WARNING: some review changes could not be saved before exit");
     } catch (err) {
         console.error("[Server] Review flush failed:", err?.message || err);
     }
@@ -298,7 +331,7 @@ async function shutdown(signal) {
     subtitleWorker.stop();
     await transcoderService.killAllSessions();
     try {
-        await flushReviews(); // last chance: anything that slipped in while sessions were closing
+        await flushReviews(); // last chance: anything a still-running writer committed while sessions were closing
     } catch (err) {
         console.error("[Server] Final review flush failed:", err?.message || err);
     }

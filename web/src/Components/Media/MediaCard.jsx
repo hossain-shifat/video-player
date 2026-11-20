@@ -309,10 +309,12 @@ function getRuntimeLabel(item) {
 
 /** series label, e.g. "2 SE · 18 EPI" */
 function getSeasonEpLabel(item) {
-    const seasons = num(item?.seasonCount ?? item?.metadata?.seasonCount ?? item?.seasons?.length);
+    // grouped series carry `seasons` as a KEYED object ({ 1: {...}, 2: {...} }); other callers pass an array — count both
+    const seasonList = Array.isArray(item?.seasons) ? item.seasons : item?.seasons && typeof item.seasons === "object" ? Object.values(item.seasons) : [];
+    const seasons = num(item?.seasonCount ?? item?.metadata?.seasonCount ?? seasonList.length);
     let eps = num(item?.episodeCount ?? item?.metadata?.episodeCount);
-    if (!eps && Array.isArray(item?.seasons)) {
-        const total = item.seasons.reduce((n, s) => n + (Array.isArray(s?.episodes) ? s.episodes.length : 0), 0);
+    if (!eps && seasonList.length) {
+        const total = seasonList.reduce((n, s) => n + (Array.isArray(s?.episodes) ? s.episodes.length : 0), 0);
         eps = num(total);
     }
     if (!eps && Array.isArray(item?.episodes)) eps = num(item.episodes.length);
@@ -373,7 +375,19 @@ function FluxMediaCard({ item, onWatchTrailer, badge: badgeProp, badgeDot: dotPr
     const surface = "bg-base-200 group-hover:bg-base-300";
 
     return (
-        <div onClick={() => navigate(`/media/${routeId(media.id)}`)} className="group relative my-2 w-40 shrink-0 cursor-pointer select-none sm:w-44">
+        <div
+            role="link"
+            tabIndex={0}
+            aria-label={media.title}
+            onClick={() => navigate(`/media/${routeId(media.id)}`)}
+            onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return; // keys on the nested action buttons are theirs
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    navigate(`/media/${routeId(media.id)}`);
+                }
+            }}
+            className="group relative my-2 w-40 shrink-0 cursor-pointer select-none rounded-lg focus-visible:outline-2 focus-visible:outline-primary/70 sm:w-44">
             <div className="overflow-hidden rounded-lg bg-base-200 shadow-md transition-colors duration-150 group-hover:bg-base-300">
                 {/* ── Poster ── */}
                 <div className="relative aspect-5/7 w-full bg-base-300">
@@ -437,7 +451,7 @@ function FluxMediaCard({ item, onWatchTrailer, badge: badgeProp, badgeDot: dotPr
 
                     {/* Hover actions (lg+): tiled strip */}
                     {!isUpcoming && (
-                        <div className="absolute inset-x-0 bottom-0 hidden translate-y-full grid-cols-3 gap-1.5 bg-base-300 p-1.5 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100 lg:grid" onClick={(e) => e.stopPropagation()}>
+                        <div className="absolute inset-x-0 bottom-0 hidden translate-y-full grid-cols-3 gap-1.5 bg-base-300 p-1.5 opacity-0 transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 lg:grid" onClick={(e) => e.stopPropagation()}>
                             <button type="button" onClick={() => toggleFavourite(media.id, payload)} aria-label="Favourite" className="flex h-8 cursor-pointer items-center justify-center rounded-md border-none bg-base-200 transition-colors hover:bg-base-100">
                                 <Heart size={15} className={favourited ? "fill-primary text-primary" : "text-base-content"} />
                             </button>

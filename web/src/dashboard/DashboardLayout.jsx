@@ -369,6 +369,25 @@ function AccountMenu({ user, logout }) {
 
 /* ─── Layout ─────────────────────────────────────────────────────────────── */
 
+const SCROLL_KEY = "flux-dash-scroll";
+const SCROLL_MAX = 100; // newest entries kept
+function readScrollPositions() {
+    try {
+        const raw = sessionStorage.getItem(SCROLL_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Map(Array.isArray(arr) ? arr.filter((e) => Array.isArray(e) && typeof e[0] === "string" && Number.isFinite(e[1])) : []);
+    } catch {
+        return new Map();
+    }
+}
+function writeScrollPositions(map) {
+    try {
+        sessionStorage.setItem(SCROLL_KEY, JSON.stringify([...map].slice(-SCROLL_MAX)));
+    } catch {
+        /* storage unavailable or full — in-memory positions still work */
+    }
+}
+
 export default function DashboardLayout() {
     const { user, logout } = useAuth();
     const [collapsed, setCollapsed] = useState(readCollapsed);
@@ -379,7 +398,18 @@ export default function DashboardLayout() {
     // <main> below is the dashboard's scroll container (the window never scrolls here), so the global
     // <ScrollRestoration /> can't see it. New page -> top. Back/Forward -> the position it had when left.
     const mainRef = useRef(null);
-    const scrollPositions = useRef(new Map());
+    // Positions live in sessionStorage (not just a ref): leaving the dashboard unmounts this layout, and browser Back must
+    // still find where each dashboard page was scrolled. sessionStorage = per tab, gone when the tab closes — right lifetime.
+    const scrollPositions = useRef(null);
+    if (scrollPositions.current === null) scrollPositions.current = readScrollPositions();
+    const scrollSaveTimer = useRef(null);
+    useEffect(
+        () => () => {
+            clearTimeout(scrollSaveTimer.current);
+            writeScrollPositions(scrollPositions.current);
+        },
+        [],
+    );
     const prevPath = useRef(null);
     const { pathname, key: locationKey } = useLocation();
     const navType = useNavigationType();
@@ -413,12 +443,37 @@ export default function DashboardLayout() {
         return () => document.removeEventListener("keydown", onKey);
     }, [toggle]);
 
-    // Escape closes the mobile drawer
+    // Mobile drawer: Escape closes; focus moves into it, Tab stays inside it, and focus returns to the menu button on close
+    const drawerRef = useRef(null);
+    const menuBtnRef = useRef(null);
     useEffect(() => {
         if (!mobileOpen) return;
-        const onKey = (e) => e.key === "Escape" && setMobileOpen(false);
+        const trigger = menuBtnRef.current;
+        const focusables = () => [...(drawerRef.current?.querySelectorAll('a[href], button:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])') ?? [])].filter((el) => el.offsetParent !== null);
+        focusables()[0]?.focus();
+        const onKey = (e) => {
+            if (e.key === "Escape") return setMobileOpen(false);
+            if (e.key !== "Tab") return;
+            const f = focusables();
+            if (!f.length) return;
+            const first = f[0];
+            const last = f[f.length - 1];
+            if (!drawerRef.current?.contains(document.activeElement)) {
+                e.preventDefault();
+                first.focus();
+            } else if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
         document.addEventListener("keydown", onKey);
-        return () => document.removeEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            trigger?.focus();
+        };
     }, [mobileOpen]);
 
     if (!user) {
@@ -460,7 +515,7 @@ export default function DashboardLayout() {
             {mobileOpen && (
                 <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-modal="true" aria-label="Navigation menu">
                     <button type="button" tabIndex={-1} aria-label="Close menu" className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-                    <div className="relative z-10 h-full w-72 max-w-[85vw] border-r border-base-content/10 shadow-2xl">
+                    <div ref={drawerRef} className="relative z-10 h-full w-72 max-w-[85vw] border-r border-base-content/10 shadow-2xl">
                         <Sidebar collapsed={false} variant="drawer" onNav={() => setMobileOpen(false)} onToggle={() => setMobileOpen(false)} user={user} />
                     </div>
                 </div>
@@ -473,6 +528,7 @@ export default function DashboardLayout() {
                     <button
                         type="button"
                         className={`flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-content/10 hover:text-base-content md:hidden ${FOCUS}`}
+                        ref={menuBtnRef}
                         onClick={() => setMobileOpen(true)}
                         aria-label="Open menu">
                         <Menu size={19} aria-hidden="true" />
@@ -494,7 +550,11 @@ export default function DashboardLayout() {
                     <AccountMenu user={user} logout={logout} />
                 </header>
 
-                <main ref={mainRef} onScroll={(e) => scrollPositions.current.set(locationKey, e.currentTarget.scrollTop)} className="flex-1 overflow-auto bg-base-100 p-4 sm:p-6">
+                <main ref={mainRef} onScroll={(e) => {
+                    scrollPositions.current.set(locationKey, e.currentTarget.scrollTop);
+                    clearTimeout(scrollSaveTimer.current);
+                    scrollSaveTimer.current = setTimeout(() => writeScrollPositions(scrollPositions.current), 250);
+                }} className="flex-1 overflow-auto bg-base-100 p-4 sm:p-6">
                     <Outlet />
                 </main>
             </div>

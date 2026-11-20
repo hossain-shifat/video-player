@@ -99,6 +99,11 @@ export default function SubtitlesTable({ posterIndex, onToast }) {
     const rows = listQ.data?.rows ?? [];
     const total = listQ.data?.total ?? 0;
     const pages = listQ.data?.pages ?? 1;
+    // the last row of the last page was deleted → the server now has fewer pages than we are asking for
+    useEffect(() => {
+        const total = listQ.data?.pages;
+        if (total && page > total) setPage(total);
+    }, [listQ.data?.pages, page]);
     const selRows = rows.filter((r) => selected.has(r.key));
 
     const langTabs = useMemo(() => (ov?.languages ?? []).slice(0, 3), [ov]);

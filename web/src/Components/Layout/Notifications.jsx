@@ -11,9 +11,13 @@ import { NotificationModal, FOCUS_RING, Visual, fmtDate, timeAgo, useResolvedMed
 // ── Config ────────────────────────────────────────────────────────────────────
 const GROUPS = ["Today", "Yesterday", "Earlier"];
 
-// Tabs. `test` decides which notifications a tab shows. Adjust isAccount() if your account-type names differ.
+// Tabs. `test` decides which notifications a tab shows.
+// Account tab = an EXPLICIT set of backend notification types (no text matching, so an unrelated type whose name merely
+// contains "role" / "access" can never leak in, and "signup_pending" — a pending sign-up — is always included).
+// Add a name here when the backend gains a new account-level notification type.
 const isMedia = (n) => n.type === "new_media";
-const isAccount = (n) => /account|access|role|approv|permission/i.test(`${n.type ?? ""} ${n.category ?? ""}`);
+const ACCOUNT_TYPES = new Set(["account", "signup_pending", "account_approved", "account_blocked", "account_pending", "role_changed", "access_granted", "access_revoked", "permission_changed"]);
+const isAccount = (n) => ACCOUNT_TYPES.has(n.type);
 
 function bucketOf(iso) {
     const d = new Date(iso);
@@ -104,6 +108,7 @@ const Notifications = () => {
 
     const btnRef = useRef(null);
     const panelRef = useRef(null);
+    const backRef = useRef(null);
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const [selectedId, setSelectedId] = useState(null);
@@ -119,6 +124,36 @@ const Notifications = () => {
         setOpen(false);
         if (restoreFocus) btnRef.current?.focus();
     }, []);
+
+    // Mobile full-screen panel only: move focus to Back, keep Tab inside the panel, give focus back to the bell on close.
+    // (The desktop dropdown keeps its normal, non-modal behaviour.)
+    useEffect(() => {
+        if (!open || !isMobile) return;
+        const bell = btnRef.current;
+        backRef.current?.focus();
+        function trap(e) {
+            if (e.key !== "Tab" || !panelRef.current) return;
+            const f = [...panelRef.current.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+            if (!f.length) return;
+            const first = f[0];
+            const last = f[f.length - 1];
+            if (!panelRef.current.contains(document.activeElement)) {
+                e.preventDefault();
+                first.focus();
+            } else if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
+        document.addEventListener("keydown", trap);
+        return () => {
+            document.removeEventListener("keydown", trap);
+            bell?.focus(); // closed by any route → focus returns to the bell
+        };
+    }, [open, isMobile]);
 
     // Outside click + Escape
     useEffect(() => {
@@ -229,6 +264,7 @@ const Notifications = () => {
             {/* Header — one row: back (mobile) / title / mark all read / close (desktop) */}
             <div className="flex items-center gap-1.5 px-3 pt-3 pb-2 md:px-4 md:pt-4">
                 <button
+                    ref={backRef}
                     onClick={() => close(true)}
                     className={`flex size-10 shrink-0 items-center justify-center rounded-md text-base-content/85 hover:text-base-content hover:bg-base-300 transition-colors duration-150 cursor-pointer md:hidden ${FOCUS_RING}`}
                     aria-label="Back">
@@ -304,7 +340,7 @@ const Notifications = () => {
 
                     {confirmClear ? (
                         <div className="flex items-center gap-2 px-1">
-                            <span className="flex-1 text-xs text-base-content/85">Delete all {items.length}?</span>
+                            <span className="flex-1 text-xs text-base-content/85">Delete all notifications?</span>
                             <button
                                 onClick={() => setConfirmClear(false)}
                                 className={`h-10 md:h-9 rounded-md bg-base-300 px-3 text-xs font-medium text-base-content/85 hover:text-base-content transition-colors duration-150 cursor-pointer ${FOCUS_RING}`}>

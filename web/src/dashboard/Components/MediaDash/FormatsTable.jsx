@@ -59,7 +59,7 @@ export default function FormatsTable({ formats, source, totalTitles, onShowTitle
         downloadCsv(
             "file-formats.csv",
             ["Format", "Name", "Titles", "Files", "Size (bytes)", "Avg bitrate (bps)", "Video codecs", "Audio codecs", "Embedded subs", "Playback"],
-            (selected.size ? rows.filter((r) => selected.has(r.label)) : rows).map((r) => [r.label, r.name, r.titles, r.files, r.bytes, Math.round(r.avgBitrate), r.vcodecs.join(" "), r.acodecs.join(" "), r.subs.join(" "), PLAYBACK_LABEL[r.status]]),
+            (selected.size ? formats.filter((r) => selected.has(r.label)) : rows).map((r) => [r.label, r.name, r.titles, r.files, r.bytes, Math.round(r.avgBitrate), r.vcodecs.join(" "), r.acodecs.join(" "), r.subs.join(" "), PLAYBACK_LABEL[r.status]]),
         );
         onToast("Format list exported");
     };

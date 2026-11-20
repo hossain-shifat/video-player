@@ -39,17 +39,34 @@ let loadPromise = null;
 let byKey = new Map(); // titleKey → Set(reviewId)
 let repliesByReview = new Map(); // reviewId → Set(replyId)
 
-function rebuildIndexes() {
-    byKey = new Map();
-    repliesByReview = new Map();
-    for (const r of Object.values(data.reviews)) {
-        if (!byKey.has(r.key)) byKey.set(r.key, new Set());
-        byKey.get(r.key).add(r.id);
+// Builds BOTH indexes from a candidate dataset and validates every record on the way. Throws on a malformed record,
+// so a bad file can never be half-installed: callers swap `data` + indexes in only after this succeeded.
+function buildIndexes(d) {
+    const nextByKey = new Map();
+    const nextReplies = new Map();
+    for (const r of Object.values(d.reviews)) {
+        if (!r || typeof r !== "object" || typeof r.id !== "string" || typeof r.key !== "string") throw new Error("malformed review record");
+        if (!nextByKey.has(r.key)) nextByKey.set(r.key, new Set());
+        nextByKey.get(r.key).add(r.id);
     }
-    for (const rp of Object.values(data.replies)) {
-        if (!repliesByReview.has(rp.reviewId)) repliesByReview.set(rp.reviewId, new Set());
-        repliesByReview.get(rp.reviewId).add(rp.id);
+    for (const rp of Object.values(d.replies)) {
+        if (!rp || typeof rp !== "object" || typeof rp.id !== "string" || typeof rp.reviewId !== "string") throw new Error("malformed reply record");
+        if (!nextReplies.has(rp.reviewId)) nextReplies.set(rp.reviewId, new Set());
+        nextReplies.get(rp.reviewId).add(rp.id);
     }
+    return { nextByKey, nextReplies };
+}
+
+function install(d) {
+    const { nextByKey, nextReplies } = buildIndexes(d);
+    data = d;
+    byKey = nextByKey;
+    repliesByReview = nextReplies;
+    loaded = true; // only after validation AND both indexes succeeded
+}
+
+function emptyData() {
+    return { version: 1, titles: {}, reviews: {}, replies: {} };
 }
 
 async function loadStore() {
@@ -57,45 +74,52 @@ async function loadStore() {
     if (loadPromise) return loadPromise;
     loadPromise = (async () => {
         try {
-            const raw = await fs.promises.readFile(STORE_FILE, "utf-8");
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object") {
-                data = {
-                    version: 1,
-                    titles: parsed.titles && typeof parsed.titles === "object" ? parsed.titles : {},
-                    reviews: parsed.reviews && typeof parsed.reviews === "object" ? parsed.reviews : {},
-                    replies: parsed.replies && typeof parsed.replies === "object" ? parsed.replies : {},
-                };
+            let raw;
+            try {
+                raw = await fs.promises.readFile(STORE_FILE, "utf-8");
+            } catch (err) {
+                if (err.code === "ENOENT") {
+                    install(emptyData());
+                    return;
+                }
+                // EACCES / EBUSY …: do NOT start from an empty store (the next save would overwrite the real file).
+                console.error("[Reviews] Failed to read store (will retry on next access):", err.message);
+                throw err;
             }
-            console.log(`[Reviews] Loaded store (titles=${Object.keys(data.titles).length}, reviews=${Object.keys(data.reviews).length}, replies=${Object.keys(data.replies).length})`);
-            loaded = true;
-        } catch (err) {
-            if (err.code === "ENOENT") {
-                data = { version: 1, titles: {}, reviews: {}, replies: {} };
-                rebuildIndexes();
-                loaded = true;
-            } else if (err instanceof SyntaxError) {
+
+            let parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (err) {
                 // Corrupt JSON can never become valid by retrying — keep a copy for manual recovery, then start empty.
                 const bak = `${STORE_FILE}.corrupt-${Date.now()}`;
                 try {
                     await fs.promises.copyFile(STORE_FILE, bak);
-                    console.error(`[Reviews] reviews.json is corrupt — copied to ${bak}, starting empty:`, err.message);
                 } catch (copyErr) {
                     console.error("[Reviews] reviews.json is corrupt and could not be backed up — leaving it untouched:", copyErr.message);
                     throw err;
                 }
-                data = { version: 1, titles: {}, reviews: {}, replies: {} };
-                rebuildIndexes();
-                loaded = true;
-            } else {
-                // EACCES / EBUSY / bad JSON …: do NOT start from an empty store (the next save would
-                // overwrite the real file). Leave `loaded` false so the next call retries.
-                console.error("[Reviews] Failed to load store (will retry on next access):", err.message);
+                console.error(`[Reviews] reviews.json is corrupt — copied to ${bak}, starting empty:`, err.message);
+                install(emptyData());
+                return;
+            }
+
+            const next = emptyData();
+            if (parsed && typeof parsed === "object") {
+                if (parsed.titles && typeof parsed.titles === "object") next.titles = parsed.titles;
+                if (parsed.reviews && typeof parsed.reviews === "object") next.reviews = parsed.reviews;
+                if (parsed.replies && typeof parsed.replies === "object") next.replies = parsed.replies;
+            }
+            try {
+                install(next);
+            } catch (err) {
+                // valid JSON, invalid records: stays unloaded (and untouched on disk) until the data is repaired
+                console.error("[Reviews] reviews.json holds malformed records — NOT loaded, file left untouched:", err.message);
                 throw err;
             }
+            console.log(`[Reviews] Loaded store (titles=${Object.keys(data.titles).length}, reviews=${Object.keys(data.reviews).length}, replies=${Object.keys(data.replies).length})`);
         } finally {
-            if (loaded) rebuildIndexes();
-            loadPromise = null;
+            loadPromise = null; // always cleared, so a later request can retry after a failure
         }
     })();
     return loadPromise;
@@ -112,9 +136,10 @@ const RETRY_MS = 5000;
 async function writeNow() {
     if (!dirty) return;
     dirty = false; // anything mutated from here on sets it again
+    let tmp = null;
     try {
         await fs.promises.mkdir(path.dirname(STORE_FILE), { recursive: true });
-        const tmp = `${STORE_FILE}.tmp.${process.pid}.${Date.now()}`;
+        tmp = `${STORE_FILE}.tmp.${process.pid}.${Date.now()}`;
         const fd = await fs.promises.open(tmp, "w");
         try {
             await fd.writeFile(JSON.stringify(data), "utf-8"); // compact — no indent (same OOM lesson as the other stores)
@@ -125,6 +150,8 @@ async function writeNow() {
         await fs.promises.rename(tmp, STORE_FILE);
     } catch (err) {
         dirty = true; // not persisted — keep it pending
+        // remove the half-written temp file (it is closed by now); the committed store file is never touched
+        if (tmp) await fs.promises.rm(tmp, { force: true }).catch(() => {});
         console.error("[Reviews] Save failed (will retry):", err.message);
         scheduleSave(RETRY_MS);
     }
@@ -135,19 +162,33 @@ function scheduleSave(delay = 800) {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
         saveTimer = null;
-        writing = writing.then(writeNow);
+        writing = writing.then(writeNow).catch(() => {}); // the queue itself must never end up rejected
     }, delay);
     saveTimer.unref?.();
 }
 
-/** Write any pending change right now (used on shutdown). Retries a previously failed save too. */
-async function flush() {
-    if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
+/**
+ * Persist everything pending, retrying failed attempts until `deadlineMs` runs out (shutdown path).
+ * Resolves true when nothing is left uncommitted, false when changes are STILL pending at the deadline.
+ * Never rejects.
+ */
+async function flush(deadlineMs = 5000) {
+    const end = Date.now() + deadlineMs;
+    for (;;) {
+        if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+        }
+        writing = writing.then(writeNow).catch(() => {});
+        await writing;
+        if (saveTimer) {
+            clearTimeout(saveTimer); // writeNow scheduled a background retry — we retry ourselves below
+            saveTimer = null;
+        }
+        if (!dirty) return true;
+        if (Date.now() >= end) return false;
+        await new Promise((r) => setTimeout(r, 250));
     }
-    writing = writing.then(writeNow);
-    await writing;
 }
 
 const newId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;

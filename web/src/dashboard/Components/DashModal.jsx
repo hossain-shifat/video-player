@@ -4401,11 +4401,13 @@ export function SubtitlePreviewModal({ row, onClose, onDownload }) {
     // pass / warn / fail row for one validation check
     const LEVEL = { pass: { icon: CheckCircle2, cls: "text-success", word: "Pass" }, warn: { icon: AlertTriangle, cls: "text-warning", word: "Borderline" }, fail: { icon: AlertTriangle, cls: "text-error", word: "Fails" } };
     const lvl = (good, ok) => (good ? "pass" : ok ? "warn" : "fail");
+    // the worker grades cue count (0.55–1.8 vs 0.4–2.0) and recall (0.75 vs 0.5) per language — grade the same way here
+    const isEn = row?.lang === "en";
     const checks = v?.checks
         ? [
               ...(v.checks.sync != null ? [{ id: "sync", label: "Timing match", value: v.checks.sync, fmt: (x) => `${Math.round(x * 100)}%`, level: lvl(v.checks.sync >= 0.6, v.checks.sync >= 0.35), help: "Share of cue start times that line up with the embedded track (±1 s) after removing any constant offset." }] : []),
-              ...(v.checks.ratio != null ? [{ id: "ratio", label: "Cue count vs reference", value: v.checks.ratio, fmt: (x) => `${x.toFixed(2)}×`, level: lvl(v.checks.ratio >= 0.55 && v.checks.ratio <= 1.8, v.checks.ratio >= 0.4 && v.checks.ratio <= 2.2), help: `Cue count divided by the reference's ${v.checks.ref ?? "—"} cues. Near 1.0 means the same segmentation.` }] : []),
-              ...(v.checks.recall != null ? [{ id: "recall", label: "Coverage of reference cues", value: v.checks.recall, fmt: (x) => `${Math.round(x * 100)}%`, level: lvl(v.checks.recall >= 0.75, v.checks.recall >= 0.5), help: "How many reference cues have a matching cue here. Low = missing dialogue." }] : []),
+              ...(v.checks.ratio != null ? [{ id: "ratio", label: "Cue count vs reference", value: v.checks.ratio, fmt: (x) => `${x.toFixed(2)}×`, level: lvl(v.checks.ratio >= (isEn ? 0.55 : 0.4) && v.checks.ratio <= (isEn ? 1.8 : 2.0), v.checks.ratio >= (isEn ? 0.4 : 0.3) && v.checks.ratio <= (isEn ? 2.2 : 2.5)), help: `Cue count divided by the reference's ${v.checks.ref ?? "—"} cues. Near 1.0 means the same segmentation.` }] : []),
+              ...(v.checks.recall != null ? [{ id: "recall", label: "Coverage of reference cues", value: v.checks.recall, fmt: (x) => `${Math.round(x * 100)}%`, level: lvl(v.checks.recall >= (isEn ? 0.75 : 0.5), v.checks.recall >= (isEn ? 0.5 : 0.35)), help: "How many reference cues have a matching cue here. Low = missing dialogue." }] : []),
               ...(v.checks.words != null ? [{ id: "words", label: "Text similarity", value: v.checks.words, fmt: (x) => x.toFixed(2), level: lvl(v.checks.words >= 0.2, v.checks.words >= 0.08), help: "Word overlap with the reference. A translation of another language track scores lower but is fine." }] : []),
               { id: "drift", label: "Drift over the film", value: v.checks.drift ?? 0, fmt: (x) => `${x.toFixed(2)}s`, level: lvl((v.checks.drift ?? 0) <= 1, (v.checks.drift ?? 0) <= 3), help: "Difference in offset between the first and last third. Large drift = wrong frame rate / cut." },
               { id: "tail", label: "Last cue vs reference", value: v.checks.tailGap ?? 0, fmt: (x) => `${Math.round(x)}s`, level: lvl((v.checks.tailGap ?? 0) <= 600, (v.checks.tailGap ?? 0) <= 1500), help: "Distance between the last cue here and the reference. Large = the subtitle ends early or late." },
@@ -4845,7 +4847,7 @@ export function SubtitleShiftModal({ rows, onClose, onApply, busy = false }) {
                     </ModalCallout>
                 )}
                 <ModalCallout tone="info" compact className="mt-auto">
-                    The file on disk is rewritten with the new timestamps (text and formatting untouched). Shift back by the same amount to undo.
+                    The file on disk is rewritten with the new timestamps (text and formatting untouched). Shifting earlier than 00:00:00 clamps those cues to zero and cannot be reversed, so keep the shift small enough that no cue moves before the start.
                 </ModalCallout>
             </ModalContent>
             <ModalFooter note={valid ? `Every cue moves ${Math.abs(sec)}s ${sec > 0 ? "later" : "earlier"}` : "Enter a non-zero number within ±300"}>

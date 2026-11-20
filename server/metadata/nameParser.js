@@ -1380,7 +1380,7 @@ module.exports = {
 
 // separator before the qualifier: space/dot/dash ("Title - Encore") or an opening bracket ("Title (Encore)")
 const _V10_TAIL_RE = /^(.*\S)(?:[\s._\-\u2013\u2014]+|\s*[(\[]\s*)(Encore|Re[\s._-]?Release|Rerelease)\s*[)\]]?$/i;
-const _V10_ENCORE_PRECEDING_STOP = new Set(["the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with", "no", "my", "your", "his", "her", "our", "their", "last", "final", "one", "big", "grand", "great", "first", "second", "one-more", "another", "an"]);
+const _V10_ENCORE_PRECEDING_STOP = new Set(["more", "the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with", "no", "my", "your", "his", "her", "our", "their", "last", "final", "one", "big", "grand", "great", "first", "second", "one-more", "another", "an"]);
 const _V10_KEY_TAIL_RE = /(?:^|\s)(?:encore|re release|rerelease)(?:\s+(?:19|20)\d{2})?$/;
 
 function _v10DetectReleaseQualifier(adv, filename) {
@@ -1391,7 +1391,16 @@ function _v10DetectReleaseQualifier(adv, filename) {
     if (adv.title.trim() === String(adv.year)) return null;
     if (adv.parseNotes && adv.parseNotes.includes("folder-context")) return null;
 
-    const m = adv.title.match(_V10_TAIL_RE);
+    let m = adv.title.match(_V10_TAIL_RE);
+    if (!m && adv.part != null) {
+        // "<Title> Part 2 Encore 2026": the movie-part split already cut "Part 2 Encore" off adv.title, so look at the FULL
+        // title segment of the file name (everything before the claimed year). `part` itself is left exactly as parsed.
+        const flatFull = filename.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+        const cut = flatFull.search(new RegExp(`(?<![0-9])${adv.year}(?![0-9])`));
+        const seg = (cut > 0 ? flatFull.slice(0, cut) : flatFull).trim();
+        const mm = seg.match(_V10_TAIL_RE);
+        if (mm && seg.toLowerCase().startsWith(adv.title.trim().toLowerCase())) m = [mm[0], adv.title.trim(), mm[2]];
+    }
     if (!m) return null;
     let rest = m[1].replace(/[\s\-\u2013\u2014:,~+(]+$/, "").trim();
     // "<Title> <earlier year> Encore <year>": the earlier number MAY be the original release year, but it may just as well
@@ -1416,6 +1425,20 @@ function _v10DetectReleaseQualifier(adv, filename) {
     return { title: rest, qualifier: isEncore ? "Encore" : "Re-Release" };
 }
 
+// Removes ONLY the qualifier occurrence the detector relied on (the last one that still has the claimed year after it),
+// so other title text and unrelated occurrences of the same word stay in the string the candidate builder sees.
+function _v10WithoutQualifier(filename, year) {
+    const re = /(^|[\s._\-\u2013\u2014(\[])(Encore|Re[\s._-]?Release|Rerelease)(?=$|[\s._\-\u2013\u2014)\]])/gi;
+    const yearRe = new RegExp(`(?<![0-9])${year}(?![0-9])`);
+    let pick = null;
+    for (let mm = re.exec(filename); mm; mm = re.exec(filename)) {
+        const tokenStart = mm.index + mm[1].length;
+        const tokenEnd = tokenStart + mm[2].length;
+        if (yearRe.test(filename.slice(tokenEnd))) pick = { tokenStart, tokenEnd };
+    }
+    return pick ? filename.slice(0, pick.tokenStart) + " " + filename.slice(pick.tokenEnd) : filename;
+}
+
 function _v10ApplyReleaseQualifier(adv, filename) {
     let det = null;
     try {
@@ -1433,7 +1456,12 @@ function _v10ApplyReleaseQualifier(adv, filename) {
     // Title candidates were built from the OLD title ("… Encore"): rebuild, and drop any candidate that still ends in the
     // qualifier — the qualifier must never reach a TMDB search query.
     try {
-        const rebuilt = buildTitleCandidates(adv, filename).filter((c) => !_V10_KEY_TAIL_RE.test(_candKey(c.title)));
+        const rebuilt = buildTitleCandidates(adv, _v10WithoutQualifier(filename, adv.year)).filter((c) => {
+            const key = _candKey(c.title);
+            if (_V10_KEY_TAIL_RE.test(key)) return false;
+            // stripping the qualifier must not glue the re-release year onto the title ("<Title> 2026")
+            return !(key.endsWith(` ${adv.year}`) && !String(adv.title).endsWith(String(adv.year)));
+        });
         Object.defineProperty(adv, "titleCandidates", { value: rebuilt, enumerable: false, writable: true, configurable: true });
         if (Array.isArray(adv.parseNotes)) adv.parseNotes.push("release-qualifier");
     } catch (err) {

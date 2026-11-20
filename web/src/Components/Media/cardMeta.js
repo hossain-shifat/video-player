@@ -53,10 +53,12 @@ export function getRuntimeLabel(item) {
 
 /** series label, e.g. "2 SE · 18 EPI" */
 export function getSeasonEpLabel(item) {
-    const seasons = num(item?.seasonCount ?? item?.metadata?.seasonCount ?? item?.seasons?.length);
+    // grouped series carry `seasons` as a KEYED object ({ 1: {...}, 2: {...} }); other callers pass an array — count both
+    const seasonList = Array.isArray(item?.seasons) ? item.seasons : item?.seasons && typeof item.seasons === "object" ? Object.values(item.seasons) : [];
+    const seasons = num(item?.seasonCount ?? item?.metadata?.seasonCount ?? seasonList.length);
     let eps = num(item?.episodeCount ?? item?.metadata?.episodeCount);
-    if (!eps && Array.isArray(item?.seasons)) {
-        const total = item.seasons.reduce((n, s) => n + (Array.isArray(s?.episodes) ? s.episodes.length : 0), 0);
+    if (!eps && seasonList.length) {
+        const total = seasonList.reduce((n, s) => n + (Array.isArray(s?.episodes) ? s.episodes.length : 0), 0);
         eps = num(total);
     }
     if (!eps && Array.isArray(item?.episodes)) eps = num(item.episodes.length);

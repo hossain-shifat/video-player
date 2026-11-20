@@ -1,19 +1,15 @@
 "use strict";
 
 const express = require("express");
-const { requirePlaybackAccess, requireMediaAccess } = require("../../auth/middleware/requirePlaybackAccess");
+const { requireLoginAccess, requireMediaAccess } = require("../../auth/middleware/requirePlaybackAccess");
 const { createShare, listShares, revokeShare, servePublic, resolveGroupParam } = require("../../controllers/streaming/shareController");
 
 // /stream/share — logged-in users manage their links
 const authed = express.Router();
-authed.use(requirePlaybackAccess);
-// A share code is a media-bound stream token (?st= / x-flux-stream-token). It must never manage links:
-// otherwise one recipient link would list / revoke / re-mint the owner's other links.
-authed.use((req, res, next) =>
-    req.explicitStreamTokenMediaId
-        ? res.status(403).json({ error: "Share links cannot manage share links", code: "SHARE_TOKEN_FORBIDDEN" })
-        : next(),
-);
+// Managing links needs a verified Bearer LOGIN. Share codes / stream tokens / the stream cookie are ignored here:
+// a share code resolves to the owner's user, so accepting it would let one recipient link list, revoke and re-mint
+// every other link of the owner. (Recipients still play through the public router below, where the code IS the credential.)
+authed.use(requireLoginAccess);
 authed.get("/", listShares);
 authed.post("/:id", resolveGroupParam, requireMediaAccess, createShare); // series/season ids → first episode, checked as that file
 authed.delete("/:code", revokeShare);

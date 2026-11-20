@@ -134,18 +134,23 @@ function computeInsights(list, ctx) {
     const today = startOfDay(Date.now());
     const created = users.map((u) => (u.createdAt ? startOfDay(u.createdAt) : null));
 
-    const cum = Array.from({ length: 30 }, (_, i) => {
-        const day = today - (29 - i) * DAY;
-        return created.filter((c) => c !== null && c <= day).length;
+    // 30 consecutive CALENDAR days, each at local midnight. (today − n × 24 h drifts off midnight across a daylight-saving
+    // change, so those timestamps would no longer match `created` and a day would be skipped or empty.)
+    const dayStarts = Array.from({ length: 30 }, (_, i) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() - (29 - i));
+        d.setHours(0, 0, 0, 0);
+        return d.getTime();
     });
+    const cum = dayStarts.map((day) => created.filter((c) => c !== null && c <= day).length);
     const isoDay = (t) => {
         const d = new Date(t);
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     };
-    const growthDates = Array.from({ length: 30 }, (_, i) => isoDay(today - (29 - i) * DAY));
-    const signups = Array.from({ length: 30 }, (_, i) => created.filter((c) => c === today - (29 - i) * DAY).length);
+    const growthDates = dayStarts.map(isoDay);
+    const signups = dayStarts.map((day) => created.filter((c) => c === day).length);
     const signupDates = growthDates;
-    const newWeek = created.filter((c) => c !== null && c > today - 7 * DAY).length;
+    const newWeek = created.filter((c) => c !== null && c > dayStarts[22]).length; // dayStarts[22] = 7 calendar days back
 
     const counts = { approved: 0, pending: 0, blocked: 0, rejected: 0 };
     users.forEach((u) => {
@@ -259,7 +264,7 @@ function exportCsv(list) {
     // Neutralise spreadsheet formulas (=, +, -, @, tab, CR) so an account name like "=1+1" cannot execute when opened in Excel.
     const esc = (v) => {
         let t = String(v ?? "");
-        if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+        if (/^[=+\-@\t\r\uFF1D\uFF0B\uFF0D\uFF20]/.test(t)) t = `'${t}`; // ASCII + full-width = + - @
         return `"${t.replace(/"/g, '""')}"`;
     };
     const day = (iso) => (iso ? new Date(iso).toISOString().slice(0, 10) : "");
@@ -2142,6 +2147,7 @@ export default function DashUsers() {
     const [users, setUsers] = useState([]);
     const [allUsers, setAllUsers] = useState(null);
     const [insState, setInsState] = useState("loading");
+    const [insRefreshFailed, setInsRefreshFailed] = useState(false); // last refresh failed → counts may be out of date
     const [total, setTotal] = useState(0);
     const [pages, setPages] = useState(1);
     const [page, setPage] = useState(1);
@@ -2189,30 +2195,33 @@ export default function DashUsers() {
         try {
             const first = await dashApi.users({ page: 1, limit: 100 });
             let all = first.users ?? [];
-            const pgs = Math.min(first.pages ?? 1, 20);
-            if (pgs > 1) {
-                const rest = await Promise.all(
-                    Array.from({ length: pgs - 1 }, (_, i) =>
-                        dashApi
-                            .users({ page: i + 2, limit: 100 })
-                            .then((d) => d.users ?? [])
-                            .catch(() => []),
-                    ),
-                );
-                all = all.concat(...rest);
+            const pgs = first.pages ?? 1; // every page — a capped list would be shown as if it were complete
+            // 5 pages at a time. A failed page REJECTS the whole refresh (no silent empty page), so the last complete
+            // snapshot stays on screen and nothing partial is ever published as "ready".
+            for (let from = 2; from <= pgs; from += 5) {
+                const batch = Array.from({ length: Math.min(5, pgs - from + 1) }, (_, i) => dashApi.users({ page: from + i, limit: 100 }).then((d) => d.users ?? []));
+                all = all.concat(...(await Promise.all(batch)));
+                if (gen !== insightGen.current) return; // superseded — stop fetching
             }
             if (gen !== insightGen.current) return; // superseded by a newer load
             setAllUsers(all);
             setInsState("ready");
+            setInsRefreshFailed(false);
         } catch {
             if (gen !== insightGen.current) return;
+            // keep the last complete snapshot if there is one; the retry button / next refresh tries again
             setInsState((s) => (s === "ready" ? s : "error"));
+            setInsRefreshFailed(true);
         }
     }, []);
 
     useEffect(() => {
         loadInsights();
     }, [loadInsights]);
+
+    useEffect(() => {
+        if (insRefreshFailed) showToast("Couldn’t refresh the user list — showing the last complete data. Use Retry or reload.", "error");
+    }, [insRefreshFailed]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const ins = useMemo(() => (allUsers ? computeInsights(allUsers, presence) : null), [allUsers, presence]);
     const pendingTotal = ins?.counts.pending ?? 0;
@@ -2380,10 +2389,15 @@ export default function DashUsers() {
     // Invite = copy the sign-up link. Point this at your real register route if it differs.
     function handleInvite() {
         const link = `${window.location.origin}/register`;
-        navigator.clipboard.writeText(link).then(
-            () => showToast("Invite link copied"),
-            () => showToast("Couldn’t copy the link", "error"),
-        );
+        // navigator.clipboard only exists in a secure context — not on a plain-http LAN address
+        if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+            navigator.clipboard.writeText(link).then(
+                () => showToast("Invite link copied"),
+                () => window.prompt("Couldn’t copy automatically — copy the sign-up link:", link),
+            );
+        } else {
+            window.prompt("Copy the sign-up link:", link); // a selectable field the user can copy from
+        }
     }
 
     const clearFilters = () => {

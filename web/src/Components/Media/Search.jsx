@@ -393,7 +393,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
     const [results, setResults] = useState([]);
     const [filter, setFilter] = useState("all");
     const [active, setActive] = useState(0);
-    const [showAll, setShowAll] = useState(false);
+    const [showCount, setShowCount] = useState(PAGE_LIMIT + 1); // rows exposed; "Show more" raises it until every match is visible
     const [recent, setRecent] = useState(readRecent);
 
     const inputRef = useRef(null);
@@ -421,7 +421,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
         setResults([]);
         setFilter("all");
         setActive(0);
-        setShowAll(false);
+        setShowCount(PAGE_LIMIT + 1);
     }, []);
 
     const close = useCallback(
@@ -439,14 +439,20 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
     // Global shortcuts
     useEffect(() => {
         if (fieldMode) return; // the navbar instance owns the shortcuts — avoids two palettes opening at once
+        // Another modal already owns focus + the scroll lock (its own dialog, or any open dialog) → do not stack search on top.
+        const otherModalOpen = () => document.body.style.overflow === "hidden" || !!document.querySelector('[aria-modal="true"], dialog[open]');
         function onKey(e) {
             if ((e.key === "k" || e.key === "K") && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                if (open) close(true);
-                else setOpen(true);
+                if (open) {
+                    e.preventDefault();
+                    close(true);
+                } else if (!otherModalOpen()) {
+                    e.preventDefault();
+                    setOpen(true);
+                }
                 return;
             }
-            if (e.key === "/" && !open && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e.target)) {
+            if (e.key === "/" && !open && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e.target) && !otherModalOpen()) {
                 e.preventDefault();
                 setOpen(true);
             }
@@ -471,7 +477,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
         (val) => {
             setQuery(val);
             setActive(0);
-            setShowAll(false);
+            setShowCount(PAGE_LIMIT + 1);
             clearTimeout(debounceRef.current);
 
             if (!val.trim()) {
@@ -508,7 +514,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
     }, [results]);
 
     const filtered = useMemo(() => (filter === "all" ? results : results.filter((r) => r._type === filter)), [results, filter]);
-    const flat = useMemo(() => filtered.slice(0, showAll ? 60 : PAGE_LIMIT + 1), [filtered, showAll]);
+    const flat = useMemo(() => filtered.slice(0, showCount), [filtered, showCount]);
     const hiddenCount = filtered.length - flat.length;
 
     // Keep the active row in view while arrowing
@@ -737,7 +743,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
                                                 onClick={() => {
                                                     setFilter(c.key);
                                                     setActive(0);
-                                                    setShowAll(false);
+                                                    setShowCount(PAGE_LIMIT + 1);
                                                     inputRef.current?.focus();
                                                 }}
                                                 className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-semibold whitespace-nowrap transition-colors duration-150 cursor-pointer ${FOCUS_RING} ${
@@ -787,7 +793,7 @@ export default function Search({ compact = false, className = "", hideMobileBtn 
                                                 <div className="px-3 md:px-5 pt-2">
                                                     <button
                                                         type="button"
-                                                        onClick={() => setShowAll(true)}
+                                                        onClick={() => setShowCount((c) => c + 60)}
                                                         className={`w-full h-10 rounded-xl text-xs font-semibold text-white/70 bg-white/[0.06] hover:bg-white/[0.1] hover:text-white transition-colors cursor-pointer ${FOCUS_RING}`}>
                                                         Show {hiddenCount} more result{hiddenCount !== 1 ? "s" : ""}
                                                     </button>

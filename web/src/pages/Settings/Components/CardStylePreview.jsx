@@ -205,9 +205,9 @@ export default function CardStylePreview({ variant }) {
                 <MediaCard variant={variant} item={s.upcoming} />
             </Group>
             <Group title="Continue watching cards">
-                <HistoryCard variant={variant} item={s.hMovie} />
-                <HistoryCard variant={variant} item={s.hSeries} />
-                <HistoryCard variant={variant} item={s.hDone} />
+                <HistoryCard variant={variant} item={s.hMovie} previewThumb={s.hMovie.previewThumb} />
+                <HistoryCard variant={variant} item={s.hSeries} previewThumb={s.hSeries.previewThumb} />
+                <HistoryCard variant={variant} item={s.hDone} previewThumb={s.hDone.previewThumb} />
             </Group>
             <Group title="Trailer cards">
                 <TrailerCard variant={variant} item={s.trailerMovie} onPlay={() => {}} />

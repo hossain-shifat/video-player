@@ -24,7 +24,9 @@
 //   fill the row; opening one and replying is what turns it into a real discussion.
 // ============================================================================
 
+const fs = require("fs");
 const { readFolders } = require("./libraryController");
+const { decodeFileId } = require("../../utils/media/fileHelpers");
 const { getAllCached } = require("../../utils/media/mediaCache");
 const { getMetadata } = require("../../metadata/metadataStore");
 const { fetchReviewsFull, fetchTitleLogo } = require("../../metadata/tmdb");
@@ -238,7 +240,6 @@ function topScore(r, replies) {
 }
 
 // Home-feed ranking: same as topScore, but a review is no longer rewarded for being long — it peaks around 900 chars and fades out
-// beyond that, so the rows are not filled with essays that the card can only show 3 lines of anyway
 function feedScore(r, replies) {
     const len = (r.content || "").length;
     const lengthBonusInTopScore = Math.min(len, 1500) / 500;
@@ -296,11 +297,36 @@ async function libraryTitles() {
     for (const file of allMedia) {
         const m = await getMetadata(file);
         if (!m || !m.tmdbId) continue;
-        const parsed = parseKey(m.type === "movie" ? "movie" : "tv", m.tmdbId);
+        // Anime films are TMDB MOVIES, anime shows are TMDB TV. Only TV details carry `totalSeasons` — that is the
+        // signal (same one MediaDetails uses via its `seasons` shape) to tell a film from a show.
+        const isFilm = m.type === "movie" || (m.type === "anime" && !("totalSeasons" in m));
+        const parsed = parseKey(isFilm ? "movie" : "tv", m.tmdbId);
         if (!parsed || out.has(parsed.key)) continue;
         out.set(parsed.key, { ...parsed, info: { title: m.title || null, backdrop: m.backdrop || null, poster: m.poster || null, type: m.type || null, fileId: file.id, inLibrary: true, feedOk: !isMatureMeta(m), ...pageInfo(m) } });
     }
     return out;
+}
+
+async function libraryRootsReadable() {
+    try {
+        const folders = await readFolders();
+        if (!folders.length) return false;
+        for (const f of folders) await fs.promises.access(f.path, fs.constants.R_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// true only when the file is verifiably absent — any other error (EACCES, EIO, …) means "do not know" → keep it listed
+async function fileIsGone(fileId) {
+    if (!fileId) return true;
+    try {
+        await fs.promises.access(decodeFileId(fileId));
+        return false;
+    } catch (err) {
+        return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+    }
 }
 
 async function runSweep(label) {
@@ -320,11 +346,14 @@ async function runSweep(label) {
             if (now - last >= SYNC_TTL_MS) due.push({ t, last });
         }
         // Titles whose last file left the library: keep their reviews, but stop publishing them / their file link.
-        // Skipped when the sweep found NO titles at all (an unplugged drive must not wipe the whole feed).
+        // The scanner cannot tell an unreadable / unmounted folder from an empty one, so a title is delisted only when
+        // (a) EVERY library root is readable right now and (b) its stored file is verifiably gone (ENOENT) — a file that
+        // still exists (e.g. its metadata lookup merely failed) or a drive that is offline never causes a delisting.
         let delisted = 0;
-        if (titles.size > 0) {
-            for (const [key, k] of Object.entries(known)) {
-                if (k?.inLibrary && !titles.has(key)) {
+        const absent = Object.entries(known).filter(([key, k]) => k?.inLibrary && !titles.has(key));
+        if (absent.length && (await libraryRootsReadable())) {
+            for (const [key, k] of absent) {
+                if (await fileIsGone(k.fileId)) {
                     await store.upsertTitle(key, { inLibrary: false, fileId: null });
                     delisted++;
                 }

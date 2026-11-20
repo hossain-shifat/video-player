@@ -757,6 +757,9 @@ function MissingSection({ flash, onQueued }) {
     const d = q.data;
     const rows = d?.rows || [];
     const c = d?.counts;
+    useEffect(() => {
+        if (d?.pages && page > d.pages) setPage(d.pages); // last row of the last page was acted on → fewer pages now
+    }, [d?.pages, page]);
 
     async function retry(body, label) {
         setBusy(true);
@@ -834,6 +837,14 @@ function MissingSection({ flash, onQueued }) {
 
             {q.isLoading ? (
                 <TableSkeleton />
+            ) : q.isError && !d ? (
+                <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-12 text-center">
+                    <p className="text-sm font-semibold">Couldn’t load the list of missing subtitles</p>
+                    <p className="text-xs text-base-content/70">{q.error?.message || "The request failed."}</p>
+                    <button type="button" className="btn btn-sm btn-primary" onClick={() => q.refetch()}>
+                        Retry
+                    </button>
+                </div>
             ) : rows.length === 0 ? (
                 hasFilter ? (
                     <EmptyState title="No titles match your filters" text="Try another search or clear the filters." onClear={() => { setStatus(""); setType(""); setSearch(""); }} />
@@ -1162,6 +1173,9 @@ export default function DashSubtitles() {
     const listQ = useQuery({ queryKey: ["subtitle-admin", "list", params], queryFn: () => subtitleApi.list(params), placeholderData: (prev) => prev, refetchInterval: ov && !ov.analysis?.complete ? 3000 : 30000 });
     const list = listQ.data;
     const rows = list?.rows || [];
+    useEffect(() => {
+        if (list?.pages && page > list.pages) setPage(list.pages);
+    }, [list?.pages, page]);
     const loading = listQ.isLoading;
     const missQ = useQuery({ queryKey: ["subtitle-admin", "missing-summary"], queryFn: () => subtitleApi.missing({ limit: 5 }), refetchInterval: 60000 });
 
@@ -1252,7 +1266,8 @@ export default function DashSubtitles() {
     // All rows for the current filters (the API pages at 100) — used by the export and the "check unchecked" button.
     async function fetchAllRows(extra = {}) {
         const out = [];
-        for (let p = 1; p <= 50; p++) {
+        // follow the server-reported last page (no fixed 50-page cut-off → a 5,001-row list is exported whole)
+        for (let p = 1; p <= 2000; p++) {
             const d = await subtitleApi.list({ page: p, limit: 100, sort, order, quality, lang, search: debounced, ...extra });
             out.push(...d.rows);
             if (p >= d.pages) break;
@@ -1290,7 +1305,19 @@ export default function DashSubtitles() {
         try {
             const all = await fetchAllRows({ quality: "unvalidated", lang: "", search: "" });
             if (!all.length) return flash("Everything has been checked already");
-            await run("revalidate", all);
+            // the server queues at most 200 per call — send batches; a failed batch stops here, finished batches stay done
+            let okTotal = 0;
+            let failedTotal = 0;
+            for (let i = 0; i < all.length; i += 200) {
+                const res = await run("revalidate", all.slice(i, i + 200));
+                if (!res) {
+                    flash(`Queued ${okTotal} of ${all.length} — the next batch failed`, "error");
+                    return;
+                }
+                okTotal += res.ok || 0;
+                failedTotal += res.failed || 0;
+            }
+            flash(`Queued ${okTotal} of ${all.length}${failedTotal ? `, ${failedTotal} failed` : ""}`, failedTotal ? "error" : "success");
         } catch (e) {
             flash(e?.message || "Couldn’t queue the check", "error");
         } finally {

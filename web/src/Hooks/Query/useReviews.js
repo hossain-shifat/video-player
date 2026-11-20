@@ -5,8 +5,9 @@
 // a readable `error.message` (and `error.apiCode`) which the UI shows as-is.
 // Reactions are OPTIMISTIC: the emoji and the counts change instantly and roll back if the server refuses.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../Auth/AuthContext";
 import { getTitleReviews, createReview, updateReview, deleteReview, reactToReview, getReviewThread, addReply, updateReply, deleteReply, reactToReply, getPopularReviews, getPopularDiscussions } from "../../Api/reviews";
 
 export const REVIEW_KEYS = {
@@ -68,8 +69,12 @@ export function useReviewThread(id, enabled = true) {
 
 /** Home rows. kind = "reviews" | "discussions". Hidden by the component when empty. */
 export function usePopularFeed(kind, enabled = true) {
+    // The feed carries the VIEWER's own reaction (`mine`), so each account needs its own cache entry — otherwise a
+    // second account on the same browser would briefly see the previous one's reactions. (["popular"] prefix still matches.)
+    const { user } = useAuth();
+    const viewer = user?.id ?? "anon";
     return useQuery({
-        queryKey: kind === "reviews" ? REVIEW_KEYS.popular : REVIEW_KEYS.discussions,
+        queryKey: [...(kind === "reviews" ? REVIEW_KEYS.popular : REVIEW_KEYS.discussions), viewer],
         queryFn: kind === "reviews" ? getPopularReviews : getPopularDiscussions,
         enabled,
         select: (d) => d?.items ?? [],
@@ -115,27 +120,29 @@ function patchFeeds(qc, res) {
 
 /**
  * One hook for both targets: mutate({ kind: "review" | "reply", id, type })
- * useReact({ keepFeedOrder: true }) → Home cards: patch the feed cache in place instead of refetching it (see patchFeeds).
+ * keepFeedOrder (default true) → the Home feed cache is patched in place instead of refetched, so a reaction never re-ranks a row,
+ * shows a skeleton or moves the scroll position anywhere (details page, review page, discussion page, Home). Pass false to refetch it.
  */
-export function useReact({ keepFeedOrder = false } = {}) {
+export function useReact({ keepFeedOrder = true } = {}) {
     const qc = useQueryClient();
-    const snap = useRef(null);
     return useMutation({
         mutationFn: ({ kind, id, type }) => (kind === "review" ? reactToReview(id, type) : reactToReply(id, type)),
         onMutate: async ({ id, type }) => {
             await qc.cancelQueries({ queryKey: REVIEW_KEYS.all });
-            snap.current = qc.getQueriesData({ queryKey: REVIEW_KEYS.all });
             // find the current summary of the item in any cached list/thread
             let cur = null;
-            for (const [, data] of snap.current) {
+            for (const [, data] of qc.getQueriesData({ queryKey: REVIEW_KEYS.all })) {
                 if (!data) continue;
                 if (Array.isArray(data.items)) cur = cur || data.items.find((r) => r.id === id)?.reactions;
                 if (data.review) cur = cur || (data.review.id === id ? data.review.reactions : data.replies?.find((x) => x.id === id)?.reactions);
             }
             patchReactions(qc, id, applyReaction(cur, type));
+            return { id, prev: cur }; // per-mutation context: overlapping reactions can no longer roll each other back
         },
-        onError: () => {
-            for (const [key, data] of snap.current || []) qc.setQueryData(key, data);
+        onError: (_err, _vars, ctx) => {
+            // undo ONLY this item's optimistic change (never whole stale query objects), then let the server decide
+            if (ctx?.prev) patchReactions(qc, ctx.id, ctx.prev);
+            qc.invalidateQueries({ queryKey: REVIEW_KEYS.all });
         },
         onSuccess: (res) => {
             if (res?.id && res.reactions) patchReactions(qc, res.id, res.reactions); // the server's numbers win

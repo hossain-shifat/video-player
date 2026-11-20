@@ -261,9 +261,9 @@ export function Pagination({ page, pages, total, from, to, onPage, note }) {
 // ─── Thumbnails (tinted by category / state) ──────────────────────────────────
 
 // Wraps any thumbnail so that, in select mode, it turns into a checkbox (same pattern as the media table).
-function CheckTile({ checked, onToggle, className = "" }) {
+function CheckTile({ checked, onToggle, className = "", label = "Select" }) {
     return (
-        <button type="button" onClick={onToggle} aria-pressed={checked} className={`flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-base-300 bg-base-300 ${className}`}>
+        <button type="button" onClick={onToggle} aria-pressed={checked} aria-label={label} className={`flex shrink-0 cursor-pointer items-center justify-center rounded-md border border-base-300 bg-base-300 ${className}`}>
             <span className={`flex size-5 items-center justify-center rounded border-2 ${checked ? "border-primary bg-primary text-primary-content" : "border-base-content/60 bg-base-200"}`}>
                 {checked && <Check size={12} strokeWidth={3} />}
             </span>
@@ -273,18 +273,19 @@ function CheckTile({ checked, onToggle, className = "" }) {
 
 // Media poster, 32×44. Falls back to an icon when there is no image or it fails to load.
 export function PosterTile({ src, selectMode, checked, onToggle, alt = "" }) {
-    const [failed, setFailed] = useState(false);
-    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-11 w-8" />;
+    const [failedSrc, setFailedSrc] = useState(null); // which URL failed — a different src gets its own chance
+    const failed = failedSrc === src;
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-11 w-8" label={alt ? `Select ${alt}` : "Select title"} />;
     return (
         <div className="flex h-11 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-base-300 bg-base-300">
-            {src && !failed ? <img src={src} alt="" aria-label={alt} loading="lazy" onError={() => setFailed(true)} className="size-full object-cover" /> : <ImageIcon size={14} className="text-base-content/65" />}
+            {src && !failed ? <img src={src} alt="" aria-label={alt} loading="lazy" onError={() => setFailedSrc(src)} className="size-full object-cover" /> : <ImageIcon size={14} className="text-base-content/65" />}
         </div>
     );
 }
 
 // Subtitle thumbnail: portrait page with the format label and two caption lines. 32×44.
-export function SubtitleTile({ ext, tone = "secondary", selectMode, checked, onToggle }) {
-    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-11 w-8" />;
+export function SubtitleTile({ ext, tone = "secondary", selectMode, checked, onToggle, label }) {
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-11 w-8" label={label || `Select ${ext} subtitle`} />;
     return (
         <div className={`badge ${BADGE_SOFT[tone]} ${BORDER[tone]} h-11 w-8 shrink-0 flex-col items-center justify-between rounded-md px-0 py-1.5`}>
             <span className="font-mono text-[10px] font-semibold leading-none">{ext}</span>
@@ -298,7 +299,7 @@ export function SubtitleTile({ ext, tone = "secondary", selectMode, checked, onT
 
 // Container thumbnail: square, film-frame mark over the extension. 40×40. Tint follows the playback state.
 export function FormatTile({ label, tone = "success", selectMode, checked, onToggle }) {
-    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="size-10" />;
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="size-10" label={`Select ${label} format`} />;
     return (
         <div className={`badge ${BADGE_SOFT[tone]} ${BORDER[tone]} size-10 shrink-0 flex-col items-center justify-center gap-1 rounded-md p-0`}>
             <span className="flex gap-0.5">
@@ -313,7 +314,8 @@ export function FormatTile({ label, tone = "success", selectMode, checked, onTog
 
 // One poster image that quietly falls back to a placeholder when it is missing or fails to load.
 function PosterImg({ src, className = "" }) {
-    const [failed, setFailed] = useState(false);
+    const [failedSrc, setFailedSrc] = useState(null); // remember WHICH url failed, so a new src is tried again
+    const failed = failedSrc === src;
     if (!src || failed) {
         return (
             <span className={`flex items-center justify-center bg-base-300 text-base-content/65 ${className}`}>
@@ -321,13 +323,13 @@ function PosterImg({ src, className = "" }) {
             </span>
         );
     }
-    return <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} className={`object-cover ${className}`} />;
+    return <img src={src} alt="" loading="lazy" onError={() => setFailedSrc(src)} className={`object-cover ${className}`} />;
 }
 
 // Subtitle preview: the title's poster with a caption strip across the bottom, like a frame with the subtitle burned
 // in, and the format as a chip in the corner. 40×56.
-export function SubtitlePreview({ poster, ext, tone = "secondary", selectMode, checked, onToggle }) {
-    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-10" />;
+export function SubtitlePreview({ poster, ext, tone = "secondary", selectMode, checked, onToggle, label }) {
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-10" label={label || `Select ${ext} subtitle`} />;
     return (
         <div className="relative h-14 w-10 shrink-0 overflow-hidden rounded-md border border-base-300 bg-base-300">
             <PosterImg src={poster} className="size-full" />
@@ -343,7 +345,7 @@ export function SubtitlePreview({ poster, ext, tone = "secondary", selectMode, c
 // Format preview: a fan of up to three posters from titles in this container, with the extension as a chip on the
 // last poster. Rows without posters keep the plain tile in the same 64px slot so names stay aligned. 64×56.
 export function FormatPreview({ posters = [], label, tone = "success", selectMode, checked, onToggle }) {
-    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-16" />;
+    if (selectMode) return <CheckTile checked={checked} onToggle={onToggle} className="h-14 w-16" label={`Select ${label} format`} />;
     const stack = posters.slice(0, 3);
     if (stack.length === 0)
         return (
@@ -401,6 +403,17 @@ export function PortalMenu({ anchor, onClose, header, items }) {
             window.removeEventListener("scroll", onClose, true);
         };
     }, [anchor, onClose]);
+
+    // Keyboard users: focus moves into the menu when it opens and back to the trigger when it closes
+    // (the menu is a portal at the end of <body>, so without this Tab would walk the whole page first).
+    useEffect(() => {
+        if (!anchor) return undefined;
+        const raf = requestAnimationFrame(() => ref.current?.querySelector("button:not([disabled])")?.focus());
+        return () => {
+            cancelAnimationFrame(raf);
+            anchor.focus?.();
+        };
+    }, [anchor]);
 
     if (!anchor) return null;
     return createPortal(

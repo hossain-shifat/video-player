@@ -136,10 +136,13 @@ async function triggerRescan(libLabel, setToast) {
     try {
         await api.post("/api/metadata/refresh-all", {});
         setToast({ msg: "Metadata cache cleared. Rescan complete.", type: "success" });
+        setTimeout(() => setToast(null), 3500);
+        return true;
     } catch (e) {
         setToast({ msg: e.message || "Rescan failed", type: "error" });
+        setTimeout(() => setToast(null), 3500);
+        return false; // callers must not record a failed request as a completed scan
     }
-    setTimeout(() => setToast(null), 3500);
 }
 
 // ─── Small UI atoms ───────────────────────────────────────────────────────────
@@ -460,7 +463,11 @@ function buildInsights(libs, items) {
         if (seen.has(key)) return;
         seen.add(key);
         const np = normPath(p);
-        const lib = sorted.find((l) => (it.libraryId ?? it.folderId) === l.id) || sorted.find((l) => l.path && np.startsWith(normPath(l.path)));
+        const lib = sorted.find((l) => (it.libraryId ?? it.folderId) === l.id) || sorted.find((l) => {
+            if (!l.path) return false;
+            const lp = normPath(l.path);
+            return np === lp || np.startsWith(lp + "/"); // directory boundary: /media/Movies must not claim /media/Movies2/…
+        });
         if (!lib) return;
         const b = per[lib.id];
         const name = it.name || it.filename || String(p).split(/[\\/]/).pop();
@@ -661,7 +668,9 @@ export default function DashLibraries() {
                 codec: l0.codec ?? ins.codec,
                 qualityCounts: l0.qualityCounts ?? ins.qc,
                 metadataMatched: l0.metadataMatched ?? ins.matched,
-                lastScan: l0.lastScan ?? l0.scannedAt ?? l0.lastScanned ?? (ins.lastAdded ? new Date(ins.lastAdded).toISOString() : null),
+                // a file's mtime is NOT a scan time — keep "last scan" unknown unless the server says so; file activity is separate
+                lastScan: l0.lastScan ?? l0.scannedAt ?? l0.lastScanned ?? null,
+                lastFileActivity: ins.lastAdded ? new Date(ins.lastAdded).toISOString() : null,
                 posters: l0.posters ?? ins.posters,
                 growth: l0.growth ?? ins.growth,
                 growthBytes: l0.growthBytes ?? ins.growthBytes,
@@ -760,18 +769,26 @@ export default function DashLibraries() {
     async function handleRescan(lib) {
         setRescanning((r) => ({ ...r, [lib.id]: true }));
         const t0 = Date.now();
-        await triggerRescan(lib.label, setToast);
-        pushScan((Date.now() - t0) / 1000);
-        setScans(readScans());
-        setRescanning((r) => ({ ...r, [lib.id]: false }));
+        try {
+            if (await triggerRescan(lib.label, setToast)) {
+                pushScan((Date.now() - t0) / 1000); // only a SUCCESSFUL scan enters the duration history
+                setScans(readScans());
+            }
+        } finally {
+            setRescanning((r) => ({ ...r, [lib.id]: false })); // spinner clears on either outcome
+        }
     }
     async function handleScanAll() {
         setRescanning((r) => ({ ...r, __all: true }));
         const t0 = Date.now();
-        await triggerRescan("all libraries", setToast);
-        pushScan((Date.now() - t0) / 1000);
-        setScans(readScans());
-        setRescanning((r) => ({ ...r, __all: false }));
+        try {
+            if (await triggerRescan("all libraries", setToast)) {
+                pushScan((Date.now() - t0) / 1000);
+                setScans(readScans());
+            }
+        } finally {
+            setRescanning((r) => ({ ...r, __all: false }));
+        }
         load();
     }
 

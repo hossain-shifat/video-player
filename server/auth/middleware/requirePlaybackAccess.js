@@ -149,6 +149,39 @@ async function requirePlaybackAccess(req, res, next) {
 }
 
 
+/**
+ * Account-management routes (e.g. /stream/share): ONLY a verified Bearer login counts.
+ * Stream tokens (?st=, x-flux-stream-token, the stream cookie) — and therefore share codes, which are session-less
+ * stream tokens that resolve to the OWNER's user — are deliberately ignored here, so holding one playable link can
+ * never be turned into control over the owner's account. Playback routes keep using requirePlaybackAccess.
+ */
+async function requireLoginAccess(req, res, next) {
+    try {
+        const authHeader = req.headers["authorization"];
+        const bearer = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+        if (!bearer) return res.status(401).json({ error: "Login required", code: "AUTH_REQUIRED" });
+
+        const credKey = `jwt:${bearer}`;
+        let entry = cache.get(credKey);
+        if (!entry || Date.now() - entry.at >= TTL_MS) {
+            const r = await resolveJwt(bearer);
+            if (r.fail) return res.status(r.fail.status).json(r.fail.body);
+            entry = { user: r.user, tokenMediaId: null, sessionId: r.sessionId, at: Date.now() };
+            const denial = playbackDenial(entry.user);
+            if (denial) return res.status(denial.status).json(denial.body);
+            cache.set(credKey, entry);
+        }
+        req.explicitStreamTokenMediaId = null;
+        req.user = entry.user;
+        req.sessionId = entry.sessionId || undefined;
+        req.permissions = parsePermissions(entry.user.permissionsJson);
+        next();
+    } catch (err) {
+        console.error("[Auth] requireLoginAccess error:", err);
+        return res.status(500).json({ error: "Authorization failed" });
+    }
+}
+
 // ─── HLS sessions: capability bound to the account that started them ─────────────────────────────
 // hls.js / native-HLS players fetch the manifest and every segment WITHOUT our headers or cookies
 // (and the player code is not ours to rewrite). So the session id (64-bit random, only ever handed
@@ -297,4 +330,4 @@ function restrictToLibraryPath(paramName) {
     };
 }
 
-module.exports = { requirePlaybackAccess, requireHlsAccess, trackHlsSessionOwner, requireMediaAccess, restrictToLibraryPath, playbackDenial, invalidatePlaybackCache, setFileResolver, STREAM_COOKIE, readCookie };
+module.exports = { requirePlaybackAccess, requireLoginAccess, requireHlsAccess, trackHlsSessionOwner, requireMediaAccess, restrictToLibraryPath, playbackDenial, invalidatePlaybackCache, setFileResolver, STREAM_COOKIE, readCookie };

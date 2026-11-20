@@ -229,7 +229,7 @@ const top = (map, n = 3) =>
 const normTitle = (s) =>
     String(s || "")
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "");
+        .replace(/[^\p{L}\p{N}]+/gu, ""); // keep ANY script — stripping to a-z0-9 made every non-Latin title identical
 
 // Every file of an item: a movie is one file, a series/anime group has one per episode.
 function filesOf(item, type) {
@@ -311,6 +311,7 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
         let seriesTotalSize = 0;
         let seriesLatestAdded = 0;
         const files = filesOf(item, type);
+        const repByContainer = new Map(); // every container this title uses → one probed file of it (series can mix MKV + MP4)
 
         for (const f of files) {
             const info = mediaInfoMap[f.id];
@@ -321,7 +322,9 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
                     repPath = f.path;
                 }
                 // file-level format stats
-                const row = fmtRow(containerLabel(f.path, info));
+                const fileContainer = containerLabel(f.path, info);
+                if (!repByContainer.has(fileContainer)) repByContainer.set(fileContainer, info);
+                const row = fmtRow(fileContainer);
                 row.files += 1;
                 row.bytes += info.container?.sizeBytes || 0;
                 if (info.container?.bitrateBps) {
@@ -340,7 +343,18 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
 
         const video = repInfo?.video || null;
         const primaryAudio = repInfo?.audioTracks?.[0] || null;
-        const realRes = video?.height ? (video.height >= 2000 ? "4K" : video.height >= 1000 ? "1080p" : video.height >= 700 ? "720p" : "480p") : null;
+        // width AND height together (a cropped 3840×1600 film is 4K, a 1920×800 film is 1080p) — same rule as the server's resOf
+        const realRes = (() => {
+            const a = Number(video?.width) || 0;
+            const b = Number(video?.height) || 0;
+            if (!a && !b) return null;
+            const w = Math.max(a, b);
+            const h = Math.min(a, b);
+            if (w >= 3400 || h >= 1900) return "4K";
+            if (w >= 1760 || h >= 994) return "1080p";
+            if (w >= 1173 || h >= 662) return "720p";
+            return "480p";
+        })();
         const finalTags = {
             res: realRes || tags.res,
             vcodec: video?.codec || tags.vcodec,
@@ -354,17 +368,26 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
 
         const container = repInfo ? containerLabel(repPath, repInfo) : isExt(extOf(repPath || sourceFilename)) ? extOf(repPath || sourceFilename).toUpperCase() : "UNKNOWN";
         const playback = classifyPlayback(repInfo, container);
+        // the title counts ONCE for every format it actually uses (probed files), and the same list drives the parent filter
+        let itemContainers;
         if (repInfo) {
-            const row = fmtRow(container);
-            row.titles += 1;
-            row.status[playback.status] += 1;
-            row.titleIds.add(item.id);
+            itemContainers = [...repByContainer.keys()];
+            if (!itemContainers.includes(container)) itemContainers.unshift(container);
+            for (const c of itemContainers) {
+                const row = fmtRow(c);
+                row.titles += 1;
+                row.status[(c === container ? playback : classifyPlayback(repByContainer.get(c), c)).status] += 1;
+                row.titleIds.add(item.id);
+            }
             if (isExt(extOf(repPath))) formatSource.ext += 1;
             else formatSource.probe += 1;
         } else {
-            // not probed yet: keep the title visible instead of silently dropping it from the table
-            const row = fmtRow("UNKNOWN");
+            // not probed yet: keep the title visible instead of silently dropping it from the table.
+            // Same key as the media row (_container) — an unprobed movie.mp4 is MP4, not a separate "UNKNOWN".
+            itemContainers = [container];
+            const row = fmtRow(container);
             row.titles += 1;
+            row.titleIds.add(item.id);
             row.bytes += size;
             row.status.unknown += 1;
             formatSource.unprobed += 1;
@@ -398,6 +421,7 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
             _audioLang: primaryAudio?.language || null,
             // added for the redesigned page
             _container: container,
+            _containers: itemContainers,
             _playback: playback,
             _flags: { noMeta, noPoster, dup: false },
             _dupCount: 1,
@@ -459,15 +483,19 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
     // ── storage share by type ──
     const bytesByType = { movie: 0, series: 0, anime: 0 };
     items.forEach((i) => (bytesByType[i._type] += i._size));
-    const typeShare = ["movie", "series", "anime"].map((type) => ({ type, bytes: bytesByType[type], share: pct(bytesByType[type], totalSize) }));
+    // shares and the Storage total both use the RESOLVED row sizes (probe size when known), so they can never disagree
+    const resolvedTotal = items.reduce((n, i) => n + (i._size || 0), 0);
+    const typeShare = ["movie", "series", "anime"].map((type) => ({ type, bytes: bytesByType[type], share: pct(bytesByType[type], resolvedTotal) }));
 
     // ── formats ──
     const postersByFormat = new Map();
     for (const it of items) {
         if (!it._poster) continue;
-        const list = postersByFormat.get(it._container) || [];
-        if (list.length < 3) list.push(it._poster);
-        postersByFormat.set(it._container, list);
+        for (const key of it._containers || [it._container]) {
+            const list = postersByFormat.get(key) || [];
+            if (list.length < 3) list.push(it._poster);
+            postersByFormat.set(key, list);
+        }
     }
     const formats = [...formatMap.values()]
         .map((r) => {
@@ -500,7 +528,7 @@ export function buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDat
             movies: mediaData.movies?.total || 0,
             series: mediaData.series?.total || 0,
             anime: mediaData.anime?.total || 0,
-            size: totalSize,
+            size: resolvedTotal,
         },
         stats: {
             directPct: pct(direct, known),

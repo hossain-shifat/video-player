@@ -242,7 +242,9 @@ function engagementStats(agg) {
 function groupOf(t) {
     const isSeries = t.mediaType === "series" || t.mediaType === "anime";
     const label = (isSeries ? t.seriesTitle || t.title : t.title) || "Untitled";
-    return { key: `${isSeries ? "s" : "m"}:${String(label).toLowerCase()}`, label: String(label), type: t.mediaType || "movie" };
+    // A movie is its own identity (two different files can share a title); only episodes group by series title.
+    const key = isSeries ? `s:${String(label).toLowerCase()}` : t.id ? `m:${String(t.id)}` : `m:${String(label).toLowerCase()}`;
+    return { key, label: String(label), type: t.mediaType || "movie" };
 }
 
 function mediaStats(agg) {
@@ -536,13 +538,17 @@ function mediaInventory(ctx) {
 
 // ─── storage (disk capacity + daily history for forecast) ─────────────────────
 
-const norm = (p) => path.resolve(p).replace(/\\/g, "/").toLowerCase();
+// Path case only matters on case-insensitive filesystems (Windows, default macOS). On Linux "/Media" and "/media" are
+// different mounts, so lower-casing there would attribute a library to the wrong disk.
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+const fold = (x) => (CASE_INSENSITIVE_FS ? x.toLowerCase() : x);
+const norm = (p) => fold(path.resolve(p).replace(/\\/g, "/"));
 
 function mountFor(folderPath, disks) {
     const target = norm(folderPath);
     let best = null;
     for (const d of disks) {
-        const m = String(d.mount || "").replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+        const m = fold(String(d.mount || "").replace(/\\/g, "/")).replace(/\/+$/, "");
         if ((target === m || target.startsWith(m + "/")) && (!best || m.length > best.m.length)) best = { disk: d, m };
     }
     return best ? best.disk : null;
