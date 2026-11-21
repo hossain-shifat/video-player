@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
-import { EllipsisVertical, Film, Tv } from "lucide-react";
+import { EllipsisVertical, Film, Tv, Check, Clock } from "lucide-react";
 import { api } from "../../Api/client";
 import { getOrCreateClientId } from "../../Api/stream";
 import FloatingActionMenu from "../Layout/FloatingActionMenu";
 import HorizontalCard from "./HorizontalCard";
+import { routeId } from "../../Utils/shortId.js";
 
 // ─── Icon fallback — only if ffmpeg frame AND poster both fail ─────────────
 function IconFallback({ title, type }) {
@@ -14,6 +15,20 @@ function IconFallback({ title, type }) {
         </div>
     );
 }
+
+// ISO string / ms -> "Today", "2d ago" ...
+function timeAgo(ts) {
+    if (!ts) return null;
+    const t = new Date(ts).getTime();
+    if (Number.isNaN(t)) return null;
+    const days = Math.floor((Date.now() - t) / 86400000);
+    if (days < 1) return "Today";
+    if (days < 30) return `${days}d ago`;
+    return `${Math.floor(days / 30)}mo ago`;
+}
+
+// when the item was last watched — field name differs between history sources
+const lastWatchedAt = (item) => item?.updatedAt ?? item?.lastWatched ?? item?.lastWatchedAt ?? item?.watchedAt ?? item?.timestamp ?? item?.date ?? null;
 
 // 65 → "1h 5m", 45 → "45m"
 function fmtDuration(secs) {
@@ -38,8 +53,12 @@ function buildSeriesLabel(item) {
  * Same visuals as before — now composed from the shared HorizontalCard shell.
  *
  * onRemove(item) — fires after "Remove From History" confirmed in menu.
+ * variant — card style id to force (settings preview); default follows the user setting.
+ * previewThumb — image URL that replaces the server thumbnail (settings preview only).
+ *
+ * Builds props for every card style (classic props + rich props); each style's HorizontalShell picks what it uses.
  */
-export default function HistoryCard({ item, onRemove }) {
+export default function HistoryCard({ item, onRemove, variant, previewThumb }) {
     const [thumbError, setThumbError] = useState(false);
     const [posterError, setPosterError] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -48,7 +67,7 @@ export default function HistoryCard({ item, onRemove }) {
     const mediaType = item.mediaType || item.type || "movie";
     const isSeries = mediaType === "series" || mediaType === "anime";
 
-    const thumbUrl = api.thumbnailUrl(item.id, item.position, getOrCreateClientId());
+    const thumbUrl = previewThumb ?? api.thumbnailUrl(item.id, item.position, getOrCreateClientId());
 
     const showThumbnail = !thumbError;
     const showPosterFallback = thumbError && !!item.poster && !posterError;
@@ -68,7 +87,7 @@ export default function HistoryCard({ item, onRemove }) {
         title: item.title,
         poster: item.poster,
         type: mediaType,
-        streamUrl: item.streamUrl || `${window.location.origin}/player/${encodeURIComponent(item.id)}`,
+        streamUrl: item.streamUrl || `${window.location.origin}/player/${routeId(item.id)}`,
     };
 
     const thumbnail = (
@@ -128,19 +147,21 @@ export default function HistoryCard({ item, onRemove }) {
     );
 
     // All option logic lives in FloatingActionMenu — same menu everywhere.
+    // Each card style draws the ⋮ button with its own classes via renderMenu(className).
     // preventDefault on both the trigger button and the menu wrapper — the
     // card itself is a <Link>, this stops the menu from also navigating it.
-    const menu = (
+    const renderMenu = (btnClass) => (
         <>
             <button
                 ref={btnRef}
                 type="button"
+                aria-label="More options"
                 onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     setMenuOpen((v) => !v);
                 }}
-                className="shrink-0 mt-0.5 mx-2 border-0 leading-none flex items-center justify-center rounded-md text-white/60 hover:text-white cursor-pointer transition-colors">
+                className={btnClass}>
                 <EllipsisVertical size={14} />
             </button>
             <div onClick={(e) => e.preventDefault()}>
@@ -149,16 +170,43 @@ export default function HistoryCard({ item, onRemove }) {
         </>
     );
 
+    // ── Rich props (flat designs) ──
+    const typeLabel = mediaType === "anime" ? "ANIME" : isSeries ? "SERIES" : "MOVIE";
+    const seMeta = [item.seasonNumber != null ? `S${item.seasonNumber}` : null, item.episodeNumber != null ? `E${item.episodeNumber}` : null].filter(Boolean).join(" · ");
+    const year = item.year ?? item.metadata?.year ?? null;
+    const ago = timeAgo(lastWatchedAt(item));
+
     return (
         <HorizontalCard
-            to={`/player/${encodeURIComponent(item.id)}`}
+            variant={variant}
+            to={`/player/${routeId(item.id)}`}
             state={{ knownResumePosition: item.position }}
             thumbnail={thumbnail}
-            badge={badge}
             progress={pct}
+            completed={!!item.completed}
+            renderMenu={renderMenu}
+            // classic
+            badge={badge}
             footerText={footerText}
             title={title}
-            menu={menu}
+            // rich
+            tone={isSeries ? "accent" : "primary"}
+            tag={item.completed ? { text: "Watched", icon: Check } : { text: `${leftFmt} left` }}
+            tab={
+                ago ? (
+                    <>
+                        <Clock size={12} className="text-base-content/70" />
+                        {ago}
+                    </>
+                ) : null
+            }
+            heading={
+                <span title={isSeries ? seriesLabel : item.title}>
+                    {item.title}
+                    {partLabel && <span className="ml-1 text-[11px] font-normal text-base-content/70">{partLabel}</span>}
+                </span>
+            }
+            meta={isSeries ? seMeta || typeLabel : `${typeLabel}${year ? ` · ${year}` : ""}`}
         />
     );
 }

@@ -73,21 +73,25 @@ export async function shareMedia({ url, poster }) {
 }
 
 /**
- * getStreamUrl — the ONE place that decides "what is the actual playable
- * link for this file right now". Calls resolvePlayback() (the exact same
- * call the player itself makes: GET /stream/video/:id?info=1) and returns:
- *   - direct file  → the real /stream/video/:id URL (stable, no session)
- *   - HLS file     → the absolute .m3u8 URL from the freshly-created session
- *                     (e.g. http://192.168.0.159:5000/stream/hls/<id>/master.m3u8)
- *
- * Copy Stream Link and Share Stream both call this so they always produce
- * the exact same link.
+ * getStreamLinks / getStreamUrl — the ONE place that decides "what link do I hand to an external player".
+ * Asks the server for a share link (POST /stream/share/:id) and returns its short URLs:
+ *   direct  → http://host/s/<12 chars>/<Title>.mkv   the file itself (best for VLC / MX Player: any codec, seekable)
+ *   hls     → http://host/s/<12 chars>/h/stream.m3u8  HLS, for players that want an .m3u8
+ * Unlike the old resolvePlayback() route this never starts a transcode session, so it is safe to call while
+ * the file is playing. The link works without logging in (the code is the credential) until it expires.
+ * Copy Stream Link, Share Stream and the Info panel all go through here, so they always give the same link.
  */
-export async function getStreamUrl(id) {
-    const { resolvePlayback } = await import("../Api/stream");
-    const info = await resolvePlayback(id);
-    const url = info.mode === "hls" ? info.hlsUrl : info.streamUrl;
-    if (!url) throw new Error("no playable stream url");
+export async function getStreamLinks(id, opts) {
+    const { createShareLink } = await import("../Api/stream");
+    const r = await createShareLink(id, opts);
+    if (!r?.urls?.direct) throw new Error("no stream url");
+    return { direct: r.urls.direct, hls: r.urls.hls, expiresAt: r.expiresAt, title: r.title, code: r.code };
+}
+
+export async function getStreamUrl(id, { mode = "direct", ttlHours } = {}) {
+    const links = await getStreamLinks(id, { ttlHours });
+    const url = mode === "hls" ? links.hls : links.direct;
+    if (!url) throw new Error("no stream url");
     return url;
 }
 

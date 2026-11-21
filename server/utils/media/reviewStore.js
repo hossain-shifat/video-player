@@ -1,0 +1,504 @@
+"use strict";
+
+// ============================================================================
+// reviewStore.js — the review system's own storage (server/data/media/reviews.json)
+//
+// Reviews, replies and reactions used to be (partly) metadata. They now live here, separate from
+// metadata.json, in one JSON file with the same safe-write pattern as trailerStore.js / metadataStore.js
+// (temp file → fsync → rename, so a crash can never leave a half-written file).
+//
+//   {
+//     "version": 1,
+//     "titles":  { "movie:603": { title, backdrop, poster, logo, type, fileId, inLibrary, feedOk, syncedAt } },
+//     "reviews": { "<id>": Review },
+//     "replies": { "<id>": Reply }
+//   }
+//
+//   Review = { id, key, source: "tmdb" | "local", externalId, userId, author: {name, avatar},
+//              rating (0–10 | null), content, createdAt, updatedAt, edited, reactions: { [userId]: type } }
+//   Reply  = { id, reviewId, parentId (top-level comment id | null), replyToId, userId, author, content,
+//              createdAt, updatedAt, edited, reactions: { [userId]: type } }
+//
+// Imported TMDB reviews have userId = null: nobody can edit them, but everybody can react and reply.
+// Reactions are one per user per item ({ userId: type }); people can switch or remove theirs.
+// ============================================================================
+
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+const STORE_FILE = path.join(__dirname, "..", "..", "data", "media", "reviews.json");
+
+const REACTION_TYPES = ["like", "love", "funny", "wow", "sad", "dislike"];
+
+let data = { version: 1, titles: {}, reviews: {}, replies: {} };
+let loaded = false;
+let frozen = false; // shutdown: after freeze() no mutation can happen, so the final snapshot is complete
+let loadPromise = null;
+
+// in-memory indexes (rebuilt on load, kept in sync by every write below)
+let byKey = new Map(); // titleKey → Set(reviewId)
+let repliesByReview = new Map(); // reviewId → Set(replyId)
+
+// Builds BOTH indexes from a candidate dataset and validates every record on the way. Throws on a malformed record,
+// so a bad file can never be half-installed: callers swap `data` + indexes in only after this succeeded.
+function buildIndexes(d) {
+    const nextByKey = new Map();
+    const nextReplies = new Map();
+    for (const r of Object.values(d.reviews)) {
+        if (!r || typeof r !== "object" || typeof r.id !== "string" || typeof r.key !== "string") throw new Error("malformed review record");
+        if (!nextByKey.has(r.key)) nextByKey.set(r.key, new Set());
+        nextByKey.get(r.key).add(r.id);
+    }
+    for (const rp of Object.values(d.replies)) {
+        if (!rp || typeof rp !== "object" || typeof rp.id !== "string" || typeof rp.reviewId !== "string") throw new Error("malformed reply record");
+        if (!nextReplies.has(rp.reviewId)) nextReplies.set(rp.reviewId, new Set());
+        nextReplies.get(rp.reviewId).add(rp.id);
+    }
+    return { nextByKey, nextReplies };
+}
+
+function install(d) {
+    const { nextByKey, nextReplies } = buildIndexes(d);
+    data = d;
+    byKey = nextByKey;
+    repliesByReview = nextReplies;
+    loaded = true; // only after validation AND both indexes succeeded
+}
+
+function assertWritable() {
+    if (frozen) {
+        const e = new Error("Review store is closed (server shutting down)");
+        e.code = "SHUTTING_DOWN";
+        throw e;
+    }
+}
+
+/** Refuse every further mutation (shutdown). Reads keep working. */
+function freeze() {
+    frozen = true;
+}
+
+function emptyData() {
+    return { version: 1, titles: {}, reviews: {}, replies: {} };
+}
+
+async function loadStore() {
+    if (loaded) return;
+    if (loadPromise) return loadPromise;
+    loadPromise = (async () => {
+        try {
+            let raw;
+            try {
+                raw = await fs.promises.readFile(STORE_FILE, "utf-8");
+            } catch (err) {
+                if (err.code === "ENOENT") {
+                    install(emptyData());
+                    return;
+                }
+                // EACCES / EBUSY …: do NOT start from an empty store (the next save would overwrite the real file).
+                console.error("[Reviews] Failed to read store (will retry on next access):", err.message);
+                throw err;
+            }
+
+            let parsed;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (err) {
+                // Corrupt JSON can never become valid by retrying — keep a copy for manual recovery, then start empty.
+                const bak = `${STORE_FILE}.corrupt-${Date.now()}`;
+                try {
+                    await fs.promises.copyFile(STORE_FILE, bak);
+                } catch (copyErr) {
+                    console.error("[Reviews] reviews.json is corrupt and could not be backed up — leaving it untouched:", copyErr.message);
+                    throw err;
+                }
+                console.error(`[Reviews] reviews.json is corrupt — copied to ${bak}, starting empty:`, err.message);
+                install(emptyData());
+                return;
+            }
+
+            const next = emptyData();
+            if (parsed && typeof parsed === "object") {
+                if (parsed.titles && typeof parsed.titles === "object") next.titles = parsed.titles;
+                if (parsed.reviews && typeof parsed.reviews === "object") next.reviews = parsed.reviews;
+                if (parsed.replies && typeof parsed.replies === "object") next.replies = parsed.replies;
+            }
+            try {
+                install(next);
+            } catch (err) {
+                // valid JSON, invalid records: stays unloaded (and untouched on disk) until the data is repaired
+                console.error("[Reviews] reviews.json holds malformed records — NOT loaded, file left untouched:", err.message);
+                throw err;
+            }
+            console.log(`[Reviews] Loaded store (titles=${Object.keys(data.titles).length}, reviews=${Object.keys(data.reviews).length}, replies=${Object.keys(data.replies).length})`);
+        } finally {
+            loadPromise = null; // always cleared, so a later request can retry after a failure
+        }
+    })();
+    return loadPromise;
+}
+
+// ─── persistence: debounced, single writer, atomic ────────────────────────────
+// `dirty` stays true until a write has really reached disk (rename ok). A failed write keeps it true,
+// retries later, and flush() on shutdown tries again — so an acknowledged review is never silently lost.
+let saveTimer = null;
+let writing = Promise.resolve();
+let dirty = false;
+const RETRY_MS = 5000;
+
+async function writeNow() {
+    if (!dirty) return;
+    dirty = false; // anything mutated from here on sets it again
+    let tmp = null;
+    try {
+        await fs.promises.mkdir(path.dirname(STORE_FILE), { recursive: true });
+        tmp = `${STORE_FILE}.tmp.${process.pid}.${Date.now()}`;
+        const fd = await fs.promises.open(tmp, "w");
+        try {
+            await fd.writeFile(JSON.stringify(data), "utf-8"); // compact — no indent (same OOM lesson as the other stores)
+            await fd.sync();
+        } finally {
+            await fd.close();
+        }
+        await fs.promises.rename(tmp, STORE_FILE);
+    } catch (err) {
+        dirty = true; // not persisted — keep it pending
+        // remove the half-written temp file (it is closed by now); the committed store file is never touched
+        if (tmp) await fs.promises.rm(tmp, { force: true }).catch(() => {});
+        console.error("[Reviews] Save failed (will retry):", err.message);
+        scheduleSave(RETRY_MS);
+    }
+}
+
+function scheduleSave(delay = 800) {
+    dirty = true;
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        writing = writing.then(writeNow).catch(() => {}); // the queue itself must never end up rejected
+    }, delay);
+    saveTimer.unref?.();
+}
+
+/**
+ * Persist everything pending, retrying failed attempts until `deadlineMs` runs out (shutdown path).
+ * Resolves true when nothing is left uncommitted, false when changes are STILL pending at the deadline.
+ * Never rejects.
+ */
+async function flush(deadlineMs = 5000) {
+    const end = Date.now() + deadlineMs;
+    for (;;) {
+        if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+        }
+        writing = writing.then(writeNow).catch(() => {});
+        await writing;
+        if (saveTimer) {
+            clearTimeout(saveTimer); // writeNow scheduled a background retry — we retry ourselves below
+            saveTimer = null;
+        }
+        if (!dirty) return true;
+        if (Date.now() >= end) return false;
+        await new Promise((r) => setTimeout(r, 250));
+    }
+}
+
+const newId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
+const nowIso = () => new Date().toISOString();
+
+// ─── reactions ────────────────────────────────────────────────────────────────
+
+/** { counts: { like: 3, love: 1, … }, total, mine: type | null } — viewerId may be null (guest) */
+function summarizeReactions(map, viewerId) {
+    const counts = {};
+    let total = 0;
+    for (const type of Object.values(map || {})) {
+        if (!REACTION_TYPES.includes(type)) continue;
+        counts[type] = (counts[type] || 0) + 1;
+        total++;
+    }
+    return { counts, total, mine: viewerId && map?.[viewerId] ? map[viewerId] : null };
+}
+
+// ─── titles (info for the cards + sync bookkeeping) ───────────────────────────
+
+async function getTitle(key) {
+    await loadStore();
+    return data.titles[key] || null;
+}
+
+async function upsertTitle(key, patch) {
+    await loadStore();
+    assertWritable();
+    data.titles[key] = { ...(data.titles[key] || {}), ...patch };
+    scheduleSave();
+    return data.titles[key];
+}
+
+async function allTitles() {
+    await loadStore();
+    return data.titles;
+}
+
+/**
+ * Move a title's USER content from one namespace key to another (e.g. anime film stored as "tv:ID" → "movie:ID").
+ * Local reviews move with their replies/reactions. Imported TMDB reviews of the old key belong to a DIFFERENT TMDB
+ * record, so they are dropped when nobody interacted with them, and left (unpublished) under the old key otherwise.
+ */
+async function migrateTitleKey(from, to) {
+    await loadStore();
+    assertWritable();
+    if (from === to) return { moved: 0, dropped: 0 };
+    let moved = 0;
+    let dropped = 0;
+    for (const id of [...(byKey.get(from) || [])]) {
+        const r = data.reviews[id];
+        if (!r) continue;
+        if (r.source === "local") {
+            const dup = r.userId && [...(byKey.get(to) || [])].some((x) => data.reviews[x]?.userId === r.userId);
+            if (dup) continue; // user already reviewed the new key — keep the old one untouched
+            r.key = to;
+            byKey.get(from).delete(id);
+            if (!byKey.has(to)) byKey.set(to, new Set());
+            byKey.get(to).add(id);
+            moved++;
+        } else if (!Object.keys(r.reactions || {}).length && !(repliesByReview.get(id)?.size)) {
+            byKey.get(from).delete(id);
+            delete data.reviews[id];
+            dropped++;
+        }
+    }
+    const old = data.titles[from];
+    if (old) {
+        if (!data.titles[to]) data.titles[to] = { ...old, syncedAt: null, logo: null, logoChecked: false };
+        data.titles[from] = { ...old, inLibrary: false, fileId: null };
+    }
+    scheduleSave();
+    return { moved, dropped };
+}
+
+// ─── reviews ──────────────────────────────────────────────────────────────────
+
+async function getReview(id) {
+    await loadStore();
+    return data.reviews[id] || null;
+}
+
+async function listReviewsFor(key) {
+    await loadStore();
+    return [...(byKey.get(key) || [])].map((id) => data.reviews[id]).filter(Boolean);
+}
+
+async function allReviews() {
+    await loadStore();
+    return Object.values(data.reviews);
+}
+
+async function findUserReview(key, userId) {
+    await loadStore();
+    for (const id of byKey.get(key) || []) {
+        const r = data.reviews[id];
+        if (r && r.userId === userId) return r;
+    }
+    return null;
+}
+
+async function addReview({ key, userId, author, rating, content }) {
+    await loadStore();
+    assertWritable();
+    // Uniqueness is enforced HERE, after the load and with no await before the insert, so two concurrent
+    // requests from one user cannot both pass (the controller's earlier check is only a fast path).
+    if (userId) {
+        for (const rid of byKey.get(key) || []) {
+            const dup = data.reviews[rid];
+            if (dup && dup.userId === userId) {
+                const e = new Error("User already reviewed this title");
+                e.code = "ALREADY_REVIEWED";
+                e.existing = dup;
+                throw e;
+            }
+        }
+    }
+    const t = nowIso();
+    const review = { id: newId("rv"), key, source: "local", externalId: null, userId, author, rating, content, createdAt: t, updatedAt: t, edited: false, reactions: {} };
+    data.reviews[review.id] = review;
+    if (!byKey.has(key)) byKey.set(key, new Set());
+    byKey.get(key).add(review.id);
+    scheduleSave();
+    return review;
+}
+
+async function updateReview(id, patch) {
+    await loadStore();
+    assertWritable();
+    const r = data.reviews[id];
+    if (!r) return null;
+    if (patch.rating !== undefined) r.rating = patch.rating;
+    if (patch.content !== undefined) r.content = patch.content;
+    r.updatedAt = nowIso();
+    r.edited = true;
+    scheduleSave();
+    return r;
+}
+
+/** Deletes the review and every reply under it. */
+async function removeReview(id) {
+    await loadStore();
+    assertWritable();
+    const r = data.reviews[id];
+    if (!r) return false;
+    for (const rid of repliesByReview.get(id) || []) delete data.replies[rid];
+    repliesByReview.delete(id);
+    byKey.get(r.key)?.delete(id);
+    delete data.reviews[id];
+    scheduleSave();
+    return true;
+}
+
+/**
+ * TMDB import — idempotent. A review is identified by its TMDB id, so re-running never duplicates and never
+ * touches reactions or replies; only the TMDB-owned fields (text, rating, name, avatar) are refreshed.
+ * items: [{ externalId, author, avatar, rating, content, createdAt, updatedAt }]  (content already cleaned)
+ */
+async function importReviews(key, items) {
+    await loadStore();
+    assertWritable();
+    let added = 0;
+    let updated = 0;
+    for (const it of items) {
+        const id = `tmdb_${it.externalId}`;
+        const existing = data.reviews[id];
+        if (!existing) {
+            data.reviews[id] = {
+                id,
+                key,
+                source: "tmdb",
+                externalId: it.externalId,
+                userId: null,
+                author: { name: it.author, avatar: it.avatar || null },
+                rating: it.rating ?? null,
+                content: it.content,
+                createdAt: it.createdAt || nowIso(),
+                updatedAt: it.updatedAt || it.createdAt || nowIso(),
+                edited: false,
+                reactions: {},
+            };
+            if (!byKey.has(key)) byKey.set(key, new Set());
+            byKey.get(key).add(id);
+            added++;
+        } else if (existing.content !== it.content || existing.rating !== (it.rating ?? null) || existing.author?.name !== it.author) {
+            existing.content = it.content;
+            existing.rating = it.rating ?? null;
+            existing.author = { name: it.author, avatar: it.avatar || existing.author?.avatar || null };
+            existing.updatedAt = it.updatedAt || existing.updatedAt;
+            updated++;
+        }
+    }
+    if (added || updated) scheduleSave();
+    return { added, updated };
+}
+
+// ─── replies (top-level comments + their replies) ─────────────────────────────
+
+async function getReply(id) {
+    await loadStore();
+    return data.replies[id] || null;
+}
+
+async function listRepliesFor(reviewId) {
+    await loadStore();
+    return [...(repliesByReview.get(reviewId) || [])]
+        .map((id) => data.replies[id])
+        .filter(Boolean)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+async function replyCount(reviewId) {
+    await loadStore();
+    return repliesByReview.get(reviewId)?.size || 0;
+}
+
+async function addReply({ reviewId, parentId, replyToId, userId, author, content }) {
+    await loadStore();
+    assertWritable();
+    const t = nowIso();
+    const reply = { id: newId("rp"), reviewId, parentId: parentId || null, replyToId: replyToId || null, userId, author, content, createdAt: t, updatedAt: t, edited: false, reactions: {} };
+    data.replies[reply.id] = reply;
+    if (!repliesByReview.has(reviewId)) repliesByReview.set(reviewId, new Set());
+    repliesByReview.get(reviewId).add(reply.id);
+    scheduleSave();
+    return reply;
+}
+
+async function updateReply(id, content) {
+    await loadStore();
+    assertWritable();
+    const rp = data.replies[id];
+    if (!rp) return null;
+    rp.content = content;
+    rp.updatedAt = nowIso();
+    rp.edited = true;
+    scheduleSave();
+    return rp;
+}
+
+/** Deleting a top-level comment deletes the replies under it as well. */
+async function removeReply(id) {
+    await loadStore();
+    assertWritable();
+    const rp = data.replies[id];
+    if (!rp) return false;
+    const set = repliesByReview.get(rp.reviewId);
+    const doomed = [id];
+    if (!rp.parentId) for (const other of set || []) if (data.replies[other]?.parentId === id) doomed.push(other);
+    for (const d of doomed) {
+        set?.delete(d);
+        delete data.replies[d];
+    }
+    scheduleSave();
+    return true;
+}
+
+// ─── reactions on either kind ─────────────────────────────────────────────────
+
+/** type = one of REACTION_TYPES, or null to remove the user's reaction. Returns the updated item. */
+async function setReaction(kind, id, userId, type) {
+    await loadStore();
+    assertWritable();
+    const item = kind === "review" ? data.reviews[id] : data.replies[id];
+    if (!item) return null;
+    if (!item.reactions) item.reactions = {};
+    if (type === null || type === undefined) delete item.reactions[userId];
+    else item.reactions[userId] = type;
+    scheduleSave();
+    return item;
+}
+
+module.exports = {
+    REACTION_TYPES,
+    freeze,
+    migrateTitleKey,
+    loadStore,
+    flush,
+    summarizeReactions,
+    getTitle,
+    upsertTitle,
+    allTitles,
+    getReview,
+    listReviewsFor,
+    allReviews,
+    findUserReview,
+    addReview,
+    updateReview,
+    removeReview,
+    importReviews,
+    getReply,
+    listRepliesFor,
+    replyCount,
+    addReply,
+    updateReply,
+    removeReply,
+    setReaction,
+};

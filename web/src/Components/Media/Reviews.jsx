@@ -1,45 +1,46 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Star, StarHalf, ThumbsUp, X, Calendar, User, Quote, Heart, MessageSquare } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { getPopularReviews, getPopularDiscussions } from "../../Api/reviews";
+import { useNavigate } from "react-router";
+import { ChevronLeft, ChevronRight, MessageSquare, Heart, ThumbsUp, ThumbsDown, Star, PenLine, X } from "lucide-react";
+import { useAuth } from "../../Auth/AuthContext";
+import { useAuthModal } from "../../Auth/AuthModalContext";
+import { useTitleReviews, useCreateReview, useUpdateReview, useReact, usePopularFeed } from "../../Hooks/Query/useReviews";
+import { StarRating, Avatar, useDominantColor, seedReactions, seedCount, fmtCount, fmtLongDate, smartDate } from "./ReviewThread";
 
-const Profile_IMG = "https://image.tmdb.org/t/p/w45";
+export { usePopularFeed };
 
-// ─── Shared TMDB review fetch ─────────────────────────────────────────────────
-async function fetchReview(reviewId) {
-    const key = import.meta.env.VITE_TMDB_API_KEY;
-    if (!key) return null;
-    const r = await fetch(`https://api.themoviedb.org/3/review/${reviewId}?api_key=${key}&language=en-US`);
-    if (!r.ok) return null;
-    return r.json();
-}
+// ─── write / edit a review ────────────────────────────────────────────────────
 
-// ─── Star Rating ──────────────────────────────────────────────────────────────
-function StarRating({ rating, max = 10, size = 13, light = false }) {
-    if (rating == null) return null;
-    const exact = (rating / max) * 5;
-    const full = Math.floor(exact);
-    const hasHalf = exact - full >= 0.25 && exact - full < 0.75;
-    const roundedFull = exact - full >= 0.75 ? full + 1 : full;
+function StarInput({ value, onChange }) {
+    const [hover, setHover] = useState(0);
+    const shown = hover || value;
     return (
-        <div className="flex items-center gap-0.5">
-            {Array.from({ length: 5 }).map((_, i) => {
-                const on = light ? "text-white fill-white" : "text-warning fill-warning";
-                const off = light ? "text-white/35 fill-white/10" : "text-base-content/20 fill-base-content/10";
-                if (i < roundedFull) return <Star key={i} size={size} className={on} />;
-                if (i === roundedFull && hasHalf) return <StarHalf key={i} size={size} className={on} />;
-                return <Star key={i} size={size} className={off} />;
-            })}
+        <div className="flex items-center gap-1" onMouseLeave={() => setHover(0)}>
+            {[1, 2, 3, 4, 5].map((n) => (
+                <button
+                    key={n}
+                    type="button"
+                    aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                    onMouseEnter={() => setHover(n)}
+                    onClick={() => onChange(n)}
+                    className="cursor-pointer p-0.5 transition-transform hover:scale-110">
+                    <Star size={30} className={n <= shown ? "fill-warning text-warning" : "fill-base-content/10 text-base-content/25"} />
+                </button>
+            ))}
         </div>
     );
 }
 
-// ─── Review Modal ─────────────────────────────────────────────────────────────
-export function ReviewModal({ data, onClose }) {
+export function WriteReviewModal({ kind, tmdbId, meta, existing, onClose }) {
+    const create = useCreateReview(kind, tmdbId);
+    const update = useUpdateReview();
+    const [stars, setStars] = useState(existing?.rating ? Math.ceil(existing.rating / 2) : 0);
+    const [text, setText] = useState(existing?.content || "");
+    const [error, setError] = useState("");
+    const pending = create.isPending || update.isPending;
+
     useEffect(() => {
         const onKey = (e) => e.key === "Escape" && onClose();
         document.addEventListener("keydown", onKey);
-        // lock body scroll
         document.body.style.overflow = "hidden";
         return () => {
             document.removeEventListener("keydown", onKey);
@@ -47,78 +48,63 @@ export function ReviewModal({ data, onClose }) {
         };
     }, [onClose]);
 
-    if (!data) return null;
-
-    const avatarPath = data.author_details?.avatar_path;
-    const avatarUrl = avatarPath ? (avatarPath.startsWith("/https") ? avatarPath.slice(1) : `${Profile_IMG}${avatarPath}`) : null;
-    const rating = data.author_details?.rating ?? null;
-    const date = data.created_at
-        ? new Date(data.created_at).toLocaleDateString("en-US", {
-              month: "long",
-              day: "numeric",
-              year: "numeric",
-          })
-        : null;
+    const submit = () => {
+        setError("");
+        if (!stars) return setError("Pick a star rating first.");
+        if (text.trim().length < 10) return setError("Write at least 10 characters.");
+        const done = { onSuccess: onClose, onError: (e) => setError(e?.message || "Could not save your review.") };
+        if (existing) update.mutate({ id: existing.id, rating: stars * 2, content: text }, done);
+        else create.mutate({ rating: stars * 2, content: text, title: meta.title, poster: meta.poster, backdrop: meta.backdrop }, done);
+    };
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose} style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)" }}>
             <div
                 role="dialog"
                 aria-modal="true"
-                aria-label={`Review by ${data.author}`}
-                className="relative w-full max-w-xl bg-base-200 rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden"
-                style={{ maxHeight: "70vh", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
+                aria-label="Write a review"
+                className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-base-200 shadow-2xl"
                 onClick={(e) => e.stopPropagation()}>
-                {/* ── Header ── */}
-                <div className="flex items-start gap-3.5 px-6 pt-6 pb-4 border-b border-white/8 shrink-0 bg-base-300/30">
-                    {avatarUrl ? (
-                        <img src={avatarUrl} alt={data.author} className="w-12 h-12 rounded-full object-cover ring-2 ring-primary/25 shrink-0" />
-                    ) : (
-                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center ring-2 ring-primary/25 shrink-0">
-                            <User size={18} className="text-primary" />
-                        </div>
-                    )}
-                    <div className="flex-1 min-w-0 pt-0.5">
-                        <p className="text-base font-bold text-white leading-tight truncate">{data.author}</p>
-                        {date && (
-                            <span className="flex items-center gap-1 text-[11px] text-base-content/60 mt-1">
-                                <Calendar size={10} /> {date}
-                            </span>
-                        )}
+                <div className="flex items-center justify-between border-b border-white/8 bg-base-300/30 px-6 py-4">
+                    <div className="min-w-0">
+                        <p className="truncate text-base font-bold text-white">{existing ? "Edit your review" : "Write a review"}</p>
+                        {meta.title && <p className="truncate text-[11px] text-base-content/60">{meta.title}</p>}
                     </div>
+                    <button onClick={onClose} aria-label="Close" className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/8 bg-base-100 hover:bg-white/10">
+                        <X size={14} className="text-base-content/70" />
+                    </button>
                 </div>
 
-                {/* Close */}
-                <button
-                    onClick={onClose}
-                    className="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-base-100 hover:bg-white/10 border border-white/8 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
-                    aria-label="Close">
-                    <X size={14} className="text-base-content/70" />
-                </button>
-
-                {/* ── Scrollable body — no scrollbar ── */}
-                <div className="relative flex-1 overflow-y-auto px-6 py-5" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                    <style>{`div::-webkit-scrollbar { display: none; }`}</style>
-                    <Quote size={40} className="text-primary/10 absolute top-3 right-4 pointer-events-none" fill="currentColor" />
-                    <p className="relative text-[13.5px] text-base-content/92 leading-relaxed whitespace-pre-line">{data.content}</p>
+                <div className="space-y-4 px-6 py-5">
+                    <div>
+                        <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-base-content/55">Your rating</p>
+                        <StarInput value={stars} onChange={setStars} />
+                    </div>
+                    <div>
+                        <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-base-content/55">Your review</p>
+                        <textarea
+                            value={text}
+                            onChange={(e) => setText(e.target.value)}
+                            maxLength={5000}
+                            rows={6}
+                            placeholder="What did you think? Others can react and reply, so it becomes a discussion."
+                            className="block w-full resize-none rounded-xl border border-white/10 bg-base-100 px-3.5 py-3 text-[13.5px] text-base-content placeholder:text-base-content/40 focus:border-primary focus:outline-none"
+                        />
+                        <p className="mt-1 text-right text-[11px] text-base-content/45">{text.length}/5000</p>
+                    </div>
+                    {error && <p className="text-xs text-error">{error}</p>}
                 </div>
 
-                {/* ── Footer ── */}
-                <div className="flex items-center justify-between px-6 py-3.5 border-t border-white/8 shrink-0 bg-base-300/25">
-                    <div className="flex items-center gap-3">
-                        <button className="flex items-center gap-1.5 text-[11px] font-semibold text-base-content/60 hover:text-primary transition-colors cursor-pointer">
-                            <ThumbsUp size={12} />
-                            <span>Helpful</span>
-                        </button>
-                        {rating != null && (
-                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-base-100 border border-white/8">
-                                <StarRating rating={rating} size={10} />
-                                <span className="text-[11px] font-bold text-white/90 leading-none">{((rating / 10) * 5).toFixed(1)}</span>
-                            </div>
-                        )}
-                    </div>
-                    <button onClick={onClose} className="text-[11px] font-bold text-primary-content bg-primary hover:bg-primary/85 transition-colors cursor-pointer px-4 py-1.5 rounded-full">
-                        Done
+                <div className="flex items-center justify-end gap-2 border-t border-white/8 bg-base-300/25 px-6 py-3.5">
+                    <button type="button" onClick={onClose} className="cursor-pointer rounded-full px-4 py-1.5 text-xs font-semibold text-base-content/70 hover:text-white">
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={submit}
+                        disabled={pending}
+                        className="cursor-pointer rounded-full bg-primary px-5 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85 disabled:opacity-50">
+                        {pending ? "Saving…" : existing ? "Save changes" : "Post review"}
                     </button>
                 </div>
             </div>
@@ -126,252 +112,268 @@ export function ReviewModal({ data, onClose }) {
     );
 }
 
-// ─── Review Card ──────────────────────────────────────────────────────────────
-function ReviewCard({ data, featured }) {
-    const [modalOpen, setModalOpen] = useState(false);
-    if (!data) return null;
+// ─── one review card (details page + "more reviews" on the review page) ───────
+// Compact Plex-style card: avatar · name · date on top, the first lines of the review, then 👍 · comments on the left and the
+// reaction badges + count on the right. Fixed size (so every card in a row lines up), text is clamped and long words wrap —
+// nothing can overflow. No star rating on the card (it is on the review page).
 
-    const avatarPath = data.author_details?.avatar_path;
-    const avatarUrl = avatarPath ? (avatarPath.startsWith("/https") ? avatarPath.slice(1) : `${Profile_IMG}${avatarPath}`) : null;
-    const rating = data.author_details?.rating ?? null;
-    const date = data.created_at
-        ? new Date(data.created_at).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-          })
-        : null;
-    const reviewText = data.content || "";
-    const isLong = reviewText.length > 220;
-    const preview = isLong ? reviewText.slice(0, 220).trimEnd() + "…" : reviewText;
+const BADGE = {
+    like: { bg: "bg-sky-500", icon: <ThumbsUp size={9} className="fill-white text-white" /> },
+    love: { bg: "bg-pink-500", icon: <Heart size={9} className="fill-white text-white" /> },
+    funny: { bg: "bg-amber-400", icon: <span className="text-[10px] leading-none">😂</span> },
+    wow: { bg: "bg-amber-400", icon: <span className="text-[10px] leading-none">😮</span> },
+    sad: { bg: "bg-amber-400", icon: <span className="text-[10px] leading-none">😢</span> },
+    dislike: { bg: "bg-violet-500", icon: <ThumbsDown size={9} className="fill-white text-white" /> },
+};
+
+export function ReactionCluster({ summary }) {
+    const top = Object.entries(summary.counts || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+    if (!summary.total || !top.length) return null;
+    return (
+        <span className="flex items-center gap-1.5">
+            <span className="flex -space-x-1.5">
+                {top.map(([t]) => (
+                    <span key={t} className={`flex h-[18px] w-[18px] items-center justify-center rounded-full ring-2 ring-base-200 ${BADGE[t]?.bg || "bg-base-300"}`}>
+                        {BADGE[t]?.icon}
+                    </span>
+                ))}
+            </span>
+            <span className="text-[12px] font-bold tabular-nums text-white">{fmtCount(summary.total)}</span>
+        </span>
+    );
+}
+
+/**
+ * ReviewCard
+ *   default → compact 258×176 card for the horizontal row on the details page
+ *   wide    → full-width card for the review / discussion pages ("More reviews of …"): one per row, grows with the text,
+ *             real avatar + rating + a longer excerpt — not the short row card
+ */
+export function ReviewCard({ review, onOpen, onLike, wide = false }) {
+    const shown = seedReactions(review.reactions, review.id); // placeholder numbers until real reactions take over (see ReviewThread.jsx)
+    const liked = review.reactions?.mine === "like";
+    const pad = wide ? "px-4" : "px-3.5";
 
     return (
-        <>
-            <div
-                className={`relative shrink-0 w-72 sm:w-80 bg-base-200 rounded-2xl border flex flex-col p-4 gap-3 select-text transition-all duration-200 ${
-                    featured ? "border-primary/25" : "border-white/6"
-                } ${isLong ? "cursor-pointer hover:border-primary/25 hover:bg-base-300/50 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20" : ""}`}
-                onClick={() => isLong && setModalOpen(true)}>
-                {featured && (
-                    <span className="absolute -top-2.5 left-4 text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-primary text-primary-content shadow-md">Most detailed</span>
-                )}
-                {/* Header */}
-                <div className="flex items-center gap-2.5 min-w-0">
-                    {avatarUrl ? (
-                        <img src={avatarUrl} alt={data.author} className="w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-white/10" />
-                    ) : (
-                        <div className="w-9 h-9 rounded-full bg-primary/20 flex items-center justify-center shrink-0 ring-1 ring-white/10">
-                            <span className="text-sm font-bold text-primary">{(data.author || "?")[0].toUpperCase()}</span>
-                        </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                        <p className="text-sm font-bold text-white truncate leading-tight">{data.author}</p>
-                        {date && <p className="text-[11px] text-base-content/65 leading-tight mt-0.5">{date}</p>}
-                    </div>
+        <div
+            role="button"
+            tabIndex={0}
+            onClick={onOpen}
+            onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return; // keys on the nested Like button belong to the button
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpen?.();
+                }
+            }}
+            className={`flex cursor-pointer select-text flex-col overflow-hidden rounded-xl bg-base-200 outline-none transition-colors duration-150 hover:bg-base-300 focus:outline-none focus-visible:outline-none ${wide ? "w-full" : "h-44 w-[258px] shrink-0"}`}>
+            <div className={`flex items-center gap-2.5 ${pad} ${wide ? "pt-4" : "pt-3.5"}`}>
+                <Avatar src={review.author?.avatar} name={review.author?.name} size={wide ? 40 : 36} />
+                <div className="min-w-0 flex-1 leading-tight">
+                    <p className={`truncate font-semibold text-white ${wide ? "text-sm" : "text-[13px]"}`}>{review.author?.name}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-base-content/55">{smartDate(review.createdAt)}</p>
                 </div>
+                {wide && review.rating != null && <StarRating rating={review.rating} size={15} />}
+                {review.isMine && <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">You</span>}
+            </div>
 
-                {/* Preview text */}
-                <div className="flex-1">
-                    <p className="text-xs text-base-content/85 leading-relaxed">{preview}</p>
-                    {isLong && (
-                        <span className="text-[11px] text-primary mt-1.5 inline-flex items-center gap-0.5 font-bold">
-                            Read full review <ChevronRight size={11} />
+            <p
+                className={`${pad} break-words text-base-content/90 [overflow-wrap:anywhere] ${wide ? "line-clamp-6 whitespace-pre-line pt-3 text-[14px] leading-relaxed" : "min-h-0 flex-1 overflow-hidden pt-3 text-[13px] leading-snug line-clamp-4"}`}>
+                {review.content}
+            </p>
+
+            <div className={`flex items-center justify-between gap-2 ${pad} text-base-content/65 ${wide ? "pb-4 pt-3" : "pb-3 pt-1.5"}`}>
+                <div className="flex min-w-0 items-center gap-3.5">
+                    <button
+                        type="button"
+                        aria-label="Like"
+                        disabled={!onLike}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onLike?.(review);
+                        }}
+                        className={`cursor-pointer border-none bg-transparent outline-none transition-colors hover:text-white disabled:cursor-default ${liked ? "text-primary" : ""}`}>
+                        <ThumbsUp size={18} className={liked ? "fill-current" : ""} />
+                    </button>
+                    <span className="flex items-center gap-1.5">
+                        <MessageSquare size={18} />
+                        {review.replyCount > 0 && <span className="text-[12px] font-bold tabular-nums text-white">{fmtCount(review.replyCount)}</span>}
+                    </span>
+                </div>
+                <ReactionCluster summary={shown} />
+            </div>
+        </div>
+    );
+}
+
+const SORTS = [
+    { value: "top", label: "Top" },
+    { value: "new", label: "Newest" },
+    { value: "rating", label: "Highest rated" },
+];
+
+// ─── Reviews (details page) ───────────────────────────────────────────────────
+/**
+ * Props:
+ *   tmdbId     {number}  TMDB id of the title (movie or show)
+ *   mediaType  {string}  "movie" | "series" | "anime"  (fallback only — an anime title can be a film OR a show)
+ *   kind       {string}  "movie" | "tv" — the title's real TMDB namespace; wins over mediaType when given
+ *   title, poster, backdrop — only used to label a review written for a title that is not in the library
+ */
+export default function Reviews({ tmdbId, mediaType, kind: kindProp, title, poster, backdrop }) {
+    const kind = kindProp === "movie" || kindProp === "tv" ? kindProp : mediaType === "movie" ? "movie" : "tv";
+    const { isAuthenticated } = useAuth();
+    const { openAuthModal } = useAuthModal();
+    const navigate = useNavigate();
+    const scrollRef = useRef(null);
+
+    const [sort, setSort] = useState("top");
+    const [limit, setLimit] = useState(24);
+    const [writing, setWriting] = useState(null); // { existing } | null
+    const openReview = (rid) => navigate(`/review/${rid}`);
+    const react = useReact();
+    const like = (r) => {
+        if (!isAuthenticated) return openAuthModal({ view: "login" });
+        react.mutate({ kind: "review", id: r.id, type: r.reactions?.mine === "like" ? null : "like" });
+    };
+
+    useEffect(() => {
+        setSort("top");
+        setLimit(24);
+    }, [kind, tmdbId]);
+
+    const q = useTitleReviews(kind, tmdbId, { sort, limit });
+    // keep the previous list on screen while a new sort / "load more" is loading (only for the SAME title)
+    const keep = useRef(null);
+    const wantKey = `${kind}:${tmdbId}`;
+    if (q.data) keep.current = q.data;
+    const data = q.data ?? (keep.current?.key === wantKey ? keep.current : null);
+
+    if (!tmdbId) return null;
+
+    const items = data?.items ?? [];
+    const myReview = data?.mine ? items.find((r) => r.id === data.mine) : null;
+    const scroll = (dir) => scrollRef.current?.scrollBy({ left: dir * 350, behavior: "smooth" });
+
+    const onWrite = () => {
+        if (!isAuthenticated) return openAuthModal({ view: "login" });
+        if (data?.mine && !myReview) return openReview(data.mine); // yours is outside this page — open it, it has an Edit button
+        setWriting({ existing: myReview || null });
+    };
+
+    return (
+        <section className="w-full">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h2 className="flex items-center gap-2.5 text-base font-bold tracking-tight text-white sm:text-lg">
+                        <span className="h-5 w-1 shrink-0 rounded-full bg-primary" />
+                        <Star size={18} className="shrink-0 text-primary" />
+                        Ratings &amp; Reviews
+                        {data && <span className="text-sm font-medium text-white/60">({data.total})</span>}
+                    </h2>
+                    {data?.average != null && (
+                        <span className="flex items-center gap-1.5 rounded-full border border-white/8 bg-base-200 py-1 pl-2.5 pr-3 text-xs">
+                            <Star size={12} className="fill-warning text-warning" />
+                            <span className="font-bold text-white">{(data.average / 2).toFixed(1)}</span>
+                            <span className="text-base-content/55">/ 5</span>
                         </span>
                     )}
                 </div>
 
-                {/* Footer — rating stars + helpful, bottom-aligned */}
-                <div className="pt-2.5 border-t border-white/6 flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-base-content/60">
-                        <ThumbsUp size={11} />
-                        <span className="text-[11px] font-medium">Helpful</span>
-                    </div>
-                    {rating != null && (
-                        <div className="flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-full bg-base-300/70 border border-white/8 shrink-0">
-                            <StarRating rating={rating} size={10} />
-                            <span className="text-[11px] font-bold text-white/90">{((rating / 10) * 5).toFixed(1)}</span>
-                        </div>
+                <div className="flex items-center gap-2">
+                    {items.length > 1 && (
+                        <select
+                            value={sort}
+                            onChange={(e) => setSort(e.target.value)}
+                            aria-label="Sort reviews"
+                            className="cursor-pointer rounded-full border border-white/8 bg-base-200 px-3 py-1.5 text-xs font-semibold text-base-content/80 focus:outline-none">
+                            {SORTS.map((s) => (
+                                <option key={s.value} value={s.value}>
+                                    {s.label}
+                                </option>
+                            ))}
+                        </select>
                     )}
-                </div>
-            </div>
-
-            {modalOpen && <ReviewModal data={data} onClose={() => setModalOpen(false)} />}
-        </>
-    );
-}
-
-// ─── Reviews (exported) ───────────────────────────────────────────────────────
-/**
- * Props:
- *   reviews   {string[]}  — array of TMDB review IDs
- *   tmdbId    {number}    — TMDB item ID (unused here, kept for future)
- *   mediaType {string}    — "movie" | "tv"
- */
-const REVIEW_BATCH = 12; // reviews fetched per batch — the backend stores every id, so never fetch them all at once
-
-export default function Reviews({ reviews, tmdbId, mediaType }) {
-    const scrollRef = useRef(null);
-    const cacheRef = useRef(new Map()); // review id → full review (never fetched twice)
-    const [sorted, setSorted] = useState(null); // null = still loading
-    const [limit, setLimit] = useState(REVIEW_BATCH);
-    const [loadingMore, setLoadingMore] = useState(false);
-    const reviewsKey = reviews?.join(",") ?? "";
-
-    // new title → start over from the first batch
-    useEffect(() => {
-        cacheRef.current = new Map();
-        setLimit(REVIEW_BATCH);
-    }, [reviewsKey]);
-
-    useEffect(() => {
-        if (!reviews?.length) {
-            setSorted([]);
-            return;
-        }
-        let cancelled = false;
-        const wanted = reviews.slice(0, limit);
-        const missing = wanted.filter((rid) => !cacheRef.current.has(rid));
-        if (!missing.length && sorted !== null) return undefined;
-        if (sorted === null || limit === REVIEW_BATCH) setSorted(null);
-        Promise.allSettled(missing.map((rid) => fetchReview(rid)))
-            .then((results) => {
-                if (cancelled) return;
-                results.forEach((r, i) => cacheRef.current.set(missing[i], r.status === "fulfilled" ? r.value : null));
-                const valid = wanted.map((rid) => cacheRef.current.get(rid)).filter(Boolean);
-                // Longest review (by word count) surfaces first
-                valid.sort((a, b) => (b.content || "").trim().split(/\s+/).length - (a.content || "").trim().split(/\s+/).length);
-                setSorted(valid);
-                setLoadingMore(false);
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setSorted((prev) => prev ?? []);
-                    setLoadingMore(false);
-                }
-            });
-        return () => {
-            cancelled = true;
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [reviewsKey, limit]);
-
-    if (!reviews?.length) return null;
-
-    const scroll = (dir) => scrollRef.current?.scrollBy({ left: dir * 350, behavior: "smooth" });
-
-    return (
-        <section className="w-full">
-            <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2.5 tracking-tight">
-                    <span className="w-1 h-5 rounded-full bg-primary shrink-0" />
-                    <Star size={18} className="text-primary shrink-0" />
-                    Ratings &amp; Reviews
-                    <span className="text-sm font-medium text-white/60">({reviews.length})</span>
-                </h2>
-                <div className="flex gap-1.5">
-                    <button
-                        onClick={() => scroll(-1)}
-                        className="w-8 h-8 rounded-full bg-base-200 hover:bg-base-300 border border-white/5 flex items-center justify-center transition-colors cursor-pointer"
-                        aria-label="Scroll left">
-                        <ChevronLeft size={14} className="text-base-content/70" />
-                    </button>
-                    <button
-                        onClick={() => scroll(1)}
-                        className="w-8 h-8 rounded-full bg-base-200 hover:bg-base-300 border border-white/5 flex items-center justify-center transition-colors cursor-pointer"
-                        aria-label="Scroll right">
-                        <ChevronRight size={14} className="text-base-content/70" />
-                    </button>
-                </div>
-            </div>
-
-            <div ref={scrollRef} className="flex gap-3 overflow-x-auto pt-2.5 pb-2" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                {sorted === null
-                    ? reviews.map((rid) => <div key={rid} className="shrink-0 w-72 sm:w-80 h-48 bg-base-200 rounded-2xl border border-white/6 animate-pulse" />)
-                    : sorted.map((data, i) => <ReviewCard key={data.id ?? i} data={data} featured={i === 0} />)}
-                {sorted !== null && reviews.length > limit && (
                     <button
                         type="button"
-                        onClick={() => {
-                            setLoadingMore(true);
-                            setLimit((l) => l + REVIEW_BATCH);
-                        }}
-                        disabled={loadingMore}
-                        className="shrink-0 w-40 bg-base-200 hover:bg-base-300 rounded-2xl border border-white/6 flex flex-col items-center justify-center gap-1 text-xs font-bold text-primary transition-colors cursor-pointer disabled:opacity-60">
-                        {loadingMore ? "Loading…" : `Load more`}
-                        {!loadingMore && <span className="text-[11px] font-medium text-base-content/60">{reviews.length - limit} left</span>}
+                        onClick={onWrite}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content transition-colors hover:bg-primary/85">
+                        <PenLine size={12} />
+                        {data?.mine ? "Edit your review" : "Write a review"}
+                    </button>
+                    <div className="hidden gap-1.5 sm:flex">
+                        <button
+                            onClick={() => scroll(-1)}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300"
+                            aria-label="Scroll left">
+                            <ChevronLeft size={14} className="text-base-content/70" />
+                        </button>
+                        <button
+                            onClick={() => scroll(1)}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/5 bg-base-200 transition-colors hover:bg-base-300"
+                            aria-label="Scroll right">
+                            <ChevronRight size={14} className="text-base-content/70" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div ref={scrollRef} className="-mx-1 flex gap-3 overflow-x-auto px-1 py-2.5" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+                {!data && q.isLoading && [0, 1, 2].map((i) => <div key={i} className="h-44 w-[258px] shrink-0 animate-pulse rounded-xl bg-base-200" />)}
+
+                {!data && q.isError && (
+                    <div className="flex h-44 w-[258px] shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-base-200/50 p-5 text-center">
+                        <p className="text-sm font-bold text-white">Couldn&apos;t load reviews</p>
+                        <p className="text-xs text-base-content/60">Check your connection and try again.</p>
+                        <button type="button" onClick={() => q.refetch()} className="mt-1 cursor-pointer rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content hover:bg-primary/85">
+                            Retry
+                        </button>
+                    </div>
+                )}
+
+                {data && !items.length && data.importing && [0, 1, 2].map((i) => <div key={i} className="h-44 w-[258px] shrink-0 animate-pulse rounded-xl bg-base-200" />)}
+
+                {data && !items.length && !data.importing && (
+                    <div className="flex h-44 w-[258px] shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-base-200/50 p-5 text-center">
+                        <p className="text-sm font-bold text-white">No reviews yet</p>
+                        <p className="text-xs text-base-content/60">Be the first to share what you thought.</p>
+                        <button type="button" onClick={onWrite} className="mt-1 cursor-pointer rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-content hover:bg-primary/85">
+                            Write a review
+                        </button>
+                    </div>
+                )}
+
+                {items.map((r) => (
+                    <ReviewCard key={r.id} review={r} onOpen={() => openReview(r.id)} onLike={like} />
+                ))}
+
+                {data && data.total > limit && (
+                    <button
+                        type="button"
+                        onClick={() => setLimit((l) => l + 36)}
+                        disabled={q.isFetching}
+                        className="flex h-44 w-36 shrink-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl bg-base-200 text-xs font-bold text-primary transition-colors hover:bg-base-300 disabled:opacity-60">
+                        {q.isFetching ? "Loading…" : "Load more"}
+                        {!q.isFetching && <span className="text-[11px] font-medium text-base-content/60">{data.total - limit} left</span>}
                     </button>
                 )}
             </div>
+
+            {writing && <WriteReviewModal kind={kind} tmdbId={tmdbId} meta={{ title, poster, backdrop }} existing={writing.existing} onClose={() => setWriting(null)} />}
         </section>
     );
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// POPULAR REVIEWS / POPULAR DISCUSSIONS — Plex-style tall cards
+// POPULAR REVIEWS / POPULAR DISCUSSIONS — Plex-style tall cards (HOME page)
 // ═════════════════════════════════════════════════════════════════════════════
-// <PopularReviews items={[...]} loading />   (this file)
-// <PopularDiscussions items={[...]} loading /> (PopularDiscussions.jsx — re-uses PopularCardShell/PopularRow below)
-//
-// media shape (both):  { id, title, backdrop?, poster?, logo? }
-// review item:         { id, author, avatar?, rating? (0–10), content, createdAt, likes?, comments?, media }
+// <PopularReviews />                      (this file)
+// <PopularDiscussions />                  (PopularDiscussions.jsx — re-uses PopularCardShell / PopularRow below)
+// Both fetch their own feed (/api/reviews/popular · /api/reviews/discussions), hide themselves when empty and open the
+// review page (/review/:id) on click.
 // ═════════════════════════════════════════════════════════════════════════════
-
-const dominantCache = new Map(); // art url → [r, g, b] | null
-
-// Average colour of the artwork (16×16 sample, near-black / near-white ignored) → card tint, like Plex.
-// Falls back to the neutral theme tint if the image host blocks canvas reads (no CORS).
-function useDominantColor(src) {
-    const [rgb, setRgb] = useState(() => (src ? (dominantCache.get(src) ?? null) : null));
-    useEffect(() => {
-        if (!src) {
-            setRgb(null);
-            return undefined;
-        }
-        if (dominantCache.has(src)) {
-            setRgb(dominantCache.get(src));
-            return undefined;
-        }
-        let alive = true;
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-            let out = null;
-            try {
-                const c = document.createElement("canvas");
-                c.width = c.height = 16;
-                const ctx = c.getContext("2d", { willReadFrequently: true });
-                ctx.drawImage(img, 0, 0, 16, 16);
-                const d = ctx.getImageData(0, 0, 16, 16).data;
-                let r = 0;
-                let g = 0;
-                let b = 0;
-                let n = 0;
-                for (let i = 0; i < d.length; i += 4) {
-                    const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
-                    if (lum < 24 || lum > 230) continue;
-                    r += d[i];
-                    g += d[i + 1];
-                    b += d[i + 2];
-                    n++;
-                }
-                if (n) out = [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
-            } catch {
-                /* canvas tainted — keep the neutral tint */
-            }
-            dominantCache.set(src, out);
-            if (alive) setRgb(out);
-        };
-        img.onerror = () => dominantCache.set(src, null);
-        img.src = src;
-        return () => {
-            alive = false;
-        };
-    }, [src]);
-    return rgb;
-}
-
-const fmtCount = (n) => (n == null ? null : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
-const fmtLongDate = (iso) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : null);
 
 /**
  * PopularCardShell — the one card layout used by BOTH Popular Reviews and Popular Discussions.
@@ -379,27 +381,80 @@ const fmtLongDate = (iso) => (iso ? new Date(iso).toLocaleDateString("en-GB", { 
  *   headline  string   → bold thread title (discussions); omit for reviews
  *   rating    0–10     → big centred stars (reviews); omit for discussions
  *   body      string   → quote / excerpt
- *   author, avatar, date, likes, comments, onMore
+ *   id        review id → the footer LIKE button reacts to it in place (login page if signed out)
+ *   mine      the viewer\'s own reaction from the feed ("like" | null) → thumb starts filled
+ *   author, avatar, date, likes (reactions), comments (replies), onMore (reactions / comments / More buttons + card click)
  */
-export function PopularCardShell({ media, headline, rating, body, author, avatar, date, likes, comments, onMore, bodyLines = 3 }) {
+export function PopularCardShell({ id, mine, media, headline, rating, body, author, avatar, date, likes, comments, onMore, bodyLines = 3 }) {
     const art = media?.backdrop || media?.poster || null;
     const rgb = useDominantColor(art);
     const tint = rgb ? `rgb(${Math.round(rgb[0] * 0.3)}, ${Math.round(rgb[1] * 0.3)}, ${Math.round(rgb[2] * 0.3)})` : "var(--color-base-300)";
     const [artError, setArtError] = useState(false);
-    const [avatarError, setAvatarError] = useState(false);
-    const [liked, setLiked] = useState(false);
     const mask = "linear-gradient(to bottom, #000 30%, transparent 100%)";
     const clamp = bodyLines === 2 ? "line-clamp-2" : "line-clamp-3";
+
+    // ── like button: works IN the card (no redirect) and is saved on the server.
+    //    `mine` = the viewer's own reaction from the feed ("like" | … | null) → the thumb is filled after a reload too.
+    //    The count moves instantly; useReact then patches the cached feed card in place (no refetch).
+    const { isAuthenticated } = useAuth();
+    const { openAuthModal } = useAuthModal();
+    const react = useReact({ keepFeedOrder: true }); // feed stays put: no refetch → no re-rank, no skeleton, no scroll jump
+    const [liked, setLiked] = useState(mine === "like");
+    const [own, setOwn] = useState(Boolean(mine)); // the viewer has ANY reaction on it (already inside the real total)
+    // `likes` = the REAL reaction total from the feed. We keep the real number and seed it only for display
+    // (max(real, placeholder) — the same rule as ReviewCard and the review page), so a click never mixes real and placeholder numbers.
+    const [real, setReal] = useState(likes ?? 0);
+    useEffect(() => {
+        setLiked(mine === "like");
+        setOwn(Boolean(mine));
+    }, [mine]);
+    useEffect(() => setReal(likes ?? 0), [likes]);
+    const shownLikes = seedCount(real, id, own); // your own like is added on top → every click moves the number by 1
+
+    const toggleLike = () => {
+        if (!id || react.isPending) return;
+        if (!isAuthenticated) return openAuthModal({ view: "login" });
+        const next = !liked;
+        const prevLiked = liked;
+        const prevReal = real;
+        const prevOwn = own;
+        setLiked(next);
+        setOwn(next);
+        setReal(Math.max(0, prevReal + (next ? 1 : 0) - (prevOwn ? 1 : 0)));
+        react.mutate(
+            { kind: "review", id, type: next ? "like" : null },
+            {
+                onSuccess: (res) => {
+                    if (!res?.reactions) return;
+                    setLiked(res.reactions.mine === "like");
+                    setOwn(Boolean(res.reactions.mine));
+                    setReal(res.reactions.total ?? 0); // the server's real total is authoritative
+                },
+                onError: () => {
+                    setLiked(prevLiked);
+                    setOwn(prevOwn);
+                    setReal(prevReal);
+                },
+            },
+        );
+    };
+
+    // every footer control stops the click so the card's own onClick never double-fires; "go" = open the page
+    const stop = (fn) => (e) => {
+        e.stopPropagation();
+        fn?.();
+    };
+    const footBtn =
+        "flex cursor-pointer items-center gap-1.5 border-none bg-transparent outline-none transition-colors duration-150 hover:bg-black/20 hover:text-white focus:outline-none focus-visible:outline-none";
 
     return (
         <div
             role="button"
             tabIndex={0}
             onClick={onMore}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onMore?.()}
-            className="group relative h-90 w-72 shrink-0 cursor-pointer select-none overflow-hidden rounded-2xl ring-1 ring-white/5 transition-all duration-200 hover:-translate-y-0.5 hover:ring-2 hover:ring-white/80 sm:w-80"
+            onKeyDown={(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && onMore?.()}
+            className="group relative h-90 w-72 shrink-0 cursor-pointer select-none overflow-hidden rounded-2xl outline-none transition-transform duration-200 [-webkit-tap-highlight-color:transparent] hover:-translate-y-0.5 focus:outline-none focus-visible:outline-none sm:w-80"
             style={{ background: tint }}>
-            {/* artwork, fading into the tint */}
             {art && !artError && (
                 <img
                     src={art}
@@ -412,7 +467,6 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                 />
             )}
 
-            {/* title art */}
             <div className="absolute inset-x-0 top-[14%] flex justify-center px-6">
                 {media?.logo ? (
                     <img src={media.logo} alt={media.title || ""} className="max-h-16 max-w-[78%] object-contain drop-shadow-[0_2px_6px_rgba(0,0,0,0.6)]" draggable={false} />
@@ -421,7 +475,6 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                 )}
             </div>
 
-            {/* content */}
             <div className="absolute inset-x-0 bottom-0 flex flex-col">
                 <div className="flex flex-col gap-2 px-4 pb-3">
                     {rating != null && (
@@ -433,11 +486,7 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                     <p className={`${clamp} text-[13px] leading-snug ${headline ? "text-white/65" : "text-white/85"}`}>{body}</p>
 
                     <div className="mt-1 flex min-w-0 items-center gap-2.5">
-                        {avatar && !avatarError ? (
-                            <img src={avatar} alt={author} onError={() => setAvatarError(true)} className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-white/15" draggable={false} />
-                        ) : (
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white">{(author || "?")[0].toUpperCase()}</div>
-                        )}
+                        <Avatar src={avatar} name={author} size={40} />
                         <div className="min-w-0 leading-tight">
                             <p className="truncate text-[11px] text-white/80">{author}</p>
                             <p className="truncate text-[11px] font-semibold text-white">{media?.title}</p>
@@ -446,40 +495,38 @@ export function PopularCardShell({ media, headline, rating, body, author, avatar
                     </div>
                 </div>
 
-                {/* footer bar */}
                 <div className="flex h-10 items-stretch border-t border-white/10 bg-black/25 text-[12px] text-white/80">
+                    {/* LIKE — toggles in place, never navigates */}
                     <button
                         type="button"
-                        aria-label="Like"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setLiked((v) => !v);
-                        }}
-                        className="flex w-10 cursor-pointer items-center justify-center border-r border-white/10 hover:text-white">
-                        <ThumbsUp size={14} className={liked ? "fill-white text-white" : ""} />
+                        aria-label={liked ? "Remove like" : "Like"}
+                        aria-pressed={liked}
+                        disabled={react.isPending}
+                        onClick={stop(toggleLike)}
+                        className={`${footBtn} w-10 justify-center border-r border-white/10 disabled:cursor-default ${liked ? "text-primary hover:text-primary" : ""}`}>
+                        <ThumbsUp size={14} className={liked ? "fill-current" : ""} />
                     </button>
-                    {likes != null && (
-                        <div className="flex items-center gap-1.5 border-r border-white/10 px-3">
-                            <span className="flex -space-x-1">
-                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-pink-500 ring-1 ring-black/30">
-                                    <Heart size={9} className="fill-white text-white" />
-                                </span>
-                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-500 ring-1 ring-black/30">
-                                    <ThumbsUp size={9} className="fill-white text-white" />
-                                </span>
+                    {/* REACTIONS count — opens the page */}
+                    <button type="button" aria-label="Reactions" onClick={stop(onMore)} className={`${footBtn} border-r border-white/10 px-3`}>
+                        <span className="flex -space-x-1">
+                            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-pink-500 ring-1 ring-black/30">
+                                <Heart size={9} className="fill-white text-white" />
                             </span>
-                            <span className="font-medium tabular-nums">{fmtCount(likes + (liked ? 1 : 0))}</span>
-                        </div>
-                    )}
-                    {comments != null && (
-                        <div className="flex items-center gap-1.5 border-r border-white/10 px-3">
-                            <MessageSquare size={13} />
-                            <span className="font-semibold tabular-nums text-white">{fmtCount(comments)}</span>
-                        </div>
-                    )}
-                    <span className="flex flex-1 items-center justify-end gap-0.5 pr-4 font-semibold text-white">
+                            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-sky-500 ring-1 ring-black/30">
+                                <ThumbsUp size={9} className="fill-white text-white" />
+                            </span>
+                        </span>
+                        <span className="font-medium tabular-nums">{fmtCount(shownLikes)}</span>
+                    </button>
+                    {/* COMMENTS — opens the page */}
+                    <button type="button" aria-label="Comments" onClick={stop(onMore)} className={`${footBtn} border-r border-white/10 px-3`}>
+                        <MessageSquare size={13} />
+                        <span className="font-semibold tabular-nums text-white">{fmtCount(comments ?? 0)}</span>
+                    </button>
+                    {/* MORE — opens the page */}
+                    <button type="button" aria-label="More" onClick={stop(onMore)} className={`${footBtn} flex-1 justify-end gap-0.5 pr-4 font-semibold text-white`}>
                         More <ChevronRight size={14} />
-                    </span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -517,72 +564,45 @@ export function PopularRow({ title, items = [], loading = false, renderCard, ske
                     </div>
                 )}
             </div>
-            <div ref={rowRef} className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-2" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+            {/* py-3 / px-2: room for the hover ring + lift + shadow — an overflow-x scroller clips anything outside its box, so without this the cards looked cut off */}
+            <div ref={rowRef} className="-mx-2 flex gap-3 overflow-x-auto px-2 py-3" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                 {loading ? Array.from({ length: skeletonCount }).map((_, i) => <PopularCardSkeleton key={i} />) : items.map((item) => renderCard(item))}
             </div>
         </section>
     );
 }
 
-// ReviewModal expects the TMDB review shape — adapt a popular item to it.
-// (a full avatar URL gets a leading "/" because ReviewModal strips "/https…" and prefixes everything else)
-export function popularToModalShape(it, headline) {
-    const av = it.avatar ? (String(it.avatar).startsWith("http") ? `/${it.avatar}` : it.avatar) : null;
-    return {
-        author: it.author,
-        author_details: { avatar_path: av, rating: it.rating ?? null },
-        content: headline ? `${headline}\n\n${it.content ?? it.body ?? ""}` : (it.content ?? it.body ?? ""),
-        created_at: it.createdAt,
-    };
-}
-
-/**
- * usePopularFeed("reviews" | "discussions") — reads the server's cached Home feed.
- * While the server is still doing its very first build (`building: true`, no items) it re-checks every 15 s.
- */
-export function usePopularFeed(kind, enabled = true) {
-    return useQuery({
-        queryKey: ["popular", kind],
-        queryFn: kind === "reviews" ? getPopularReviews : getPopularDiscussions,
-        enabled,
-        select: (d) => d?.items ?? [],
-        staleTime: 30 * 60 * 1000,
-        refetchInterval: (q) => (q.state.data?.building && !q.state.data?.items?.length ? 15000 : false),
-    });
-}
-
 /**
  * PopularReviews — Plex "Popular Reviews" row for the HOME page.
- * Drop it in with no props (<PopularReviews />) and it fetches its own data and hides itself when there is none.
- * Props (optional): items / loading to render your own list instead, title.
+ * <PopularReviews /> fetches its own data and hides itself when there is none.
+ * Props (optional): items / loading to render your own list, title.
  */
 export function PopularReviews({ items, loading, title = "Popular Reviews" }) {
     const feed = usePopularFeed("reviews", items === undefined);
     const rows = items ?? feed.data ?? [];
     const busy = loading ?? (items === undefined && feed.isLoading);
-    const [open, setOpen] = useState(null);
+    const navigate = useNavigate();
     return (
-        <>
-            <PopularRow
-                title={title}
-                items={rows}
-                loading={busy}
-                renderCard={(it) => (
-                    <PopularCardShell
-                        key={it.id}
-                        media={it.media}
-                        rating={it.rating}
-                        body={it.content}
-                        author={it.author}
-                        avatar={it.avatar}
-                        date={it.createdAt}
-                        likes={it.likes}
-                        comments={it.comments}
-                        onMore={() => setOpen(it)}
-                    />
-                )}
-            />
-            {open && <ReviewModal data={popularToModalShape(open)} onClose={() => setOpen(null)} />}
-        </>
+        <PopularRow
+            title={title}
+            items={rows}
+            loading={busy}
+            renderCard={(it) => (
+                <PopularCardShell
+                    key={it.id}
+                    id={it.id}
+                    mine={it.mine}
+                    media={it.media}
+                    rating={it.rating}
+                    body={it.content}
+                    author={it.author}
+                    avatar={it.avatar}
+                    date={it.createdAt}
+                    likes={it.likes}
+                    comments={it.comments}
+                    onMore={() => navigate(`/review/${it.id}`)}
+                />
+            )}
+        />
     );
 }

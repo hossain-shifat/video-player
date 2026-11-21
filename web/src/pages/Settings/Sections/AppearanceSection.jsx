@@ -2,7 +2,10 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, Pencil, Check, RotateCcw, Moon, Sun, ChevronDown } from "lucide-react";
 import { useTheme } from "../../../Context/themeContext";
-import { Card, Row, Toggle, SectionLabel, Select, Seg, Slider, GhostButton, ThemeSwatch, FOCUS } from "../Components/shared";
+import { Card, Row, Toggle, SectionLabel, Select, Seg, Slider, GhostButton, PrimaryButton, ThemeSwatch, FOCUS, useCardStyle } from "../Components/shared";
+import CardStylePreview from "../Components/CardStylePreview";
+// Card styles are listed automatically from MediaCard.jsx (POSTER_STYLES) — add a design there, it appears here.
+import { CARD_STYLES, DEFAULT_CARD_STYLE } from "../../../Components/Media/MediaCard";
 import { ThemeBuilderModal, SettingsConfirm } from "../../../Components/Layout/Modal";
 
 // ─── Theme dropdown (portal, grouped dark / light) ───────────────────────────
@@ -110,6 +113,92 @@ function ThemeDropdown({ themes, activeId, onSelect }) {
     );
 }
 
+// ─── Card style dropdown (portal, same pattern as the theme dropdown) ────────
+function CardStyleDropdown({ styles, activeId, value, onSelect }) {
+    const [open, setOpen] = useState(false);
+    const [rect, setRect] = useState(null);
+    const trigRef = useRef(null);
+
+    const current = styles.find((s) => s.id === value) || styles[0];
+    const measure = () => trigRef.current && setRect(trigRef.current.getBoundingClientRect());
+
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e) => e.key === "Escape" && setOpen(false);
+        window.addEventListener("scroll", measure, true);
+        window.addEventListener("resize", measure);
+        window.addEventListener("keydown", onKey);
+        return () => {
+            window.removeEventListener("scroll", measure, true);
+            window.removeEventListener("resize", measure);
+            window.removeEventListener("keydown", onKey);
+        };
+    }, [open]);
+
+    const pick = (id) => {
+        onSelect(id);
+        setOpen(false);
+    };
+
+    const maxH = 260;
+    const below = rect ? window.innerHeight - rect.bottom : 0;
+    const top = rect ? (below >= Math.min(maxH, 180) ? rect.bottom + 4 : Math.max(8, rect.top - maxH - 4)) : 0;
+
+    return (
+        <div ref={trigRef}>
+            <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                onClick={() => {
+                    measure();
+                    setOpen((v) => !v);
+                }}
+                className={`flex h-10 w-full cursor-pointer items-center gap-2.5 rounded-field border border-base-content/20 bg-base-100 px-3 transition-colors hover:border-base-content/40 ${FOCUS}`}>
+                <span className="flex-1 truncate text-left text-[13px] font-medium text-base-content">{current?.label}</span>
+                {current?.id === activeId && <span className="shrink-0 text-xs text-base-content/70">In use</span>}
+                <ChevronDown size={14} className={`shrink-0 text-base-content/60 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+            </button>
+
+            {open &&
+                rect &&
+                createPortal(
+                    <>
+                        <div className="fixed inset-0 z-[2147483646]" onClick={() => setOpen(false)} />
+                        <div
+                            role="listbox"
+                            aria-label="Card styles"
+                            className="fixed z-[2147483647] overflow-y-auto rounded-box border border-base-content/15 bg-base-200 p-1.5 shadow-2xl"
+                            style={{ top, left: rect.left, width: rect.width, maxHeight: maxH }}>
+                            {styles.map((s) => {
+                                const on = s.id === value;
+                                return (
+                                    <button
+                                        key={s.id}
+                                        type="button"
+                                        role="option"
+                                        aria-selected={on}
+                                        onClick={() => pick(s.id)}
+                                        className={`flex w-full cursor-pointer items-center gap-2.5 rounded-field px-2.5 py-2 text-left transition-colors ${FOCUS} ${on ? "bg-primary/12" : "hover:bg-base-content/10"}`}>
+                                        <div className="min-w-0 flex-1">
+                                            <p className={`truncate text-[13px] font-medium ${on ? "text-primary" : "text-base-content"}`}>{s.label}</p>
+                                            <p className="truncate text-xs text-base-content/55">{s.desc}</p>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1.5">
+                                            {s.id === activeId && <span className="text-xs text-base-content/70">In use</span>}
+                                            {on && <Check size={13} className="text-primary" strokeWidth={3} />}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </>,
+                    document.body,
+                )}
+        </div>
+    );
+}
+
 // ─── Saved custom theme row ───────────────────────────────────────────────────
 function CustomThemeItem({ t, active, onSelect, onEdit, onDelete }) {
     return (
@@ -154,13 +243,24 @@ const APPEARANCE_DEFAULTS = {
     focusVisible: true,
 };
 
-export default function AppearanceSection() {
+// `setPref(key, value)` comes from Settings.jsx so card style is saved in the shared "flux-prefs" object.
+export default function AppearanceSection({ setPref }) {
     const { theme, setTheme, allThemes, customThemes, addCustomTheme, updateCustomTheme, deleteCustomTheme, appearance, setAppearance, fontFamilies, densityPresets, radiusPresets } = useTheme();
 
     const [builderOpen, setBuilderOpen] = useState(false);
     const [editTarget, setEditTarget] = useState(null);
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [resetOpen, setResetOpen] = useState(false);
+    const savedCardStyle = useCardStyle();
+    const cardStyle = CARD_STYLES.some((c) => c.id === savedCardStyle) ? savedCardStyle : DEFAULT_CARD_STYLE;
+    const [draftCard, setDraftCard] = useState(cardStyle);
+    const [previewOpen, setPreviewOpen] = useState(false);
+    useEffect(() => {
+        setDraftCard(cardStyle);
+        setPreviewOpen(false);
+    }, [cardStyle]);
+    const draftMeta = CARD_STYLES.find((c) => c.id === draftCard) || CARD_STYLES[0];
+    const sameAsActive = draftCard === cardStyle;
 
     const openCreate = () => {
         setEditTarget(null);
@@ -204,6 +304,43 @@ export default function AppearanceSection() {
                             {customThemes.map((t) => (
                                 <CustomThemeItem key={t.id} t={t} active={theme === t.id} onSelect={setTheme} onEdit={openEdit} onDelete={setDeleteTarget} />
                             ))}
+                        </div>
+                    )}
+                </Card>
+            </div>
+
+            {/* ── Cards ── */}
+            <div id="a-cards" className="scroll-mt-28">
+                <SectionLabel hint="Look of poster and Continue Watching cards across the app.">Cards</SectionLabel>
+                <Card>
+                    <Row stack label="Card style" desc={draftMeta.desc}>
+                        <CardStyleDropdown styles={CARD_STYLES} activeId={cardStyle} value={draftCard} onSelect={(id) => {
+                                setDraftCard(id);
+                                setPreviewOpen(true);
+                            }}
+                        />
+                    </Row>
+                    {previewOpen && (
+                        <div className="space-y-4 border-t border-base-content/10 bg-base-100 px-4 py-4 sm:px-5">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-medium text-base-content">Preview: {draftMeta.label}</p>
+                                    <p className="mt-0.5 text-xs text-base-content/70">{sameAsActive ? "Currently in use." : "Sample artwork. Nothing changes until you apply."}</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <GhostButton
+                                        onClick={() => {
+                                            setDraftCard(cardStyle);
+                                            setPreviewOpen(false);
+                                        }}>
+                                        Cancel
+                                    </GhostButton>
+                                    <PrimaryButton disabled={sameAsActive} onClick={() => setPref?.("cardStyle", draftCard)}>
+                                        {sameAsActive ? "In use" : "Apply"}
+                                    </PrimaryButton>
+                                </div>
+                            </div>
+                            <CardStylePreview variant={draftCard} />
                         </div>
                     )}
                 </Card>
@@ -289,6 +426,7 @@ export default function AppearanceSection() {
                 onClose={() => setResetOpen(false)}
                 onConfirm={() => {
                     setAppearance(APPEARANCE_DEFAULTS);
+                    setPref?.("cardStyle", undefined);
                     setResetOpen(false);
                 }}
             />

@@ -36,8 +36,22 @@ function installStreamFetchAuth() {
             } else {
                 const st = getStreamToken();
                 if (st && !headers.has("X-Flux-Stream-Token")) headers.set("X-Flux-Stream-Token", st);
+                else if (!st && !headers.has("Authorization")) {
+                    // No stream token yet (playback not started / token cleared): the server also accepts the access JWT,
+                    // so the request is still authorised instead of silently coming back as a 401 → "zero cues".
+                    const jwt = getAuthToken();
+                    if (jwt) headers.set("Authorization", `Bearer ${jwt}`);
+                }
             }
-            return original(input, { ...init, headers, credentials: init.credentials || "include" });
+            const req = original(input, { ...init, headers, credentials: init.credentials || "include" });
+            if (SUBTITLE_FETCH.test(url)) {
+                // The subtitle renderer reads ANY answer as subtitle text, so a 401/403/404 looks like "no cues" and shows nothing.
+                // Make that visible in the browser console (the Response itself is passed on untouched).
+                req.then((r) => {
+                    if (!r.ok) console.warn(`[Subtitle] request failed: HTTP ${r.status} — ${url.slice(-70)} (stream token: ${getStreamToken() ? "sent" : "MISSING"})`);
+                }).catch((err) => console.warn("[Subtitle] request error:", err?.message || err));
+            }
+            return req;
         }
         return original(input, init);
     };
@@ -54,6 +68,25 @@ export async function startStream(mediaId) {
     const res = await axiosInstance.post(`/stream/start/${encodeURIComponent(mediaId)}`);
     setStreamToken(res.data?.streamToken || null);
     return res.data;
+}
+
+// ─── Share links (short URLs for VLC / MX Player / mpv …) ────────────────────────────────────────────────────
+/**
+ * POST /stream/share/:id → { code, title, expiresAt, urls: { direct, hls } }
+ *   direct  http://host/s/<code>/<Title>.mkv   raw file, Range support — plays anything VLC/MX can play, no transcode
+ *   hls     http://host/s/<code>/h/stream.m3u8  HLS (the server transcodes on first request)
+ * Creating a link does NOT start a transcode and does not touch the active playback session.
+ */
+export async function createShareLink(mediaId, { ttlHours } = {}) {
+    const res = await axiosInstance.post(`/stream/share/${encodeURIComponent(mediaId)}`, ttlHours ? { ttlHours } : {});
+    return res.data;
+}
+export async function listShareLinks() {
+    const res = await axiosInstance.get("/stream/share");
+    return res.data?.shares || [];
+}
+export async function revokeShareLink(code) {
+    await axiosInstance.delete(`/stream/share/${encodeURIComponent(code)}`);
 }
 
 // ─── Client ID ────────────────────────────────────────────────────────────────

@@ -1037,14 +1037,7 @@ export default function ProfileSection({ handleLogout, setLoginOpen }) {
                     handleLogout?.();
                 }}
             />
-            <SettingsConfirm
-                kind="confirmSignOutDevice"
-                data={{ device: revokeTarget }}
-                open={!!revokeTarget}
-                onClose={() => setRevokeTarget(null)}
-                loading={sessBusy}
-                onConfirm={revokeOne}
-            />
+            <SettingsConfirm kind="confirmSignOutDevice" data={{ device: revokeTarget }} open={!!revokeTarget} onClose={() => setRevokeTarget(null)} loading={sessBusy} onConfirm={revokeOne} />
             <SettingsConfirm
                 kind="confirmSignOutOthers"
                 data={{ count: others, email: user.email || displayName }}

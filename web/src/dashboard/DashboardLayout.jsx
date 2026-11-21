@@ -1,131 +1,484 @@
 // web/src/Dashboard/DashboardLayout.jsx
-// Admin shell — inherits global theme/CSS, NO dashboard.css
+// Admin shell — inherits global theme/CSS (DaisyUI tokens), NO dashboard.css
 
-import { useState } from "react";
-import { Link, NavLink, Outlet } from "react-router";
-import { LayoutDashboard, Users, HardDrive, Activity, Settings, LogOut, ChevronLeft, ChevronRight, Radio, ScrollText, Cpu, Menu, X, Server, Shield, Upload, FileVideo, Tv, Cloud, Megaphone } from "lucide-react";
-import { useAuth } from "./Shared";
-import { Logo } from "./Shared";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigationType } from "react-router";
+import {
+    LayoutDashboard,
+    Users,
+    HardDrive,
+    Activity,
+    Settings,
+    LogOut,
+    Radio,
+    ScrollText,
+    Cpu,
+    Menu,
+    X,
+    Shield,
+    Upload,
+    FileVideo,
+    Tv,
+    Cloud,
+    Megaphone,
+    Languages,
+    ArrowLeft,
+    PanelLeftClose,
+    PanelLeftOpen,
+} from "lucide-react";
+import { useAuth, Logo } from "./Shared";
+import { useDashboardLibraries } from "./Hooks/useDashboard";
+import Notifications from "../Components/Layout/Notifications";
+
+/* ─── Navigation ─────────────────────────────────────────────────────────── */
 
 const NAV = [
     {
-        title: "Overview",
+        title: null,
         items: [{ to: "/dashboard", icon: LayoutDashboard, label: "Overview", end: true }],
     },
     {
-        title: "Manage",
+        title: "Media",
         items: [
-            { to: "/dashboard/users", icon: Users, label: "Users" },
             { to: "/dashboard/media", icon: FileVideo, label: "Media" },
             { to: "/dashboard/libraries", icon: HardDrive, label: "Libraries" },
+            { to: "/dashboard/subtitles", icon: Languages, label: "Subtitles" },
+            { to: "/dashboard/uploads", icon: Upload, label: "Uploads", badgeKey: "uploads" },
+        ],
+    },
+    {
+        title: "Live",
+        items: [
             { to: "/dashboard/iptv", icon: Tv, label: "IPTV" },
             { to: "/dashboard/streams", icon: Radio, label: "Live Streams" },
-            { to: "/dashboard/jobs", icon: Activity, label: "Jobs" },
-            { to: "/dashboard/uploads", icon: Upload, label: "Uploads" },
-            { to: "/dashboard/storage", icon: Cloud, label: "Storage" },
+        ],
+    },
+    {
+        title: "Community",
+        items: [
+            { to: "/dashboard/users", icon: Users, label: "Users" },
             { to: "/dashboard/announcements", icon: Megaphone, label: "Announcements" },
         ],
     },
     {
         title: "System",
         items: [
+            { to: "/dashboard/jobs", icon: Activity, label: "Jobs", badgeKey: "jobs" },
+            { to: "/dashboard/storage", icon: Cloud, label: "Storage" },
             { to: "/dashboard/health", icon: Cpu, label: "System Health" },
             { to: "/dashboard/logs", icon: ScrollText, label: "Logs" },
         ],
     },
 ];
 
-function NavItem({ item, collapsed, onClick }) {
+const FOOTER_NAV = [
+    { to: "/settings", icon: Settings, label: "Settings" },
+    { to: "/", icon: ArrowLeft, label: "Back to FLUX" },
+];
+
+// Live counts for nav badges, e.g. { uploads: 2, jobs: 3 }. TODO: wire once the jobs / upload-queue data shapes are known.
+function useNavBadges() {
+    return {};
+}
+
+const STORAGE_KEY = "flux.dash.sidebar";
+const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary";
+
+function readCollapsed() {
+    try {
+        return localStorage.getItem(STORAGE_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
+
+/* ─── Small parts ────────────────────────────────────────────────────────── */
+
+// Same maths as DashLibraries: used = sum of library sizes, total = server disk size (if known).
+const TB = 1024 ** 4;
+const GB = 1024 ** 3;
+const fmtSize = (b) => (b >= TB ? `${(b / TB).toFixed(1)} TB` : `${Math.round(b / GB)} GB`);
+
+function useStorageSummary() {
+    const { data } = useDashboardLibraries();
+    const libs = data?.libraries ?? [];
+    const used = libs.reduce((a, l) => a + (l.sizeBytes ?? 0), 0);
+    const driveTotals = libs.map((l) => l.driveTotalBytes ?? l.diskTotalBytes ?? null);
+    const total = data?.diskTotalBytes ?? (libs.length && driveTotals.every(Boolean) ? driveTotals.reduce((a, b) => a + b, 0) : null);
+    return { used, total, pct: total ? Math.min(100, Math.round((used / total) * 100)) : null };
+}
+
+function StorageMeter() {
+    const { used, total, pct } = useStorageSummary();
+    if (!used && !total) return null;
+    return (
+        <div className="px-3 pb-2.5 pt-1">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="font-semibold text-base-content/85">Storage</span>
+                <span className="truncate tabular-nums text-base-content/70">{total ? `${fmtSize(used)} of ${fmtSize(total)}` : `${fmtSize(used)} used`}</span>
+            </div>
+            {pct != null && (
+                <div role="progressbar" aria-label="Storage used" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} className="mt-2 h-1 overflow-hidden rounded-full bg-base-content/10">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AdminBadge() {
+    return <span className="shrink-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-widest text-primary-content">Admin</span>;
+}
+
+function Avatar({ user, className = "h-10 w-10 text-sm" }) {
+    const initial = (user?.name || user?.email || "A")[0].toUpperCase();
+    if (user?.avatar) {
+        return <img src={user.avatar} alt="" className={`${className} shrink-0 rounded-full object-cover`} />;
+    }
+    return <div className={`${className} flex shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/20 font-bold text-primary`}>{initial}</div>;
+}
+
+function NavItem({ item, collapsed, badge, onClick }) {
+    // Collapsed-rail tooltip. Positioned with `fixed` so the nav's scroll container can't clip it.
+    const [tip, setTip] = useState(null);
+    const showTip = (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        setTip({ top: r.top + r.height / 2, left: r.right + 12 });
+    };
+    const hideTip = () => setTip(null);
+
     return (
         <NavLink
             to={item.to}
             end={item.end}
-            onClick={onClick}
-            title={collapsed ? item.label : undefined}
+            onClick={(e) => {
+                hideTip();
+                onClick?.(e);
+            }}
+            onMouseEnter={collapsed ? showTip : undefined}
+            onMouseLeave={collapsed ? hideTip : undefined}
+            onFocus={collapsed ? showTip : undefined}
+            onBlur={collapsed ? hideTip : undefined}
+            aria-label={collapsed ? item.label : undefined}
             className={({ isActive }) =>
                 [
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium",
-                    "transition-all duration-150 group select-none border",
-                    isActive ? "bg-primary/15 text-primary border-primary/20" : "text-base-content hover:text-base-content hover:bg-base-content/5 border-transparent",
+                    "relative flex items-center rounded-lg text-sm font-medium select-none transition-colors duration-150",
+                    FOCUS,
+                    collapsed ? "mx-auto h-11 w-11 justify-center" : "h-9 gap-3 px-3",
+                    isActive ? "bg-primary text-primary-content" : "text-base-content/75 hover:bg-base-content/5 hover:text-base-content",
                 ].join(" ")
             }>
             {({ isActive }) => (
                 <>
-                    <item.icon size={17} stroke={isActive ? "var(--color-primary)" : "var(--color-base-content)"} className="shrink-0 transition-transform duration-150 group-hover:scale-110" />
+                    <item.icon size={18} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
                     {!collapsed && <span className="truncate">{item.label}</span>}
+                    {badge > 0 &&
+                        (collapsed ? (
+                            <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-secondary ring-2 ring-base-200" aria-label={`${badge} active`} />
+                        ) : (
+                            <span
+                                className={`ml-auto flex h-5 min-w-[22px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold ${isActive ? "bg-primary-content/20 text-primary-content" : "bg-secondary/15 text-secondary"}`}>
+                                {badge}
+                            </span>
+                        ))}
+                    {collapsed && tip && (
+                        <span
+                            role="tooltip"
+                            style={{ top: tip.top, left: tip.left }}
+                            className="pointer-events-none fixed z-[60] flex -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-content opacity-100 shadow-xl shadow-black/40 transition-opacity duration-150 starting:opacity-0">
+                            <span aria-hidden="true" className="absolute -left-[5px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rotate-45 rounded-[2px] bg-primary" />
+                            <span className="relative">{item.label}</span>
+                            {badge > 0 && <span className="relative rounded bg-primary-content/20 px-1.5 py-0.5 text-[10px] font-bold leading-none text-primary-content">{badge}</span>}
+                        </span>
+                    )}
                 </>
             )}
         </NavLink>
     );
 }
 
-function Sidebar({ collapsed, onNav, user, logout }) {
-    const initial = (user?.name || user?.email || "A")[0].toUpperCase();
-    return (
-        <div className="flex flex-col min-h-screen overflow-hidden ">
-            {/* Logo */}
-            <div className={["flex items-center gap-2 px-4 py-4 border-b border-base-content/5 shrink-0", collapsed ? "justify-center" : ""].join(" ")}>
-                {collapsed ? (
-                    <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-black text-sm">F</div>
-                ) : (
-                    <div className="flex items-center gap-2 w-full min-w-0">
-                        <Logo />
-                        <span className="ml-auto text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/40 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">Admin</span>
-                    </div>
-                )}
-            </div>
+/* ─── Sidebar ────────────────────────────────────────────────────────────── */
 
-            {/* Nav sections */}
-            <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-3">
-                {NAV.map((section) => (
-                    <div key={section.title}>
-                        {!collapsed && <p className="text-[10px] font-bold uppercase tracking-widest text-base-content/25 px-3 mb-1">{section.title}</p>}
+function Sidebar({ collapsed, variant, onNav, onToggle, user }) {
+    const badges = useNavBadges();
+    const isDrawer = variant === "drawer";
+    // Expanded desktop: collapse button lives here. Collapsed: the expand button lives in the navbar.
+    const ToggleIcon = isDrawer ? X : PanelLeftClose;
+    const toggleLabel = isDrawer ? "Close menu" : "Collapse sidebar";
+
+    const toggleBtn = (
+        <button
+            type="button"
+            onClick={onToggle}
+            title={isDrawer ? toggleLabel : `${toggleLabel} ( [ )`}
+            aria-label={toggleLabel}
+            aria-keyshortcuts={isDrawer ? undefined : "["}
+            className={`flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-base-content/70 transition-colors duration-150 hover:bg-base-content/10 hover:text-base-content ${FOCUS}`}>
+            <ToggleIcon size={19} strokeWidth={1.6} aria-hidden="true" />
+        </button>
+    );
+
+    return (
+        <div className="flex h-full min-h-0 flex-col bg-base-200">
+            {/* Header */}
+            {collapsed ? (
+                <div className="flex h-[52px] shrink-0 items-center justify-center border-b border-base-content/15">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-black text-primary-content">F</div>
+                </div>
+            ) : (
+                <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-base-content/15 pl-5 pr-2.5">
+                    <div className="min-w-0 flex-1">
+                        <Logo />
+                    </div>
+                    {toggleBtn}
+                </div>
+            )}
+
+            {/* Routes */}
+            <nav aria-label="Dashboard" className={`min-h-0 flex-1 overflow-y-auto pb-1 pt-3.5 ${collapsed ? "px-2" : "px-3"}`}>
+                {NAV.map((section, i) => (
+                    <div key={section.title ?? "root"} className={i === 0 ? "" : collapsed ? "mt-3" : "mt-5"}>
+                        {section.title &&
+                            (collapsed ? (
+                                <div className="mx-auto mb-2 h-px w-7 bg-base-content/10" role="presentation" />
+                            ) : (
+                                <p className="mb-1.5 px-3 text-[11px] font-bold uppercase tracking-wider text-primary">{section.title}</p>
+                            ))}
                         <div className="space-y-0.5">
                             {section.items.map((item) => (
-                                <NavItem key={item.to} item={item} collapsed={collapsed} onClick={onNav} />
+                                <NavItem key={item.to} item={item} collapsed={collapsed} badge={badges[item.badgeKey]} onClick={onNav} />
                             ))}
                         </div>
                     </div>
                 ))}
-                <div className="border-t border-base-content/5 pt-3 space-y-0.5">
-                    <NavItem item={{ to: "/settings", icon: Settings, label: "Settings" }} collapsed={collapsed} onClick={onNav} />
-                    <NavItem item={{ to: "/", icon: Server, label: "Back to FLUX" }} collapsed={collapsed} onClick={onNav} />
+                {/* General: storage meter + settings + exit — scroll with the routes, not pinned */}
+                <div className={collapsed ? "mt-3" : "mt-5"}>
+                    {collapsed ? (
+                        <div className="mx-auto mb-2 h-px w-7 bg-base-content/10" role="presentation" />
+                    ) : (
+                        <p className="mb-1.5 px-3 text-[11px] font-bold uppercase tracking-wider text-primary">General</p>
+                    )}
+                    {!collapsed && <StorageMeter />}
+                    <div className="space-y-0.5">
+                        {FOOTER_NAV.map((item) => (
+                            <NavItem key={item.to} item={item} collapsed={collapsed} onClick={onNav} />
+                        ))}
+                    </div>
                 </div>
             </nav>
 
-            {/* User footer */}
-            <div className="shrink-0 border-t border-base-content/5 p-2">
-                <div className={["flex items-center gap-2.5 px-2 py-2 rounded-lg", collapsed ? "justify-center" : ""].join(" ")}>
-                    {user?.avatar ? (
-                        <img src={user.avatar} alt={user.name} className="w-7 h-7 rounded-full object-cover shrink-0" />
-                    ) : (
-                        <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center shrink-0 text-xs font-bold text-primary">{initial}</div>
-                    )}
-                    {!collapsed && (
-                        <>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-base-content/80 truncate">{user?.name || "Admin"}</p>
-                                <p className="text-[10px] text-base-content/35 truncate">{user?.email}</p>
-                            </div>
-                            <button onClick={logout} title="Sign out" className="w-6 h-6 flex items-center justify-center text-base-content/30 hover:text-error transition-colors rounded shrink-0">
-                                <LogOut size={14} className="text-error/80 cursor-pointer" />
-                            </button>
-                        </>
-                    )}
+            {/* Profile */}
+            {collapsed ? (
+                <div className="flex shrink-0 justify-center border-t border-base-content/15 py-3.5" title={`${user?.name || "Admin"} (Admin)`}>
+                    <Avatar user={user} />
                 </div>
-            </div>
+            ) : (
+                <div className="flex shrink-0 items-center gap-3 border-t border-base-content/15 py-3.5 pl-4 pr-3">
+                    <Avatar user={user} />
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-base-content">{user?.name || "Admin"}</span>
+                            <AdminBadge />
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-base-content/70">{user?.email}</p>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
 
+/* ─── Navbar account menu ────────────────────────────────────────────────── */
+
+function AccountMenu({ user, logout }) {
+    const [open, setOpen] = useState(false);
+    const btnRef = useRef(null);
+    const panelRef = useRef(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDown = (e) => {
+            if (btnRef.current?.contains(e.target) || panelRef.current?.contains(e.target)) return;
+            setOpen(false);
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape") {
+                setOpen(false);
+                btnRef.current?.focus();
+            }
+        };
+        document.addEventListener("mousedown", onDown);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("mousedown", onDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [open]);
+
+    const itemCls = `flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-base-content/80 transition-colors hover:bg-base-content/5 hover:text-base-content ${FOCUS}`;
+
+    return (
+        <div className="relative">
+            <button
+                ref={btnRef}
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                aria-label="Account menu"
+                className={`flex h-10 cursor-pointer items-center gap-2.5 rounded-full pl-3 pr-1 transition-colors duration-150 hover:bg-base-content/10 ${open ? "bg-base-content/10" : ""} ${FOCUS}`}>
+                <AdminBadge />
+                <Avatar user={user} className="h-8 w-8 text-[13px]" />
+            </button>
+
+            {open && (
+                <div
+                    ref={panelRef}
+                    role="menu"
+                    aria-label="Account"
+                    className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-xl border border-base-content/10 bg-base-200 shadow-xl">
+                    <div className="border-b border-base-content/10 px-4 py-3">
+                        <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold">{user?.name || "Admin"}</span>
+                            <AdminBadge />
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-base-content/70">{user?.email}</p>
+                    </div>
+                    <div className="p-1.5">
+                        <Link to="/settings" role="menuitem" onClick={() => setOpen(false)} className={itemCls}>
+                            <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
+                            Settings
+                        </Link>
+                        <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                                setOpen(false);
+                                logout();
+                            }}
+                            className={`${itemCls} !text-error/90 hover:!text-error`}>
+                            <LogOut size={16} strokeWidth={1.75} aria-hidden="true" />
+                            Sign out
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/* ─── Layout ─────────────────────────────────────────────────────────────── */
+
+const SCROLL_KEY = "flux-dash-scroll";
+const SCROLL_MAX = 100; // newest entries kept
+function readScrollPositions() {
+    try {
+        const raw = sessionStorage.getItem(SCROLL_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Map(Array.isArray(arr) ? arr.filter((e) => Array.isArray(e) && typeof e[0] === "string" && Number.isFinite(e[1])) : []);
+    } catch {
+        return new Map();
+    }
+}
+function writeScrollPositions(map) {
+    try {
+        sessionStorage.setItem(SCROLL_KEY, JSON.stringify([...map].slice(-SCROLL_MAX)));
+    } catch {
+        /* storage unavailable or full — in-memory positions still work */
+    }
+}
+
 export default function DashboardLayout() {
     const { user, logout } = useAuth();
-    const [collapsed, setCollapsed] = useState(false);
+    const [collapsed, setCollapsed] = useState(readCollapsed);
     const [mobileOpen, setMobileOpen] = useState(false);
+
+    const toggle = useCallback(() => setCollapsed((c) => !c), []);
+
+    // <main> below is the dashboard's scroll container (the window never scrolls here), so the global
+    // <ScrollRestoration /> can't see it. New page -> top. Back/Forward -> the position it had when left.
+    const mainRef = useRef(null);
+    // Positions live in sessionStorage (not just a ref): leaving the dashboard unmounts this layout, and browser Back must
+    // still find where each dashboard page was scrolled. sessionStorage = per tab, gone when the tab closes — right lifetime.
+    const scrollPositions = useRef(null);
+    if (scrollPositions.current === null) scrollPositions.current = readScrollPositions();
+    const scrollSaveTimer = useRef(null);
+    useEffect(
+        () => () => {
+            clearTimeout(scrollSaveTimer.current);
+            writeScrollPositions(scrollPositions.current);
+        },
+        [],
+    );
+    const prevPath = useRef(null);
+    const { pathname, key: locationKey } = useLocation();
+    const navType = useNavigationType();
+    useLayoutEffect(() => {
+        const el = mainRef.current;
+        if (el) {
+            if (navType === "POP") el.scrollTop = scrollPositions.current.get(locationKey) ?? 0;
+            else if (prevPath.current !== null && prevPath.current !== pathname) el.scrollTop = 0;
+        }
+        prevPath.current = pathname;
+    }, [locationKey, pathname, navType]);
+
+    // Persist collapsed state
+    useEffect(() => {
+        try {
+            localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
+        } catch {
+            /* storage unavailable */
+        }
+    }, [collapsed]);
+
+    // "[" toggles the sidebar (ignored while typing)
+    useEffect(() => {
+        const onKey = (e) => {
+            if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey) return;
+            const t = e.target;
+            if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+            toggle();
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [toggle]);
+
+    // Mobile drawer: Escape closes; focus moves into it, Tab stays inside it, and focus returns to the menu button on close
+    const drawerRef = useRef(null);
+    const menuBtnRef = useRef(null);
+    useEffect(() => {
+        if (!mobileOpen) return;
+        const trigger = menuBtnRef.current;
+        const focusables = () => [...(drawerRef.current?.querySelectorAll('a[href], button:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])') ?? [])].filter((el) => el.offsetParent !== null);
+        focusables()[0]?.focus();
+        const onKey = (e) => {
+            if (e.key === "Escape") return setMobileOpen(false);
+            if (e.key !== "Tab") return;
+            const f = focusables();
+            if (!f.length) return;
+            const first = f[0];
+            const last = f[f.length - 1];
+            if (!drawerRef.current?.contains(document.activeElement)) {
+                e.preventDefault();
+                first.focus();
+            } else if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            trigger?.focus();
+        };
+    }, [mobileOpen]);
 
     if (!user) {
         return (
-            <div className="min-h-screen bg-base-100 flex items-center justify-center">
+            <div className="flex min-h-screen items-center justify-center bg-base-100">
                 <span className="loading loading-spinner loading-lg text-primary" />
             </div>
         );
@@ -133,8 +486,8 @@ export default function DashboardLayout() {
 
     if (user.role !== "admin") {
         return (
-            <div className="min-h-screen bg-base-100 flex items-center justify-center">
-                <div className="card bg-base-200 shadow-lg w-80 text-center">
+            <div className="flex min-h-screen items-center justify-center bg-base-100">
+                <div className="card w-80 bg-base-200 text-center shadow-lg">
                     <div className="card-body gap-4">
                         <Shield size={36} className="mx-auto text-error/60" />
                         <h2 className="card-title justify-center">Access Denied</h2>
@@ -148,65 +501,60 @@ export default function DashboardLayout() {
         );
     }
 
-    const initial = (user.name || "A")[0].toUpperCase();
-
     return (
         <div className="flex h-screen overflow-hidden bg-base-100 text-base-content">
-            {/* Desktop Sidebar */}
+            {/* Desktop sidebar */}
             <aside
-                className={[
-                    "hidden md:flex flex-col relative shrink-0",
-                    "bg-base-200 border-r border-base-content/5",
-                    "transition-all duration-300 ease-in-out",
-                    collapsed ? "w-60px" : "w-220px",
-                ].join(" ")}>
-                <Sidebar collapsed={collapsed} onNav={() => {}} user={user} logout={logout} />
-                <button
-                    onClick={() => setCollapsed(!collapsed)}
-                    aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                    className="absolute top-4 -right-3 z-10 w-6 h-6 rounded-full bg-base-300 border border-base-content/10 flex items-center justify-center text-base-content/60 hover:text-base-content transition-colors shadow-sm cursor-pointer">
-                    {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-                </button>
+                className={["hidden shrink-0 flex-col overflow-hidden border-r border-base-content/10 transition-[width] duration-200 ease-out md:flex", collapsed ? "w-[64px]" : "w-[240px]"].join(
+                    " ",
+                )}>
+                <Sidebar collapsed={collapsed} variant="desktop" onNav={() => {}} onToggle={toggle} user={user} />
             </aside>
 
-            {/* Mobile drawer overlay */}
+            {/* Mobile drawer */}
             {mobileOpen && (
-                <div className="fixed inset-0 z-50 md:hidden flex">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-                    <div className="relative w-64 bg-base-200 border-r border-base-content/5 flex flex-col z-10">
-                        {/* Close button row — Logo already rendered inside Sidebar header */}
-                        {/* <div className="absolute top-3 right-3 z-20">
-                            <button
-                                onClick={() => setMobileOpen(false)}
-                                aria-label="Close menu"
-                                className="w-9 h-9 flex items-center justify-center rounded-lg bg-base-content/15 hover:bg-base-content/25 text-base-content transition-colors">
-                                <X size={18} strokeWidth={2.5} />
-                            </button>
-                        </div> */}
-                        <div className="flex-1 overflow-y-auto">
-                            <Sidebar collapsed={false} onNav={() => setMobileOpen(false)} user={user} logout={logout} />
-                        </div>
+                <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-modal="true" aria-label="Navigation menu">
+                    <button type="button" tabIndex={-1} aria-label="Close menu" className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+                    <div ref={drawerRef} className="relative z-10 h-full w-72 max-w-[85vw] border-r border-base-content/10 shadow-2xl">
+                        <Sidebar collapsed={false} variant="drawer" onNav={() => setMobileOpen(false)} onToggle={() => setMobileOpen(false)} user={user} />
                     </div>
                 </div>
             )}
 
-            {/* Main content */}
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                <header className="h-14 shrink-0 flex items-center gap-3 px-4 bg-base-300 border-b border-base-content/5 sticky top-0 z-20">
-                    <button className="md:hidden btn btn-ghost btn-sm btn-square text-base-content/70" onClick={() => setMobileOpen(true)} aria-label="Open menu">
-                        <Menu size={20} />
+            {/* Main column */}
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                {/* Navbar: left = menu (mobile) / expand sidebar (desktop, only when collapsed). Right = notifications + profile. */}
+                <header className="relative z-30 flex h-[52px] shrink-0 items-center gap-3 border-b border-base-content/15 bg-base-200 px-4 sm:px-5">
+                    <button
+                        type="button"
+                        className={`flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-content/10 hover:text-base-content md:hidden ${FOCUS}`}
+                        ref={menuBtnRef}
+                        onClick={() => setMobileOpen(true)}
+                        aria-label="Open menu">
+                        <Menu size={19} aria-hidden="true" />
                     </button>
+                    {collapsed && (
+                        <button
+                            type="button"
+                            onClick={toggle}
+                            title="Expand sidebar ( [ )"
+                            aria-label="Expand sidebar"
+                            aria-keyshortcuts="["
+                            className={`hidden h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-base-content/70 transition-colors duration-150 hover:bg-base-content/10 hover:text-base-content md:flex ${FOCUS}`}>
+                            <PanelLeftOpen size={19} strokeWidth={1.6} aria-hidden="true" />
+                        </button>
+                    )}
                     <div className="flex-1" />
-                    <div className="flex items-center gap-2">
-                        <span className="badge badge-primary badge-outline badge-sm rounded-full font-bold uppercase tracking-widest">{user.role}</span>
-                        {user?.avatar ? (
-                            <img src={user.avatar} alt={user.name} className="w-8 h-8 rounded-full object-cover" />
-                        ) : (
-                            <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">{initial}</div>
-                        )}
-                    </div>
+                    <Notifications />
+                    <div className="h-[22px] w-px bg-base-content/15" aria-hidden="true" />
+                    <AccountMenu user={user} logout={logout} />
                 </header>
-                <main className="flex-1 overflow-auto p-4 sm:p-6 bg-base-100">
+
+                <main ref={mainRef} onScroll={(e) => {
+                    scrollPositions.current.set(locationKey, e.currentTarget.scrollTop);
+                    clearTimeout(scrollSaveTimer.current);
+                    scrollSaveTimer.current = setTimeout(() => writeScrollPositions(scrollPositions.current), 250);
+                }} className="flex-1 overflow-auto bg-base-100 p-4 sm:p-6">
                     <Outlet />
                 </main>
             </div>

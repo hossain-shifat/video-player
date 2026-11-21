@@ -11,8 +11,9 @@ const { getMetadata, getCached } = require("../../metadata/metadataStore");
 const { groupMedia } = require("../../utils/media/grouper");
 const { getPermission } = require("../../utils/user/permissionsStore");
 const { probe } = require("../../utils/media/ffprobe");
-const { searchSubtitles, downloadSubtitle } = require("../../services/subDLService");
+const { searchSubtitles, downloadSubtitle, LANG_LABEL } = require("../../services/subDLService");
 const subtitleStore = require("../../utils/subtitles/subtitleStore");
+const subtitleWorker = require("../../utils/subtitles/subtitleWorker");
 
 // ─── Multer upload config (memory → then we move to media dir) ────────────────
 // Store in memory; we validate and write to disk manually so we can place it
@@ -354,7 +355,7 @@ async function getMediaSubtitles(req, res) {
                     /* missing */
                 }
                 if (!fileOk) continue;
-                const langLabel = dl.lang === "bn" ? "Bangla" : dl.lang === "en" ? "English" : dl.lang.toUpperCase();
+                const langLabel = LANG_LABEL[dl.lang] || String(dl.lang).toUpperCase();
                 subtitles.push({
                     source: "downloaded",
                     lang: dl.lang,
@@ -440,7 +441,8 @@ async function uploadSubtitle(req, res) {
                 lang,
                 filename: `subtitle${subExt}`,
                 destPath: storePath,
-            });
+                source: "upload", // user-provided — the validator/audit never touches these
+});
         } catch (storeErr) {
             // Non-fatal — file already saved next to media
             console.warn("[Media] uploadSubtitle store copy failed:", storeErr.message);
@@ -522,24 +524,32 @@ async function downloadOnlineSubtitle(req, res) {
         const { url: subtitleUrl, lang = "en" } = req.body || {};
         if (!subtitleUrl) return res.status(400).json({ error: "url is required" });
 
-        // Save into data/subtitles/<hash16>/<language>/subtitle.srt
+        // Download → VALIDATE (duration / cue density / cue length / encoding) → only then store in
+        // data/subtitles/<hash16>/<language>/subtitle.<ext>. A subtitle that does not look like a real one
+        // for this video is refused with 422 + reasons; body { force: true } stores it anyway.
         const langDir = subtitleStore.getSubtitleLangDir(id, lang);
-        const result = await downloadSubtitle(subtitleUrl, langDir, "subtitle", lang);
+        const result = await subtitleWorker.downloadValidated({ mediaId: id, subtitleRef: subtitleUrl, lang, langDir, force: req.body?.force === true });
 
         if (!result.ok) {
-            return res.status(500).json({ error: result.error || "Download failed" });
+            return res.status(result.status || 500).json({ error: result.error || "Download failed", reasons: result.reasons, score: result.score });
         }
 
         await subtitleStore.recordDownloaded(id, {
             lang,
             filename: result.filename,
             destPath: result.destPath,
+            source: "manual",
+            score: result.score,
+            validation: "generic",
+            validatedAt: new Date().toISOString(),
         });
 
         return res.status(201).json({
-            message: "Subtitle downloaded from SubDL",
+            message: result.forced ? "Subtitle stored (validation overridden)" : "Subtitle downloaded and validated",
             filename: result.filename,
             lang,
+            score: result.score,
+            warnings: result.forced ? result.reasons : undefined,
             url: subtitleStore.getSubtitleStreamUrl(result.destPath),
         });
     } catch (err) {

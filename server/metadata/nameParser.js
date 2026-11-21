@@ -256,7 +256,7 @@ const ABSOLUTE_ANIME_RE = /^\[([^\]]+)\]\s+(.+?)\s+-\s+(\d{1,4})(?:\s+v\d)?\s*(?
 
 // ── NEW: Release-site/folder prefix pattern ───────────────────────────────────
 // Matches "SiteName - Title.S01..." or "GroupName - Title.2023..."
-// e.g. "TheMoviesBoss - Wednesday.S01E01..."
+// e.g. "TheMoviesBoss - Show Title.S01E01..."
 // Condition: token before " - " is CamelCase/PascalCase with no spaces (looks like a group/site)
 const SITE_PREFIX_RE = /^([A-Za-z0-9]{3,30})\s+-\s+(.+)$/;
 
@@ -274,7 +274,7 @@ const GARBAGE_TITLE_RE = /^(?:S\d{1,2}(?:E\d{1,3})?|EP?\d{1,3}|Episode\s*\d+|New
 const BANGLA_RE = /\bbangla\b/i;
 
 // ── FIX: FORMAT_1x01_RE now used to TRIM title only, not after the fact ───────
-// "Friends.1x01.The.One.Where..." → season=1, ep=1, title="Friends" (not "Friends 1x01 The One...")
+// "Show.1x01.The.Episode.Name..." → season=1, ep=1, title="Show" (not "Show 1x01 The Episode...")
 const FORMAT_1x01_RE = /\b(\d{1,2})x(\d{2})\b/i;
 
 // Explicit title safeguards: filename pattern -> forced title.
@@ -308,7 +308,7 @@ function extractSmartTitle(raw, advObj) {
     if (advObj.type === "series" && /\bCOMPLETE\b/i.test(raw)) tokens.push(/\bCOMPLETE\b/i);
 
     // ── FIX: add FORMAT_1x01_RE as a title-terminator ─────────────────────────
-    // Prevents "Friends 1x01 The One Where Monica..." from bleeding into title
+    // Prevents "Show 1x01 The Episode Name..." from bleeding into title
     const fmt1x01Match = raw.match(FORMAT_1x01_RE);
     if (fmt1x01Match) {
         tokens.push(FORMAT_1x01_RE);
@@ -420,13 +420,13 @@ function parseFilenameAdvanced(filename) {
 
     adv.releaseGroup = extractReleaseGroup(raw);
 
-    // Year correction: for "1917.2019.1080p" the true release year is the last one
+    // Year correction: for "Title.2019.1080p" the true release year is the last one
     const yearMatches = [...raw.matchAll(/(?<![A-Za-z0-9])((?:19|20)\d{2})(?![A-Za-z0-9])/g)];
     if (yearMatches.length > 1) {
         adv.year = parseInt(yearMatches[yearMatches.length - 1][1], 10);
     }
 
-    // Daily show: "The.Daily.Show.2026.05.19"
+    // Daily show: "Daily.Show.Title.2026.05.19"
     const dailyMatch = raw.match(DAILY_SHOW_RE);
     if (dailyMatch) {
         adv.type = "series";
@@ -468,7 +468,7 @@ function parseFilenameAdvanced(filename) {
     adv.title = extractSmartTitle(raw, adv);
 
     // ── NEW: Site/folder prefix stripping ────────────────────────────────────
-    // "TheMoviesBoss - Wednesday.S01..." → title becomes "Wednesday"
+    // "TheMoviesBoss - Show Title.S01..." → title becomes "Show Title"
     // Only strip when prefix looks like CamelCase site/group name (no spaces)
     if (adv.title) {
         const sitePrefixMatch = adv.title.match(SITE_PREFIX_RE);
@@ -491,13 +491,13 @@ function parseFilenameAdvanced(filename) {
     }
 
     // ── NEW: Bracket-group anime detection ───────────────────────────────────
-    // "[EMBER] Attack on Titan", "[BakedFish] Naruto..." — bracket prefix = fansub = anime
+    // "[EMBER] Anime Title", "[BakedFish] Anime Title..." — bracket prefix = fansub = anime
     if ((adv.type === "series" || adv.type === "movie") && /^\[([^\]]+)\]/.test(raw)) {
         adv.type = "anime";
     }
 
     // ── NEW: Anime "- NNN END" episode extraction ────────────────────────────
-    // "[BakedFish] Naruto Shippuden - 500 END 1080p" → episode=500, type=anime
+    // "[BakedFish] Anime Title - 500 END 1080p" → episode=500, type=anime
     if (adv.type === "anime" && (!adv.episodes || adv.episodes.length === 0)) {
         const endEpMatch = raw.match(/[-\u2013]\s*(\d{2,4})\s+END\b/i);
         if (endEpMatch) {
@@ -507,14 +507,14 @@ function parseFilenameAdvanced(filename) {
     }
 
     // ── NEW: Anime title cleanup — strip leading bracket group + trailing ep number ──
-    // "[SubsPlease] One Piece - 1108" → "One Piece"
+    // "[SubsPlease] Anime Title - 1108" → "Anime Title"
     // "[Group] Title - 076" → "Title"
     if (adv.type === "anime" && adv.title) {
         // Strip leading [Group] prefix from title if it leaked in
         adv.title = adv.title.replace(/^\[[^\]]+\]\s*/, "").trim();
         // Strip trailing "- NNN" episode number bleed
         adv.title = adv.title.replace(/\s*-\s*\d{1,4}\s*$/, "").trim();
-        // Strip trailing " NNN" bare episode bleed (e.g. "Naruto Shippuden 500")
+        // Strip trailing " NNN" bare episode bleed (e.g. "Anime Title 500")
         // Only if episodes array already has a value matching that number
         if (adv.episodes && adv.episodes.length > 0) {
             const lastEp = adv.episodes[adv.episodes.length - 1];
@@ -598,9 +598,9 @@ const _COMPACT_SNE_RE = /(?:^|[\s.])([1-9])(\d{2})(?:[\s.]|$)/;
 const _BRACKET_LANG_GROUP_RE = /\[([A-Za-z]{2,}(?:[\s-]+[A-Za-z]{2,})+)\]/;
 
 // ── NEW v3: Website/domain dash-prefix leaking into extracted title ──────────
-// "MovieLinkBD.com - Dark.S01E01..." → extractSmartTitle only strips known
+// "MovieLinkBD.com - Show Title.S01E01..." → extractSmartTitle only strips known
 // tokens (year/res/season/etc), so "MovieLinkBD com - " survives as a prefix
-// on adv.title (e.g. "MovieLinkBD com - Dark"). Strip it here.
+// on adv.title (e.g. "MovieLinkBD com - Show Title"). Strip it here.
 const _WEBSITE_DASH_TITLE_RE = /^([A-Za-z0-9]+)[\s.]+(com|net|org|co|io|tv|to|me|in|cc|is|nl|pw|link|site|xyz|info|biz|club|fun|live|pro|vip|us|ws)\s*-\s*(.+)$/i;
 
 const _origParseFilenameAdvanced = parseFilenameAdvanced;
@@ -717,7 +717,7 @@ function parseFilenamePatched(filename) {
         // Get the base without extension
         const base = fn.replace(/\.\w{2,4}$/, "");
         const cm = base.match(_COMPACT_SNE_RE);
-        // A bare number right after a dash ("Naruto Shippuden - 220") is an ABSOLUTE episode, not S2E20.
+        // A bare number right after a dash ("Anime Title - 220") is an ABSOLUTE episode, not S2E20.
         const _cmBefore = cm ? base.slice(0, cm.index + cm[0].indexOf(cm[1] + cm[2])) : "";
         if (cm && !/[-\u2013]\s*$/.test(_cmBefore)) {
             const s = parseInt(cm[1], 10);
@@ -757,14 +757,14 @@ function parseFilenamePatched(filename) {
     }
 
     // ── STEP 12: "Dubbed" keyword → anime signal ──────────────────────────
-    // "Naruto Shippuden Episode 500 English Dubbed" → type=anime
+    // "Anime Title Episode 500 English Dubbed" → type=anime
     // "Dubbed" alone is strong indicator (anime dubs are commonly labelled this way)
     if (adv.type === "series" && /\bDubbed\b/i.test(fn)) {
         adv.type = "anime";
     }
 
     // ── STEP 13: Anime title cleanup — strip trailing episode + lang noise ─
-    // "[Cleo] SPY x FAMILY - 12 (Dual Audio...)" → "SPY x FAMILY"
+    // "[Cleo] ANIME x TITLE - 12 (Dual Audio...)" → "ANIME x TITLE"
     // After episode extracted, clean title of leftover "- NN (noise...)" suffix
     if (adv.type === "anime" && adv.title) {
         // Strip trailing "- NN (anything)" where NN matches a known episode
@@ -780,7 +780,7 @@ function parseFilenamePatched(filename) {
     }
 
     // ── STEP 14: "Episode NNN" → strip from anime title + set type anime ──
-    // "Naruto Shippuden Episode 500 English Dubbed" → title="Naruto Shippuden"
+    // "Anime Title Episode 500 English Dubbed" → title="Anime Title"
     if (adv.type === "anime" && adv.title) {
         const epWordInTitle = adv.title.match(/\s+Episode\s+\d+.*/i);
         if (epWordInTitle) {
@@ -789,7 +789,7 @@ function parseFilenamePatched(filename) {
     }
 
     // ── STEP 15: "Season N" leaking into title → strip ────────────────────
-    // "The Office US Season 4" → "The Office US"
+    // "Show Title US Season 4" → "Show Title US"
     // extractSmartTitle uses SEASON_ONLY_RE but title still bleeds in some paths
     if (adv.title) {
         adv.title = adv.title.replace(/\s+Season\s+\d+\s*$/i, "").trim();
@@ -800,11 +800,11 @@ function parseFilenamePatched(filename) {
     }
 
     // ── STEP 16: Numeric-title year bleed cleanup ──────────────────────────
-    // "2012 2009 REMASTERED" → title should be "2012" (year=2009, REMASTERED=edition)
+    // "1111 2009 REMASTERED" → title should be "1111" (year=2009, REMASTERED=edition)
     // When title starts with a 4-digit number followed by a year, strip the year+noise
     if (adv.title && adv.year) {
         // Pattern: title = "<numericTitle> <year> [NOISE...]"
-        // e.g. "2012 2009 REMASTERED", "1923 2022"
+        // e.g. "1111 2009 REMASTERED", "2222 2022"
         const numTitleYearBleed = adv.title.match(new RegExp(`^(\\d{1,4}(?:\\s+[A-Za-z][A-Za-z0-9\\s]*)?)\\s+${adv.year}\\b(.*)$`));
         if (numTitleYearBleed) {
             // Only apply if the part before the year is plausibly a title (short numeric or short word)
@@ -854,8 +854,8 @@ function parseFilenamePatched(filename) {
     }
 
     // ── STEP 20 (NEW): Website/domain dash-prefix leaking into title ───────
-    // "MovieLinkBD.com - Dark.S01E01..." → title ends up "MovieLinkBD com -
-    // Dark" after smart-title extraction. Strip the leading site tag.
+    // "MovieLinkBD.com - Show Title.S01E01..." → title ends up "MovieLinkBD com -
+    // Show Title" after smart-title extraction. Strip the leading site tag.
     if (adv.title) {
         const siteDashMatch = adv.title.match(_WEBSITE_DASH_TITLE_RE);
         if (siteDashMatch && siteDashMatch[3] && siteDashMatch[3].trim().length > 0) {
@@ -878,10 +878,10 @@ module.exports = {
 // Appended only. Nothing above this line is modified.
 //
 // Fixes:
-//  1. "Anaconda Full HD Hindi ORG (2025) Hindi Download"
+//  1. "Movie Title Full HD Hindi ORG (2025) Hindi Download"
 //     extractSmartTitle cuts at the year token but never runs stripNoise(), so
 //     junk words sitting BEFORE the year ("Full HD", "Hindi", "ORG") stay in the
-//     title → "Anaconda Full HD Hindi ORG". Strip trailing junk words only.
+//     title → "Movie Title Full HD Hindi ORG". Strip trailing junk words only.
 //  2. "...WEB-DL.h264.ESub_2" → audio came out as "AAC." (trailing dot from the
 //     AAC[0-9.]* regex). Trim stray dots.
 //  3. "...BluRay.Hindi.English.DD.5.1.x264" → "DD.5.1" never matched the audio
@@ -889,7 +889,7 @@ module.exports = {
 
 // Trailing junk words/phrases that can bleed into a title when they sit before the
 // year/resolution token. Deliberately excludes real-title words (Movie, Free, Watch,
-// Original, New, Online) to avoid eating titles like "The Lego Movie" / "Born Free".
+// Original, New, Online) to avoid eating titles like "Some Movie Title" / "Another Title".
 const _V4_TRAILING_NOISE_RE =
     /(?:[\s.\-_]+(?:full[\s.]?hd|full[\s.]?movie|fhd|uhd|hd|hindi|english|tamil|telugu|kannada|malayalam|bengali|bangla|punjabi|marathi|gujarati|org|dubbed|dual[\s.]?audio|multi[\s.]?audio|download|esubs?|hdrip|webrip|web[\s.\-]?dl|bluray|brrip|dvdrip|hdcam|camrip|hdts|hdtc))+[\s.\-_]*$/i;
 
@@ -904,23 +904,23 @@ const _V5_SITE_PREFIX_RE =
 const _V8_KNOWN_EXT_RE = /\.(?:mkv|mp4|m4v|avi|mov|wmv|flv|webm|ts|m2ts|mts|mpg|mpeg|vob|ogv|3gp|divx|rmvb|iso|srt|vtt|ass|ssa|sub|idx)$/i;
 
 function parseFilenamePatchedV4(filename) {
-    // Underscores are word separators in many release names ("Heat_1995_1080p_WEBRip",
-    // "Peaky_Blinders_S03E04"). The layers below only split on dots/spaces, so the whole
+    // Underscores are word separators in many release names ("Movie_Title_1995_1080p_WEBRip",
+    // "Show_Title_S03E04"). The layers below only split on dots/spaces, so the whole
     // tag string ended up inside the title. Treat "_" like a space at the entry point only.
     // Camera/device names (VID_…, IMG_0012, DSC_1234) already parse to an EMPTY title, which
     // correctly means "nothing to look up" — keep that behaviour; only normalise when the
     // original parse produced a title.
-    // Release-site prefix: "www.1TamilMV.fi - Leo (2023) …", "Vegamovies.bz - Pushpa The Rise (2021) …".
+    // Release-site prefix: "www.1TamilMV.fi - Movie Title (2023) …", "Vegamovies.bz - Movie Title Part (2021) …".
     // Stripped at the entry point only. Conservative: "www." + any host, or exactly <name>.<tld> with
-    // a tld from a short list that is not an ordinary word ("Dragon.Ball.Z.One - 01" is NOT a site).
+    // a tld from a short list that is not an ordinary word ("Anime.Title.Z.One - 01" is NOT a site).
     const _inputName = filename; // untouched input, exposed (non-enumerable) as parsed.originalName
-    // scanner.js / grouper.js hand over names WITHOUT the extension ("Breaking.Bad.S01E02", "Inception.2010"). Every layer below
+    // scanner.js / grouper.js hand over names WITHOUT the extension ("Show.Title.S01E02", "Movie Title.2010"). Every layer below
     // assumes a trailing ".ext" and cuts at the last dot, which ate ".S01E02" / ".2010" / ".US" and turned an
     // untagged episode into a MOVIE. Give extension-less input a placeholder extension so the right thing is removed.
     if (typeof filename === "string" && filename && !_V8_KNOWN_EXT_RE.test(filename)) filename += ".mkv";
     if (typeof filename === "string") filename = _v6StripPrefixes(filename.replace(_V5_SITE_PREFIX_RE, ""));
-    // "Fairy*Tail*-_07_BD_1080p": '*' used as a word separator in front of a "-<episode>" tail (illegal in Windows
-    // file names, but seen in exported name lists). Narrow on purpose so "M*A*S*H" is untouched.
+    // "Anime*Title*-_07_BD_1080p": '*' used as a word separator in front of a "-<episode>" tail (illegal in Windows
+    // file names, but seen in exported name lists). Narrow on purpose so "A*B*C*D" is untouched.
     if (typeof filename === "string" && /\*[-\u2013]_?\s*\d{1,4}(?:[_\s.]|$)/.test(filename)) filename = filename.replace(/\*/g, "_");
     const _origName = filename;
     let adv;
@@ -969,7 +969,7 @@ function parseFilenamePatchedV4(filename) {
     }
 
     // ── 4. False anime: leading bare "Sub"/"Subbed" is a TITLE word ────────
-    // "Sub.Zero.2020" matched ANIME_HINTS on the word "Sub" → type "anime".
+    // "Sub.Title.2020" matched ANIME_HINTS on the word "Sub" → type "anime".
     // Only reverts when ALL hold: type is anime, no season/episode found, no
     // leading [group]/(site) prefix, and the ONLY hint is a leading Sub/Subbed
     // token with no further anime hint after it. Everything else is untouched.
@@ -1051,8 +1051,8 @@ function parseFilenamePatchedV4(filename) {
 }
 
 // ── v5 helper: "Title - 07" (+ optional tags) → series/anime episode ─────────
-// Seen in real libraries: "Fairy_Tail_-_07_BD_1080p", "Berserk_-_08_BD_1080p" (title was lost and became
-// "08"), "Wotakoi_-_16_720p", "[DB] Dragon Ball Z Kai - 98 (Dual Audio…)". Guards: no SxxExx, no year in the
+// Seen in real libraries: "Anime_Title_-_07_BD_1080p", "Anime2_-_08_BD_1080p" (title was lost and became
+// "08"), "Anime3_-_16_720p", "[DB] Anime Title Kai - 98 (Dual Audio…)". Guards: no SxxExx, no year in the
 // name, the number is not a year or a resolution, the title keeps ≥ 2 characters.
 function _v5DashEpisode(adv, name, origName) {
     if (adv.season != null) return;
@@ -1064,7 +1064,7 @@ function _v5DashEpisode(adv, name, origName) {
     if (!m) return;
     const ep = parseInt(m[2], 10);
     let title = m[1].replace(/\s{2,}/g, " ").trim();
-    // "Hunter x Hunter (2011) - 148": a year INSIDE the title group is part of the title block, not a movie year.
+    // "Anime Title (2011) - 148": a year INSIDE the title group is part of the title block, not a movie year.
     const _ym = title.match(/\s*[(\[]((?:19|20)\d{2})[)\]]\s*$/);
     if (_ym) title = title.slice(0, _ym.index).trim();
     else if (adv.year) return;
@@ -1080,11 +1080,11 @@ function _v5DashEpisode(adv, name, origName) {
 }
 
 // ── v6: more release-site prefix shapes + bracketed year ─────────────────────
-// "9xmovies - Gadar 2 (2023)", "Mkvcinemas.com Kalki 2898 AD (2024)", "SSRmovies.cfd Salaar …",
-// "Ibomma.Pw Devara …", "HDHub4u.Tv Mirzapur S03E01", "@MovieChannel - Coco (2017)", "#Tamilrockers Leo 2023",
-// "Downloaded from MoviesHD - Gladiator (2000)". Conservative on purpose: a KNOWN site name, or <name>.<tld>
-// followed by a SPACE (dot-separated titles such as "In.To.The.Woods" are never touched), or an explicit
-// @tag / #tag / "Downloaded from" lead-in. Bracketed years: "Inception [2010]" → "Inception (2010)".
+// "9xmovies - Movie Title 2 (2023)", "Mkvcinemas.com Movie Title 2898 AD (2024)", "SSRmovies.cfd Movie Title …",
+// "Ibomma.Pw Movie Title …", "HDHub4u.Tv Show Title S03E01", "@MovieChannel - Movie Title (2017)", "#Tamilrockers Movie Title 2023",
+// "Downloaded from MoviesHD - Movie Title (2000)". Conservative on purpose: a KNOWN site name, or <name>.<tld>
+// followed by a SPACE (dot-separated titles such as "In.To.The.Word" are never touched), or an explicit
+// @tag / #tag / "Downloaded from" lead-in. Bracketed years: "Movie Title [2010]" → "Movie Title (2010)".
 const _V6_TLD =
     "com|net|org|co|in|io|tv|to|me|cc|pw|link|site|xyz|info|biz|club|fun|live|pro|vip|us|ws|fi|cam|run|bz|sbs|cfd|lol|mx|ag|ac|fm|la|mom|wtf|rest|ink|pk|bd|lk|np|icu|tk|ru|sx|cx|nz|dev|app|cloud|rocks|day|city|click|best|today|mobi|one|win";
 const _V6_SITE_STEMS =
@@ -1110,7 +1110,7 @@ function _v6StripPrefixes(name) {
 //     searched with "Show 2nd Season"). Only for non-movies, only when no explicit season was already found
 //     or the found season agrees.
 // (b) "Show - OVA 02" / "Show - Special 01": a special/OVA marker with a number is an episode number, not title text.
-// (c) "1984 (1984)": a parenthesised year that merely repeats the extracted year is not part of the title.
+// (c) "1111 (1111)": a parenthesised year that merely repeats the extracted year is not part of the title.
 const _V9_SEASON_TAIL_RES = [/\s*[-\u2013:]?\s*(\d{1,2})(?:st|nd|rd|th)\s+Season$/i, /\s*[-\u2013:]?\s*Season\s*(\d{1,2})$/i];
 const _V9_SPECIAL_TAIL_RE = /\s*[-\u2013]?\s*(?:OVA|OAD|ONA|Special|SP)\s*0*(\d{1,3})$/i;
 function _v9TitleTail(adv) {
@@ -1210,8 +1210,8 @@ function _candKey(t) {
 }
 
 // The title text exactly as written in the file name, up to the year / first technical tag:
-// "John.Wick.Chapter.3.Parabellum.2019.1080p…" → "John Wick Chapter 3 Parabellum". The primary
-// title drops "Chapter 3 Parabellum" (it is split into `part`), and "S.W.A.T.2.2011" loses its
+// "Movie.Title.Chapter.3.Subtitle.2019.1080p…" → "Movie Title Chapter 3 Subtitle". The primary
+// title drops "Chapter 3 Subtitle" (it is split into `part`), and "A.B.C.2.2011" loses its
 // sequel number; this keeps the whole phrase as an ADDITIVE candidate (title/part fields and
 // grouping are untouched).
 function _fullTitleSegment(adv, filename) {
@@ -1291,7 +1291,7 @@ function buildTitleCandidates(adv, filename) {
 
 // ── v9: folder context ───────────────────────────────────────────────────────
 // scanner.js records the full path, but the parser only ever saw the bare name. "Show Name/Season 2/S02E05.mkv",
-// "Show Name/Season 2/05.mkv" and "Inception (2010)/movie.mkv" carry NO title in the file name itself. The parent
+// "Show Name/Season 2/05.mkv" and "Movie Title (2010)/movie.mkv" carry NO title in the file name itself. The parent
 // folder (and, for "Season N" folders, the grandparent) is used ONLY when the file's own parse has no usable title.
 // A file with its own title is never overridden by its folder.
 const _V9_SEASON_FOLDER_RE = /^(?:season|series|staffel|saison|temporada|s)[\s._-]*0*(\d{1,2})$|^specials?$/i;
@@ -1354,5 +1354,130 @@ function parseFilenameWithContext(filename, filePath) {
 // Re-export. parseFilename(name, [fullPath]) — the optional path enables folder context; one-argument calls are unchanged.
 module.exports = {
     parseFilename: parseFilenameWithContext,
+    parseFilenameOriginal: parseFilename,
+};
+
+// ============================================================================
+// ─── v10 PATCH LAYER — release qualifier ("Encore", "Re-Release") ────────────
+// ============================================================================
+// Appended only. Nothing above this line is modified.
+//
+// In "<Title>.Encore.<year>.1080p…" the word "Encore" is a RELEASE QUALIFIER for a theatrical re-release, not part of the
+// title, and the year is the re-release year, not the production year. This layer splits it into the optional
+// `releaseQualifier` field and leaves title / year / edition untouched otherwise.
+//
+// Deliberately NOT a global noise word: "Encore" can also be a real title word (as a whole title, or ending one).
+// The qualifier is only extracted when ALL of these hold, otherwise it is left unset (never guessed):
+//   • movie, no season/episode, not a camera clip, not a folder-context result
+//   • the file carries an explicit plausible year AFTER the qualifier token ("Encore 2026", "Encore (2026)",
+//     "Encore 1080p WEB-DL 2026"). The title ends at the first tech/year token, so a qualifier that is the last
+//     title word sits right in front of the release tags
+//   • the qualifier is the LAST word(s) of the title
+//   • "Re-Release" forms: ≥ 1 title word remains. "Encore" (ambiguous): the last remaining word is not a
+//     connector/adjective that makes "Encore" a noun of the title ("The Last", "One More", …), and a one-word
+//     remainder additionally needs release tags (resolution or source) in the file name
+// Pure string logic: no TMDB, no network, no filesystem.
+
+// separator before the qualifier: space/dot/dash ("Title - Encore") or an opening bracket ("Title (Encore)")
+const _V10_TAIL_RE = /^(.*\S)(?:[\s._\-\u2013\u2014]+|\s*[(\[]\s*)(Encore|Re[\s._-]?Release|Rerelease)\s*[)\]]?$/i;
+const _V10_ENCORE_PRECEDING_STOP = new Set(["more", "the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "with", "no", "my", "your", "his", "her", "our", "their", "last", "final", "one", "big", "grand", "great", "first", "second", "one-more", "another", "an"]);
+const _V10_KEY_TAIL_RE = /(?:^|\s)(?:encore|re release|rerelease)(?:\s+(?:19|20)\d{2})?$/;
+
+function _v10DetectReleaseQualifier(adv, filename) {
+    if (!adv || typeof adv.title !== "string" || !adv.title || typeof filename !== "string") return null;
+    if (adv.isDeviceFile || adv.type !== "movie") return null;
+    if (adv.season != null || adv.episode != null || (adv.episodes && adv.episodes.length)) return null;
+    if (!Number.isInteger(adv.year) || adv.year < 1900 || adv.year > new Date().getFullYear() + 2) return null;
+    if (adv.title.trim() === String(adv.year)) return null;
+    if (adv.parseNotes && adv.parseNotes.includes("folder-context")) return null;
+
+    let m = adv.title.match(_V10_TAIL_RE);
+    if (!m && adv.part != null) {
+        // "<Title> Part 2 Encore 2026": the movie-part split already cut "Part 2 Encore" off adv.title, so look at the FULL
+        // title segment of the file name (everything before the claimed year). `part` itself is left exactly as parsed.
+        const flatFull = filename.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+        const cut = flatFull.search(new RegExp(`(?<![0-9])${adv.year}(?![0-9])`));
+        const seg = (cut > 0 ? flatFull.slice(0, cut) : flatFull).trim();
+        const mm = seg.match(_V10_TAIL_RE);
+        if (mm && seg.toLowerCase().startsWith(adv.title.trim().toLowerCase())) m = [mm[0], adv.title.trim(), mm[2]];
+    }
+    if (!m) return null;
+    let rest = m[1].replace(/[\s\-\u2013\u2014:,~+(]+$/, "").trim();
+    // "<Title> <earlier year> Encore <year>": the earlier number MAY be the original release year, but it may just as well
+    // be part of the title ("Movie Title 1984"). It is therefore KEPT in the primary title. buildTitleCandidates()
+    // already offers the year-stripped form as a separate low-trust "no-trailing-year" fallback candidate, which a
+    // consumer only uses after the primary lookup fails — so an original-year title is still reachable, never guessed first.
+    const isEncore = /^encore$/i.test(m[2]);
+    const restWords = rest.split(/\s+/).filter(Boolean);
+    if (!restWords.length) return null;
+    if (/^(encore|re|release|rerelease)$/i.test(restWords[restWords.length - 1])) return null; // remainder is itself a qualifier word
+    if (isEncore) {
+        if (_V10_ENCORE_PRECEDING_STOP.has(restWords[restWords.length - 1].toLowerCase())) return null;
+        // a one-word remainder ("<Word> Encore") is also an ordinary title shape, so it additionally needs release tags
+        if (restWords.length < 2 && !(adv.resolution || adv.source)) return null;
+    }
+
+    // Context: the claimed year must appear AFTER the qualifier token in the ORIGINAL name.
+    const flat = filename.replace(/[._]+/g, " ");
+    const ctx = new RegExp(`\\b(?:Encore|Re[\\s-]?Release|Rerelease)\\b[^]*?(?<![0-9])${adv.year}(?![0-9])`, "i");
+    if (!ctx.test(flat)) return null;
+
+    return { title: rest, qualifier: isEncore ? "Encore" : "Re-Release" };
+}
+
+// Removes ONLY the qualifier occurrence the detector relied on (the last one that still has the claimed year after it),
+// so other title text and unrelated occurrences of the same word stay in the string the candidate builder sees.
+function _v10WithoutQualifier(filename, year) {
+    const re = /(^|[\s._\-\u2013\u2014(\[])(Encore|Re[\s._-]?Release|Rerelease)(?=$|[\s._\-\u2013\u2014)\]])/gi;
+    const yearRe = new RegExp(`(?<![0-9])${year}(?![0-9])`);
+    let pick = null;
+    for (let mm = re.exec(filename); mm; mm = re.exec(filename)) {
+        const tokenStart = mm.index + mm[1].length;
+        const tokenEnd = tokenStart + mm[2].length;
+        if (yearRe.test(filename.slice(tokenEnd))) pick = { tokenStart, tokenEnd };
+    }
+    return pick ? filename.slice(0, pick.tokenStart) + " " + filename.slice(pick.tokenEnd) : filename;
+}
+
+function _v10ApplyReleaseQualifier(adv, filename) {
+    let det = null;
+    try {
+        det = _v10DetectReleaseQualifier(adv, filename);
+    } catch (err) {
+        // heuristic layer: never let it break parsing, but do not hide that it failed
+        console.warn(`[nameParser] release-qualifier detection skipped for "${filename}": ${err.message}`);
+        return adv;
+    }
+    if (!det) return adv;
+
+    adv.title = det.title;
+    adv.releaseQualifier = det.qualifier;
+
+    // Title candidates were built from the OLD title ("… Encore"): rebuild, and drop any candidate that still ends in the
+    // qualifier — the qualifier must never reach a TMDB search query.
+    try {
+        const rebuilt = buildTitleCandidates(adv, _v10WithoutQualifier(filename, adv.year)).filter((c) => {
+            const key = _candKey(c.title);
+            if (_V10_KEY_TAIL_RE.test(key)) return false;
+            // stripping the qualifier must not glue the re-release year onto the title ("<Title> 2026")
+            return !(key.endsWith(` ${adv.year}`) && !String(adv.title).endsWith(String(adv.year)));
+        });
+        Object.defineProperty(adv, "titleCandidates", { value: rebuilt, enumerable: false, writable: true, configurable: true });
+        if (Array.isArray(adv.parseNotes)) adv.parseNotes.push("release-qualifier");
+    } catch (err) {
+        console.warn(`[nameParser] title candidates not rebuilt for "${filename}": ${err.message}`);
+    }
+    return adv;
+}
+
+function parseFilenameWithQualifier(filename, filePath) {
+    const adv = parseFilenameWithContext(filename, filePath);
+    if (!adv || typeof filename !== "string") return adv;
+    return _v10ApplyReleaseQualifier(adv, filename);
+}
+
+// Re-export. Same signature as before; `releaseQualifier` is an optional extra field.
+module.exports = {
+    parseFilename: parseFilenameWithQualifier,
     parseFilenameOriginal: parseFilename,
 };

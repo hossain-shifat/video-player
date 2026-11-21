@@ -1,167 +1,45 @@
 // web/src/Dashboard/Pages/DashMedia.jsx
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
-import {
-    Film,
-    Tv2,
-    Swords,
-    RefreshCw,
-    AlertTriangle,
-    FileVideo,
-    HardDrive,
-    Search,
-    Info,
-    FolderOpen,
-    Image as ImageIcon,
-    SquarePen,
-    Trash2,
-    X,
-    CheckCircle2,
-    ChevronLeft,
-    ChevronRight,
-    Database,
-    Shield,
-    ShieldOff,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, SquarePen, Trash2, Ellipsis, SquareCheck, RefreshCw, Shield, ShieldOff, Download, FolderOpen, Search, X, Copy, Database } from "lucide-react";
 import { api } from "../Shared";
 import { MediaDeleteModal, MediaDetailsModal, MediaEditModal } from "../Components/DashModal";
+import { useOverviewAnalytics } from "../Hooks/useOverviewAnalytics";
+import { useDashboardStreams } from "../Hooks/useDashboard";
+import SubtitlesTable from "../Components/MediaDash/SubtitlesTable";
+import FormatsTable from "../Components/MediaDash/FormatsTable";
+import {
+    Panel,
+    SectionLabel,
+    Note,
+    Empty,
+    Skel,
+    Dot,
+    Badge,
+    Toggle,
+    Seg,
+    SearchBox,
+    SelectBox,
+    ToolBtn,
+    IconBtn,
+    ActionBtn,
+    PosterTile,
+    Pagination,
+    PortalMenu,
+    HourBars,
+    ShareCompare,
+    RankedBars,
+    QualityMix,
+    QualityLegend,
+    ShareLegend,
+    quietWindow,
+    QUALITY_TONE,
+} from "../Components/MediaDash/MediaDashParts";
+import { buildLibrary, buildPosterIndex, downloadCsv, fmtBytes, fmtDay, fmtYear, pad2, pct, num, runBatch, sl, TYPE_META } from "../Components/MediaDash/mediaDashUtils";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmtBytes(b) {
-    if (!b || b === 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(b) / Math.log(1024));
-    return `${(b / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-}
-
-function fmtDate(iso) {
-    if (!iso) return "—";
-    return new Date(iso).toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-    });
-}
-
-function fmtDuration(seconds) {
-    if (!seconds) return "—";
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-}
-
-// ffprobe reports frame rate as a fraction string like "24000/1001" or "24/1" —
-// parse it safely (no eval) into a rounded whole number for display.
-function extractTags(filename) {
-    if (!filename) return { res: null, vcodec: null, acodec: null };
-    const str = filename.toLowerCase();
-
-    let res = null;
-    if (str.match(/\b(2160p|4k|uhd)\b/)) res = "4K";
-    else if (str.match(/\b(1080p|fhd)\b/)) res = "1080p";
-    else if (str.match(/\b(720p|hd)\b/)) res = "720p";
-    else if (str.match(/\b(480p|sd)\b/)) res = "480p";
-
-    let vcodec = null;
-    if (str.match(/\b(x265|h265|hevc)\b/)) vcodec = "H265";
-    else if (str.match(/\b(x264|h264|avc)\b/)) vcodec = "H264";
-    else if (str.match(/\b(av1)\b/)) vcodec = "AV1";
-
-    let acodec = null;
-    if (str.match(/\b(aac)\b/)) acodec = "AAC";
-    else if (str.match(/\b(dts-hd|dts)\b/)) acodec = "DTS";
-    else if (str.match(/\b(eac3|ac3|dd5\.1|ddp5\.1)\b/)) acodec = "AC3";
-    else if (str.match(/\b(flac)\b/)) acodec = "FLAC";
-
-    return { res, vcodec, acodec };
-}
-
-// ─── Design tokens ────────────────────────────────────────────────────────────
-
-const TYPE_CONFIG = {
-    movie: {
-        color: "oklch(var(--p))",
-        bgClass: "bg-primary/12 text-primary",
-        borderClass: "border-primary/20",
-        Icon: Film,
-    },
-    series: {
-        color: "oklch(var(--in))",
-        bgClass: "bg-info/12 text-info",
-        borderClass: "border-info/20",
-        Icon: Tv2,
-    },
-    anime: {
-        color: "oklch(var(--a))",
-        bgClass: "bg-accent/12 text-accent",
-        borderClass: "border-accent/20",
-        Icon: Swords,
-    },
-};
-
-// ─── Shared UI ────────────────────────────────────────────────────────────────
-
-function MetricCard({ title, value, icon: Icon, accent, sub, isLoading }) {
-    return (
-        <div className="bg-base-300 rounded-xl border border-white/6 px-4 py-4 flex items-center gap-3.5 hover:border-white/10 transition-colors">
-            <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: `color-mix(in oklch, ${accent} 15%, transparent)` }}>
-                <Icon size={18} strokeWidth={1.8} style={{ color: accent }} />
-            </div>
-            <div className="min-w-0">
-                {isLoading ? <div className="h-6 w-14 rounded animate-pulse bg-white/5 mb-1" /> : <p className="text-2xl font-black text-white tabular-nums leading-none">{value}</p>}
-                <p className="text-xs text-white/70 mt-0.5 font-medium">{title}</p>
-                {sub && <p className="text-[10px] text-white/30 mt-0.5">{sub}</p>}
-            </div>
-        </div>
-    );
-}
-
-function Badge({ label, variant = "default", size = "sm" }) {
-    const cls =
-        {
-            movie: "bg-primary/15 text-primary border border-primary/20",
-            series: "bg-info/15 text-info border border-info/20",
-            anime: "bg-accent/15 text-accent border border-accent/20",
-            default: "bg-white/8 text-white/70 border border-white/12",
-        }[variant] || "bg-white/8 text-white/70 border border-white/12";
-
-    const sizeClass = size === "xs" ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]";
-
-    return <span className={`inline-flex items-center rounded-md font-bold uppercase tracking-wider ${sizeClass} ${cls}`}>{label}</span>;
-}
-
-function QualityChip({ label }) {
-    const color =
-        label === "4K"
-            ? "bg-warning/15 text-warning border-warning/25"
-            : label === "1080p"
-              ? "bg-success/15 text-success border-success/25"
-              : label === "720p"
-                ? "bg-info/15 text-info border-info/25"
-                : "bg-white/8 text-white/60 border-white/12";
-    return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-bold tracking-wider ${color}`}>{label}</span>;
-}
-
-// Color-codes by codec family so video/audio codecs are visually distinct at
-// a glance, instead of every codec looking identical in flat gray.
-function CodecChip({ label }) {
-    const l = (label || "").toUpperCase();
-    const cls = /HEVC|H\.?265|X265/.test(l)
-        ? "bg-accent/15 text-accent border-accent/25"
-        : /H\.?264|AVC|X264/.test(l)
-          ? "bg-info/15 text-info border-info/25"
-          : /AV1/.test(l)
-            ? "bg-success/15 text-success border-success/25"
-            : /VP9|VP8/.test(l)
-              ? "bg-warning/15 text-warning border-warning/25"
-              : /AAC|AC3|EAC3|DTS|TRUEHD|FLAC|MP3|OPUS/.test(l)
-                ? "bg-secondary/15 text-secondary border-secondary/25"
-                : "bg-white/8 text-white/70 border-white/12";
-    return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-mono font-bold ${cls}`}>{label}</span>;
-}
+const PAGE_SIZE = 8;
+const WEEK = 7 * 86400000;
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 
@@ -170,7 +48,7 @@ function Toast({ toast }) {
     return createPortal(
         <div
             className={`fixed bottom-5 right-5 z-99999 flex items-center gap-2 px-4 py-3
-            rounded-lg shadow-2xl text-xs font-bold max-w-xs
+            rounded-lg shadow-2xl text-sm font-semibold max-w-sm
             ${toast.type === "error" ? "bg-error text-error-content" : "bg-success text-success-content"}`}>
             {toast.type === "error" ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
             <span>{toast.msg}</span>
@@ -179,142 +57,40 @@ function Toast({ toast }) {
     );
 }
 
-// ─── Table skeleton row ───────────────────────────────────────────────────────
+// ─── Stat strip ───────────────────────────────────────────────────────────────
 
-function SkeletonRow() {
+function Stat({ label, value, sub, dot, subTone, onClick }) {
+    const Tag = onClick ? "button" : "div";
     return (
-        <tr className="border-b border-white/4">
-            <td className="pl-4 pr-2 py-3.5">
-                <div className="h-2 w-4 rounded bg-white/5 animate-pulse" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-11 rounded-lg bg-white/5 animate-pulse shrink-0" />
-                    <div className="space-y-1.5">
-                        <div className="h-3 w-32 rounded bg-white/5 animate-pulse" />
-                        <div className="h-2 w-20 rounded bg-white/4 animate-pulse" />
-                    </div>
-                </div>
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="h-5 w-14 rounded-md bg-white/5 animate-pulse" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="h-5 w-12 rounded-md bg-white/5 animate-pulse mx-auto" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="flex gap-1 justify-center">
-                    <div className="h-5 w-10 rounded-md bg-white/5 animate-pulse" />
-                    <div className="h-5 w-8 rounded-md bg-white/5 animate-pulse" />
-                </div>
-            </td>
-            <td className="px-3 py-3.5 text-right">
-                <div className="h-3 w-12 rounded bg-white/5 animate-pulse ml-auto" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="h-3 w-16 rounded bg-white/5 animate-pulse" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="h-3 w-20 rounded bg-white/5 animate-pulse" />
-            </td>
-            <td className="px-3 py-3.5">
-                <div className="h-5 w-16 rounded-md bg-white/5 animate-pulse mx-auto" />
-            </td>
-            <td className="pl-2 pr-4 py-3.5">
-                <div className="flex gap-1 justify-end">
-                    {[1, 2, 3].map((i) => (
-                        <div key={i} className="w-8 h-8 rounded-md bg-white/5 animate-pulse" />
-                    ))}
-                </div>
-            </td>
-        </tr>
+        <Tag type={onClick ? "button" : undefined} onClick={onClick} className={`min-w-0 bg-base-200 px-4 py-3 text-left ${onClick ? "cursor-pointer transition-colors hover:bg-base-300" : ""}`}>
+            <p className="text-sm text-base-content/80">{label}</p>
+            <p className="mt-0.5 flex items-center gap-2 text-xl font-semibold leading-tight tabular-nums text-base-content">
+                {dot && <Dot />}
+                {value}
+            </p>
+            {sub && <p className={`truncate text-[13px] ${subTone === "primary" ? "font-medium text-primary" : "text-base-content/70"}`}>{sub}</p>}
+        </Tag>
     );
 }
 
-// ─── Pagination ───────────────────────────────────────────────────────────────
-
-function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChange }) {
-    const start = (currentPage - 1) * pageSize + 1;
-    const end = Math.min(currentPage * pageSize, totalItems);
-
-    const pages = useMemo(() => {
-        const delta = 1;
-        const range = [];
-        for (let i = Math.max(2, currentPage - delta); i <= Math.min(totalPages - 1, currentPage + delta); i++) {
-            range.push(i);
-        }
-        const result = [1];
-        if (range[0] > 2) result.push("...");
-        result.push(...range);
-        if (range[range.length - 1] < totalPages - 1) result.push("...");
-        if (totalPages > 1) result.push(totalPages);
-        return result;
-    }, [currentPage, totalPages]);
-
-    if (totalItems === 0) return null;
-
+function StatSkeleton() {
     return (
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-            <p className="text-xs text-white/40 tabular-nums">
-                Showing{" "}
-                <span className="text-white/70 font-semibold">
-                    {start.toLocaleString()}–{end.toLocaleString()}
-                </span>{" "}
-                of <span className="text-white/70 font-semibold">{totalItems.toLocaleString()}</span> items
-            </p>
-            <div className="flex items-center gap-1">
-                <button
-                    onClick={() => onPageChange(1)}
-                    disabled={currentPage <= 1}
-                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
-                    <ChevronLeft size={12} strokeWidth={2.5} className="inline" />
-                    <ChevronLeft size={12} strokeWidth={2.5} className="-ml-2" />
-                </button>
-                <button
-                    onClick={() => onPageChange(currentPage - 1)}
-                    disabled={currentPage <= 1}
-                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
-                    <ChevronLeft size={14} />
-                </button>
-
-                {pages.map((p, i) =>
-                    p === "..." ? (
-                        <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-white/30 text-xs">
-                            …
-                        </span>
-                    ) : (
-                        <button
-                            key={p}
-                            onClick={() => onPageChange(p)}
-                            className={`w-8 h-8 rounded-md text-xs font-bold transition-colors border-none cursor-pointer
-                                ${p === currentPage ? "bg-primary text-primary-content shadow-sm" : "text-white/60 hover:bg-white/8 hover:text-white"}`}>
-                            {p}
-                        </button>
-                    ),
-                )}
-
-                <button
-                    onClick={() => onPageChange(currentPage + 1)}
-                    disabled={currentPage >= totalPages}
-                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
-                    <ChevronRight size={14} />
-                </button>
-                <button
-                    onClick={() => onPageChange(totalPages)}
-                    disabled={currentPage >= totalPages}
-                    className="w-8 h-8 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer">
-                    <ChevronRight size={12} strokeWidth={2.5} className="inline" />
-                    <ChevronRight size={12} strokeWidth={2.5} className="-ml-2" />
-                </button>
-            </div>
+        <div className="grid grid-cols-2 gap-px bg-base-300 @2xl:grid-cols-3 @5xl:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="bg-base-200 px-4 py-3">
+                    <Skel className="mb-2 h-3 w-16" />
+                    <Skel className="h-5 w-12" />
+                </div>
+            ))}
         </div>
     );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function DashMedia() {
+export default function DashMedia({ onNavigate } = {}) {
     const queryClient = useQueryClient();
+    const tableRef = useRef(null);
 
     const [toast, setToast] = useState(null);
     const showToast = (msg, type = "success") => {
@@ -333,6 +109,7 @@ export default function DashMedia() {
         error: queryError,
         refetch,
         isFetching,
+        dataUpdatedAt,
     } = useQuery({
         queryKey: ["admin", "media"],
         queryFn: () => api.get("/api/media"),
@@ -350,9 +127,6 @@ export default function DashMedia() {
     const mediaInfoMap = mediaInfoData?.mediaInfo || {};
 
     // Real permission state — bulk-fetched once, same pattern as mediaInfo.
-    // Previously there was NO route exposing permissionsStore.js at all, so
-    // the toggle only ever patched React Query's in-memory cache and reverted
-    // on every refresh. This is the actual persisted state now.
     const { data: permissionsData } = useQuery({
         queryKey: ["admin", "permissions"],
         queryFn: () => api.get("/api/permissions"),
@@ -360,10 +134,7 @@ export default function DashMedia() {
     });
     const permissionsMap = permissionsData?.permissions || {};
 
-    // Real per-file added dates — bulk-fetched, keyed by real file id, works
-    // for every individual episode (grouper.js strips addedAt off episodes
-    // before they ever reach this component, so this bypasses that entirely
-    // by reading straight from the flat pre-grouping scan).
+    // Real per-file added dates — bulk-fetched, keyed by real file id, works for every individual episode.
     const { data: addedDatesData } = useQuery({
         queryKey: ["admin", "added-dates"],
         queryFn: () => api.get("/api/mediainfo/added-dates"),
@@ -371,16 +142,17 @@ export default function DashMedia() {
     });
     const addedDatesMap = addedDatesData?.dates || {};
 
+    // Watch-time analytics (same source the Overview page uses) and live streams.
+    const analyticsQuery = useOverviewAnalytics();
+    const an = analyticsQuery.data ?? null;
+    const streamsQuery = useDashboardStreams();
+
     const updateMutation = useMutation({
-        // REAL persist: permission goes to the new /api/permissions endpoint
-        // (permissionsStore.js on the backend — this is what was missing
-        // entirely before, hence the toggle never actually sticking).
+        // REAL persist: permission goes to the /api/permissions endpoint (permissionsStore.js on the backend).
         //
-        // TMDB refresh is best-effort and ONLY attempted for movies — series/
-        // anime use a synthetic group id (e.g. "series:fatal seduction") that
-        // is never a real scanned-file id, so /api/metadata/refresh/:id always
-        // 404s for them. Skipping avoids that error entirely instead of just
-        // swallowing it.
+        // TMDB refresh is best-effort and ONLY attempted for movies — series/anime use a synthetic group id
+        // (e.g. "series:fatal seduction") that is never a real scanned-file id, so /api/metadata/refresh/:id always
+        // 404s for them. Skipping avoids that error entirely instead of just swallowing it.
         mutationFn: async (data) => {
             const { id, payload } = data;
 
@@ -397,8 +169,7 @@ export default function DashMedia() {
             return data;
         },
         onMutate: async (data) => {
-            // Cosmetic, session-level: title/year edits patch the media list
-            // cache immediately so the table updates without a refetch.
+            // Cosmetic, session-level: title/year edits patch the media list cache immediately so the table updates without a refetch.
             await queryClient.cancelQueries({ queryKey: ["admin", "media"] });
             await queryClient.cancelQueries({ queryKey: ["admin", "permissions"] });
 
@@ -450,6 +221,10 @@ export default function DashMedia() {
         },
     });
 
+    // The server has no DELETE /api/media/:id route yet, so Delete is hidden (row menu) / disabled (bulk bar).
+    // Flip to true together with a real server-side delete.
+    const DELETE_SUPPORTED = false;
+
     const deleteMutation = useMutation({
         mutationFn: (id) => api.delete(`/api/media/${id}`),
         onSuccess: () => {
@@ -457,220 +232,258 @@ export default function DashMedia() {
             showToast("Media deleted");
             setDeleteMedia(null);
         },
-        onError: (err, id) => {
-            queryClient.setQueryData(["admin", "media"], (old) => {
-                if (!old) return old;
-                const copy = JSON.parse(JSON.stringify(old));
-                ["movies", "series", "anime"].forEach((key) => {
-                    if (copy[key]?.items) {
-                        copy[key].items = copy[key].items.filter((i) => i.id !== id);
-                        copy[key].total = copy[key].items.length;
-                    }
-                });
-                return copy;
-            });
-            showToast("Media deleted (optimistic)");
+        onError: (err) => {
+            // a failed delete must NOT remove the title from the cache or claim success — it is still there
+            showToast(err?.message || "Could not delete this title", "error");
             setDeleteMedia(null);
         },
     });
 
+    // Access toggle in the table (permission only — the edit modal still does title/year).
+    const permissionMutation = useMutation({
+        mutationKey: ["admin", "permission-write"],
+        mutationFn: ({ id, allow }) => api.post(`/api/permissions/${id}`, { permission: allow }),
+        onMutate: async ({ id, allow }) => {
+            await queryClient.cancelQueries({ queryKey: ["admin", "permissions"] });
+            const prevPerms = queryClient.getQueryData(["admin", "permissions"])?.permissions || {};
+            const had = Object.prototype.hasOwnProperty.call(prevPerms, id);
+            queryClient.setQueryData(["admin", "permissions"], (old) => ({ ...old, permissions: { ...(old?.permissions || {}), [id]: allow } }));
+            return { id, allow, had, prev: prevPerms[id] }; // only THIS id's old value — never a whole-cache snapshot
+        },
+        onError: (err, _v, ctx) => {
+            if (ctx) {
+                queryClient.setQueryData(["admin", "permissions"], (old) => {
+                    const perms = { ...(old?.permissions || {}) };
+                    if (perms[ctx.id] !== ctx.allow) return old; // a newer write already changed this id — leave it alone
+                    if (ctx.had) perms[ctx.id] = ctx.prev;
+                    else delete perms[ctx.id];
+                    return { ...old, permissions: perms };
+                });
+            }
+            showToast(err?.message || "Could not change access", "error");
+        },
+        onSettled: () => {
+            // when the LAST pending change settles, reconcile with what the server really saved
+            if (queryClient.isMutating({ mutationKey: ["admin", "permission-write"] }) <= 1) queryClient.invalidateQueries({ queryKey: ["admin", "permissions"] });
+        },
+    });
+
+    // ─── Derived data ─────────────────────────────────────────────────────────
+
+    const lib = useMemo(() => buildLibrary({ mediaData, mediaInfoMap, permissionsMap, addedDatesMap }), [mediaData, mediaInfoData, permissionsData, addedDatesData]); // eslint-disable-line react-hooks/exhaustive-deps
+    const { allMedia, metrics, stats, formats, formatSource, quality, causes, typeShare, libraries } = lib;
+
+    const posterIndex = useMemo(() => buildPosterIndex(mediaData), [mediaData]);
+    const addedThisWeek = useMemo(() => allMedia.filter((m) => m._added && Date.now() - m._added.getTime() < WEEK).length, [allMedia]);
+
+    // streams: shape is defensive on purpose (array, or { streams | items | active })
+    const streamList = useMemo(() => {
+        const d = streamsQuery.data;
+        return Array.isArray(d) ? d : (d?.streams ?? d?.items ?? d?.active ?? []);
+    }, [streamsQuery.data]);
+    const transcoding = streamList.filter((s) => s?.transcode === true || /transcode|hls/i.test(String(s?.mode ?? s?.type ?? s?.playMethod ?? ""))).length;
+
+    const never = an?.neverWatched ?? null;
+    const reclaimBytes = stats.duplicateBytes + (never?.available ? num(never.bytes) : 0);
+
+    // ─── Table state ──────────────────────────────────────────────────────────
+
     const [search, setSearch] = useState("");
     const [activeTab, setActiveTab] = useState("all");
+    const [library, setLibrary] = useState("all");
+    const [containers, setContainers] = useState(null); // array of container labels
+    const [playback, setPlayback] = useState(null); // "direct" | "remux" | "transcode"
+    const [qualityFilter, setQualityFilter] = useState(null); // "below1080"
+    const [issuesOnly, setIssuesOnly] = useState(false);
     const [page, setPage] = useState(1);
-    const pageSize = 5;
+    const [selectMode, setSelectMode] = useState(false);
+    const [selected, setSelected] = useState(() => new Set());
+    const [menu, setMenu] = useState(null);
+    const [bulkConfirm, setBulkConfirm] = useState(false);
+    const [busy, setBusy] = useState(false);
 
-    const { allMedia, metrics } = useMemo(() => {
-        if (!mediaData) return { allMedia: [], metrics: { total: 0, movies: 0, series: 0, anime: 0, size: 0 } };
+    const goTable = () => requestAnimationFrame(() => tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    const resetFilters = () => {
+        setContainers(null);
+        setPlayback(null);
+        setQualityFilter(null);
+        setIssuesOnly(false);
+        setLibrary("all");
+        setPage(1);
+    };
+    const showFiltered = (patch) => {
+        resetFilters();
+        setSearch("");
+        setActiveTab(patch.tab ?? "all");
+        if (patch.containers) setContainers(patch.containers);
+        if (patch.playback) setPlayback(patch.playback);
+        if (patch.quality) setQualityFilter(patch.quality);
+        if (patch.issues) setIssuesOnly(true);
+        goTable();
+    };
 
-        const items = [];
-        const libs = new Map();
-        let totalSize = 0;
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        return allMedia
+            .filter((m) => {
+                if (activeTab !== "all" && m._type !== activeTab) return false;
+                if (library !== "all" && String(m._libraryId) !== library) return false;
+                if (containers && !(m._containers || [m._container]).some((c) => containers.includes(c))) return false; // a series can use several formats
+                if (playback && m._playback.status !== playback) return false;
+                if (qualityFilter === "below1080" && !(m.res === "720p" || m.res === "480p")) return false;
+                if (issuesOnly && !(m._flags.noMeta || m._flags.noPoster || m._flags.dup)) return false;
+                if (!q) return true;
+                return (
+                    m._title.toLowerCase().includes(q) ||
+                    m._originalTitle.toLowerCase().includes(q) ||
+                    m._filename.toLowerCase().includes(q) ||
+                    m._library.toLowerCase().includes(q) ||
+                    m._typeLabel.toLowerCase().includes(q)
+                );
+            })
+            .sort((a, b) => (b._added?.getTime() || 0) - (a._added?.getTime() || 0));
+    }, [allMedia, search, activeTab, library, containers, playback, qualityFilter, issuesOnly]);
 
-        (mediaData.folders || []).forEach((f) => libs.set(f.id, f.label || f.path));
+    const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    const cur = Math.min(page, pages);
+    const slice = filtered.slice((cur - 1) * PAGE_SIZE, cur * PAGE_SIZE);
+    const selMedia = allMedia.filter((m) => selected.has(m._id));
 
-        const processItem = (item, type, Icon, label) => {
-            const title = item.metadata?.name || item.metadata?.title || item.name || item.title || "Unknown";
-            const originalTitle = item.metadata?.original_title || item.metadata?.original_name || "";
-            const year = item.metadata?.year || item.year || null;
-            const size = item.sizeBytes || 0;
-            const duration = item.metadata?.duration || item.duration || null;
+    const toggleSel = (id) =>
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    const exitSelect = () => {
+        setSelectMode(false);
+        setSelected(new Set());
+        setBulkConfirm(false);
+    };
 
-            totalSize += size;
+    const invalidateAll = () => queryClient.invalidateQueries({ queryKey: ["admin"] });
 
-            // Movies carry the real filename on item.name. Series/anime are group
-            // objects — the filename with quality/codec tags lives on the first
-            // episode of the first season instead, so dig there as a fallback.
-            let sourceFilename = item.name || item.path || "";
-            if (!sourceFilename && item.seasons) {
-                const firstSeason = Object.values(item.seasons)[0];
-                const firstEpisode = firstSeason?.episodes?.[0];
-                sourceFilename = firstEpisode?.name || firstEpisode?.path || "";
-            }
-            const tags = extractTags(sourceFilename || item.title || "");
-
-            // ── Real ffprobe data override ────────────────────────────────────
-            // Movies: item.id IS the file id, matches mediaInfoMap directly.
-            //
-            // Series/anime: mediaInfoStore is keyed per EPISODE (each episode is
-            // its own scanned file), so:
-            //   - Quality/codec: scan every episode across every season and use
-            //     the FIRST one that already has data — not just episode 1, since
-            //     the background probe may not have reached that specific episode
-            //     yet even if others further along are already done.
-            //   - Size: SUM every episode's real probed bytes — a series' total
-            //     size is the sum of all its episode files, never just one.
-            //   - Added date: use the MOST RECENTLY added episode's real
-            //     filesystem date (same convention Plex/Jellyfin use for a
-            //     show's "date added" — whenever you most recently added new
-            //     episodes to it), sourced from addedDatesMap which is keyed
-            //     by real episode file id (works regardless of what
-            //     grouper.js trims off the episode objects themselves).
-            //
-            // mediaInfoStore now returns { container, video, audioTracks,
-            // subtitleTracks } per file — cover-art "video" streams (embedded
-            // poster images) are already excluded server-side when video is
-            // picked, no client-side filtering needed anymore.
-            let repInfo = null;
-            let seriesTotalSize = 0;
-            let seriesLatestAdded = 0;
-            if (type === "movie") {
-                repInfo = mediaInfoMap[item.id] || null;
-            } else if (item.seasons) {
-                for (const season of Object.values(item.seasons)) {
-                    for (const ep of season.episodes || []) {
-                        const epInfo = mediaInfoMap[ep.id];
-                        if (epInfo) {
-                            seriesTotalSize += epInfo.container?.sizeBytes || 0;
-                            if (!repInfo) repInfo = epInfo; // first one found = representative for quality/codec
-                        }
-                        const epAdded = addedDatesMap[ep.id];
-                        if (epAdded) {
-                            const t = new Date(epAdded).getTime();
-                            if (t > seriesLatestAdded) seriesLatestAdded = t;
-                        }
-                    }
-                }
-            }
-
-            const video = repInfo?.video || null;
-            const primaryAudio = repInfo?.audioTracks?.[0] || null;
-
-            const realRes = video?.height ? (video.height >= 2000 ? "4K" : video.height >= 1000 ? "1080p" : video.height >= 700 ? "720p" : "480p") : null;
-
-            // Real data wins when present; filename-guess (tags) is the fallback
-            // for files ffprobe hasn't reached yet (scan still running in background).
-            const finalTags = {
-                res: realRes || tags.res,
-                vcodec: video?.codec || tags.vcodec, // already uppercase from mediaInfoStore
-                acodec: primaryAudio?.codec || tags.acodec,
-            };
-
-            // Movies: single probed file size. Series/anime: summed across episodes.
-            const realSize = type === "movie" ? repInfo?.container?.sizeBytes : seriesTotalSize;
-
-            // Extra technical detail for the Details modal — captured once here
-            // so the modal doesn't need a second probe fetch for series/anime
-            // (which can't re-fetch per-file anyway, see DetailsModal notes).
-            const resolution = video?.resolution || null;
-            const fps = video?.frameRate || null; // already a formatted string, e.g. "23.976 fps"
-            const bitrate = repInfo?.container?.bitrateBps || null;
-            const audioChannels = primaryAudio?.channels || null;
-            const audioLang = primaryAudio?.language || null;
-
-            // Movies: use the real filesystem date attached by scanner.js.
-            // Series/anime: use the most recently added episode's real date
-            // (seriesLatestAdded, computed above from addedDatesMap). Only
-            // fall back to metadata.date (TMDB-fetch-time, not a real file
-            // date) if neither real source is available yet. No 0 fallback —
-            // an unavailable date must stay nullish, not become new Date(0)
-            // (epoch / Jan 1 1970), which fmtDate would render as a real
-            // (wrong) date instead of "—".
-            const added = type === "movie" ? item.addedAt || item.metadata?.date || null : seriesLatestAdded || item.metadata?.date || null;
-
-            let poster = item.metadata?.poster;
-            if (poster && poster.startsWith("/")) poster = `https://image.tmdb.org/t/p/w200${poster}`;
-
-            items.push({
-                ...item,
-                _id: item.id,
-                _type: type,
-                _typeLabel: label,
-                _icon: Icon,
-                _title: title,
-                _originalTitle: originalTitle,
-                _year: year,
-                _size: realSize || size, // real probed bytes when available, else scanner bytes (movies only have scanner fallback — series never had one)
-                _added: added ? new Date(added) : null,
-                _duration: repInfo?.container?.durationSeconds || duration,
-                _library: item.folderLabel || libs.get(item.folderId) || "Unknown",
-                _libraryId: item.folderId,
-                _poster: poster,
-                _filename: sourceFilename || item.name || item.path || "",
-                _path: item.path || "",
-                _permission: permissionsMap[item.id] !== false, // real persisted value — defaults true (allowed) same as backend
-                _resolution: resolution,
-                _fps: fps,
-                _bitrate: bitrate,
-                _audioChannels: audioChannels,
-                _audioLang: audioLang,
-                ...finalTags,
-            });
-        };
-
-        (mediaData.movies?.items || []).forEach((m) => processItem(m, "movie", Film, "Movie"));
-        (mediaData.series?.items || []).forEach((s) => processItem(s, "series", Tv2, "Series"));
-        (mediaData.anime?.items || []).forEach((a) => processItem(a, "anime", Swords, "Anime"));
-
-        return {
-            allMedia: items,
-            metrics: {
-                total: items.length,
-                movies: mediaData.movies?.total || 0,
-                series: mediaData.series?.total || 0,
-                anime: mediaData.anime?.total || 0,
-                size: totalSize,
-            },
-        };
-    }, [mediaData, mediaInfoMap, permissionsMap, addedDatesMap]);
-
-    const filteredMedia = useMemo(() => {
-        let filtered = allMedia;
-        if (search) {
-            const q = search.toLowerCase();
-            filtered = filtered.filter(
-                (m) => m._title.toLowerCase().includes(q) || m._originalTitle.toLowerCase().includes(q) || m._filename.toLowerCase().includes(q) || (m._year && m._year.toString().includes(q)),
-            );
+    const bulk = async (kind) => {
+        const list = selMedia;
+        if (!list.length) return;
+        // The server has no DELETE /api/media/:id route yet — every request would 404 and report "failed".
+        // Refuse here instead of firing N doomed calls. Re-enable together with a real server-side delete.
+        if (kind === "delete") {
+            setBulkConfirm(false);
+            showToast("Deleting titles is not supported by the server yet", "error");
+            return;
         }
-        if (activeTab !== "all") filtered = filtered.filter((m) => m._type === activeTab);
-        return filtered;
-    }, [allMedia, search, activeTab]);
+        setBusy(true);
+        let res;
+        if (kind === "refresh") {
+            const movies = list.filter((m) => m._type === "movie");
+            res = await runBatch(movies, (m) => api.post(`/api/metadata/refresh/${m._id}`));
+        } else if (kind === "restrict" || kind === "allow") {
+            res = await runBatch(list, (m) => api.post(`/api/permissions/${m._id}`, { permission: kind === "allow" }));
+        } else {
+            res = await runBatch(list, (m) => api.delete(`/api/media/${m._id}`));
+        }
+        setBusy(false);
+        await invalidateAll();
+        showToast(res.failed ? `${res.ok} done, ${res.failed} failed` : `${res.ok} updated`, res.failed ? "error" : "success");
+        exitSelect();
+    };
 
-    const sortedMedia = useMemo(() => {
-        return [...filteredMedia].sort((a, b) => b._added - a._added);
-    }, [filteredMedia]);
+    const exportCsv = () =>
+        downloadCsv(
+            "media-library.csv",
+            ["Title", "Type", "Year", "Quality", "Video codec", "Audio codec", "Container", "Playback", "Size (bytes)", "Library", "Added", "Access"],
+            filtered.map((m) => [m._title, m._typeLabel, m._year || "", m.res || "", m.vcodec || "", m.acodec || "", m._container, m._playback.status, m._size, m._library, m._added ? m._added.toISOString() : "", m._permission ? "allowed" : "restricted"]),
+        );
 
-    const totalPages = Math.ceil(sortedMedia.length / pageSize) || 1;
-    const currentPage = Math.min(page, totalPages);
-    const paginatedMedia = useMemo(() => {
-        const start = (currentPage - 1) * pageSize;
-        return sortedMedia.slice(start, start + pageSize);
-    }, [sortedMedia, currentPage, pageSize]);
+    const rowMenu = (m) => [
+        { icon: Info, label: "Details", onClick: () => setDetailsMedia(m) },
+        { icon: SquarePen, label: "Edit", onClick: () => setEditMedia(m) },
+        {
+            icon: RefreshCw,
+            label: "Refresh metadata",
+            hint: m._type === "movie" ? "" : "Movies",
+            disabled: m._type !== "movie",
+            onClick: () =>
+                api
+                    .post(`/api/metadata/refresh/${m._id}`)
+                    .then(() => {
+                        showToast("Metadata refreshed");
+                        invalidateAll();
+                    })
+                    .catch((e) => showToast(e?.message || "Refresh failed", "error")),
+        },
+        m._permission ? { icon: ShieldOff, label: "Restrict access", onClick: () => permissionMutation.mutate({ id: m._id, allow: false }) } : { icon: Shield, label: "Allow access", onClick: () => permissionMutation.mutate({ id: m._id, allow: true }) },
+        ...(m._flags.dup ? [{ icon: Search, label: "Show duplicates", onClick: () => {
+                    showFiltered({ tab: m._type });
+                    setSearch(m._title);
+                },
+            }] : []),
+        {
+            icon: Copy,
+            label: "Copy file path",
+            onClick: () => navigator.clipboard?.writeText(m._path || m._filename).then(() => showToast("Path copied"), () => showToast("Clipboard is not available here", "error")),
+        },
+        ...(DELETE_SUPPORTED ? [{ divider: true }] : []),
+        ...(DELETE_SUPPORTED ? [{ icon: Trash2, label: "Delete", tone: "error", onClick: () => setDeleteMedia(m) }] : []),
+    ];
 
-    // ─── Error state ──────────────────────────────────────────────────────────
+    // ─── Chart data ───────────────────────────────────────────────────────────
+
+    const hours = Array.isArray(an?.watch?.hoursOfDay) && an.watch.hoursOfDay.length === 24 ? an.watch.hoursOfDay : null;
+    const hasHours = hours && Math.max(...hours) > 0;
+    const quiet = hasHours ? quietWindow(hours) : null;
+
+    const mix = an?.watch?.mix ?? null;
+    const mixTotal = mix ? num(mix.movie) + num(mix.series) + num(mix.anime) : 0;
+    const shareRows = typeShare.map((t) => ({
+        key: t.type,
+        label: TYPE_META[t.type].plural,
+        storage: t.share,
+        watch: mixTotal > 0 ? pct(num(mix[t.type]), mixTotal) : 0,
+        type: t.type,
+    }));
+    const biggestGap = mixTotal > 0 ? shareRows.reduce((a, r) => (r.storage - r.watch > (a ? a.storage - a.watch : 9) ? r : a), null) : null;
+
+    const causeTotal = causes.reduce((a, c) => a + c.count, 0);
+    const qualityRows = quality.map((q) => ({ ...q, label: TYPE_META[q.type].plural }));
+    const worstQuality = qualityRows.filter((q) => q.known > 0).sort((a, b) => b.below / b.known - a.below / a.known)[0];
+
+    // ─── Loading / error ──────────────────────────────────────────────────────
+
+    if (isLoading) {
+        return (
+            <div className="space-y-4">
+                <Skel className="h-10 w-48" />
+                <StatSkeleton />
+                <Skel className="h-96" />
+            </div>
+        );
+    }
 
     if (isError) {
         return (
-            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-error/10 text-error text-xs font-semibold border border-error/20">
-                <AlertTriangle size={13} />
+            <div className="flex items-center gap-2 rounded-lg border border-error bg-base-200 px-4 py-3 text-sm text-error">
+                <AlertTriangle size={14} />
                 <span className="flex-1">Failed to load media library: {queryError?.message}</span>
             </div>
         );
     }
 
+    const activeChips = [
+        containers && { key: "c", label: `Format: ${containers.join(", ")}`, clear: () => setContainers(null) },
+        playback && { key: "p", label: `Playback: ${playback}`, clear: () => setPlayback(null) },
+        qualityFilter && { key: "q", label: "Quality: below 1080p", clear: () => setQualityFilter(null) },
+        issuesOnly && { key: "i", label: "Needs attention", clear: () => setIssuesOnly(false) },
+    ].filter(Boolean);
+
+    const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : null;
+
     // ─── Render ───────────────────────────────────────────────────────────────
 
     return (
-        <div className="space-y-5 max-w-full">
+        <div className="@container max-w-full space-y-4 text-sm leading-normal text-base-content">
             <Toast toast={toast} />
 
             {editMedia && (
@@ -689,289 +502,322 @@ export default function DashMedia() {
             {deleteMedia && (
                 <MediaDeleteModal media={deleteMedia} onClose={() => setDeleteMedia(null)} onConfirm={deleteMutation.mutate} isPending={deleteMutation.isPending} error={deleteMutation.error} />
             )}
+            <PortalMenu anchor={menu?.anchor} header={menu?.row._title} items={menu ? rowMenu(menu.row) : []} onClose={() => setMenu(null)} />
 
             {/* ── Header ── */}
-            <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
-                    <div className="flex items-center gap-2.5 mb-1">
-                        <div className="w-8 h-8 rounded-xl bg-primary/15 flex items-center justify-center">
-                            <Database size={15} className="text-primary" />
-                        </div>
-                        <h1 className="text-2xl font-black text-white tracking-tight">Media Library</h1>
-                        {isFetching && !isLoading && <span className="text-xs text-primary/70 font-semibold">Syncing…</span>}
-                    </div>
-                    <p className="text-sm text-white/70 mt-0.5">
-                        {isLoading ? (
-                            "Scanning library…"
-                        ) : (
-                            <>
-                                <span className="tabular-nums text-white/70 font-semibold">{metrics.total.toLocaleString()}</span> titles indexed
-                            </>
-                        )}
+                    <h1 className="text-2xl font-semibold leading-tight tracking-tight">Media</h1>
+                    <p className="flex items-center gap-2 text-sm text-base-content/75">
+                        <Dot />
+                        {metrics.total.toLocaleString()} titles across {libraries.length} {libraries.length === 1 ? "library" : "libraries"}
+                        {lastUpdated ? ` · updated ${lastUpdated}` : ""}
                     </p>
                 </div>
-
-                <button
-                    onClick={() => refetch()}
-                    disabled={isFetching}
-                    title="Refresh"
-                    className="w-9 h-9 rounded-md flex items-center justify-center text-white/70 border-none hover:bg-white/8 hover:text-white transition-colors cursor-pointer disabled:opacity-40">
-                    <RefreshCw size={15} className={isFetching ? "animate-spin" : ""} />
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                    <ToolBtn
+                        icon={RefreshCw}
+                        onClick={() => {
+                            refetch();
+                            invalidateAll();
+                        }}>
+                        {isFetching ? "Refreshing…" : "Refresh"}
+                    </ToolBtn>
+                    <ToolBtn icon={Download} onClick={exportCsv}>
+                        Export CSV
+                    </ToolBtn>
+                    {onNavigate && (
+                        <ToolBtn icon={FolderOpen} tone="primary" onClick={() => onNavigate("libraries")}>
+                            Manage libraries
+                        </ToolBtn>
+                    )}
+                </div>
             </div>
 
-            {/* ── Analytics cards ── */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <MetricCard title="Total Titles" value={metrics.total.toLocaleString()} icon={FileVideo} accent="oklch(var(--in))" isLoading={isLoading} />
-                <MetricCard title="Movies" value={metrics.movies.toLocaleString()} icon={Film} accent="oklch(var(--p))" isLoading={isLoading} />
-                <MetricCard
-                    title="Series & Anime"
-                    value={(metrics.series + metrics.anime).toLocaleString()}
-                    icon={Tv2}
-                    accent="oklch(var(--su))"
-                    sub={`${metrics.series} series · ${metrics.anime} anime`}
-                    isLoading={isLoading}
-                />
-                <MetricCard title="Storage Used" value={fmtBytes(metrics.size)} icon={HardDrive} accent="oklch(var(--a))" isLoading={isLoading} />
-            </div>
-
-            {/* ── Toolbar ── */}
-            <div className="space-y-2">
-                {/* Search bar — full width, DashUsers style */}
-                <div className="flex items-center gap-2 bg-base-300 rounded-lg px-3.5 h-10 border border-white/8 focus-within:border-primary/30 transition-colors">
-                    <Search size={15} className="text-white/35 shrink-0" />
-                    <input
-                        type="text"
-                        placeholder="Search titles, filenames…"
-                        value={search}
-                        onChange={(e) => {
-                            setSearch(e.target.value);
-                            setPage(1);
-                        }}
-                        className="flex-1 bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
+            {/* ── Stat strip ── */}
+            <section className="overflow-hidden rounded-lg border border-base-300 bg-base-200">
+                <div className="grid grid-cols-2 gap-px bg-base-300 @2xl:grid-cols-3 @5xl:grid-cols-6">
+                    <Stat label="Total titles" value={metrics.total.toLocaleString()} sub={`+${addedThisWeek} this week`} />
+                    <Stat label="Storage" value={fmtBytes(metrics.size)} sub={metrics.total ? `avg ${fmtBytes(metrics.size / metrics.total)} per title` : "—"} />
+                    <Stat label="Direct play" value={stats.known ? `${stats.directPct}%` : "—"} sub={stats.known ? `${stats.transcode} transcode · ${stats.remux} remux` : "media info not indexed"} />
+                    <Stat label="Reclaimable" value={fmtBytes(reclaimBytes)} sub={never?.available ? "duplicates + never played" : "from duplicates"} />
+                    <Stat label="Streaming now" value={streamList.length} dot={streamList.length > 0} sub={streamList.length ? `${transcoding} transcoding` : "no active streams"} />
+                    <Stat
+                        label="Needs attention"
+                        value={stats.attention}
+                        sub={stats.attention ? "Review →" : "All clear"}
+                        subTone={stats.attention ? "primary" : undefined}
+                        onClick={stats.attention ? () => showFiltered({ issues: true }) : undefined}
                     />
-                    {search && (
-                        <button
-                            onClick={() => {
-                                setSearch("");
+                </div>
+            </section>
+
+            {/* ── Media library ── */}
+            <SectionLabel>Media library</SectionLabel>
+            <div ref={tableRef} className="scroll-mt-4">
+                <Panel>
+                    <div className="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-3">
+                        <Seg
+                            value={activeTab}
+                            onChange={(v) => {
+                                setActiveTab(v);
                                 setPage(1);
                             }}
-                            className="text-white/35 hover:text-white transition-colors border-none bg-transparent cursor-pointer">
-                            <X size={14} />
-                        </button>
-                    )}
-                    {!isLoading && search && (
-                        <span className="text-xs text-white/40 font-medium shrink-0 tabular-nums">
-                            {sortedMedia.length} result{sortedMedia.length !== 1 ? "s" : ""}
-                        </span>
-                    )}
-                </div>
-
-                {/* Type tabs — DashUsers style */}
-                <div className="flex bg-base-300 rounded-lg p-0.5 gap-0.5 overflow-x-auto border border-white/5" style={{ scrollbarWidth: "none" }}>
-                    {[
-                        { key: "all", label: "All", count: metrics.total },
-                        { key: "movie", label: "Movies", count: metrics.movies, icon: Film },
-                        { key: "series", label: "Series", count: metrics.series, icon: Tv2 },
-                        { key: "anime", label: "Anime", count: metrics.anime, icon: Swords },
-                    ].map(({ key, label, count, icon: Icon }) => {
-                        const active = activeTab === key;
-                        return (
-                            <button
-                                key={key}
-                                onClick={() => {
-                                    setActiveTab(key);
+                            options={[
+                                { value: "all", label: "All", count: metrics.total },
+                                { value: "movie", label: "Movies", count: metrics.movies },
+                                { value: "series", label: "Series", count: metrics.series },
+                                { value: "anime", label: "Anime", count: metrics.anime },
+                            ]}
+                        />
+                        <SearchBox
+                            icon={Search}
+                            value={search}
+                            onChange={(v) => {
+                                setSearch(v);
+                                setPage(1);
+                            }}
+                            placeholder="Search title, filename, library…"
+                        />
+                        {libraries.length > 1 && (
+                            <SelectBox
+                                value={library}
+                                onChange={(v) => {
+                                    setLibrary(v);
                                     setPage(1);
                                 }}
-                                className={`px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-none
-                                    ${active ? "bg-primary text-primary-content shadow-sm" : "text-white/70 hover:text-white hover:bg-white/5"}`}>
-                                {Icon && <Icon size={11} />}
-                                {label}
-                                {!isLoading && (
-                                    <span
-                                        className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tabular-nums
-                                        ${active ? "bg-primary-content/20 text-primary-content" : "bg-white/8 text-white/50"}`}>
-                                        {count}
-                                    </span>
-                                )}
+                                options={[{ value: "all", label: "All libraries" }, ...libraries.map((l) => ({ value: String(l.id), label: l.label }))]}
+                            />
+                        )}
+                        <ToolBtn icon={SquareCheck} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>
+                            {selectMode ? "Done" : "Select"}
+                        </ToolBtn>
+                    </div>
+
+                    {activeChips.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-2">
+                            {activeChips.map((c) => (
+                                <button key={c.key} type="button" onClick={c.clear} className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-primary bg-base-200 px-2.5 text-sm font-medium text-primary hover:bg-base-300">
+                                    {c.label}
+                                    <X size={11} />
+                                </button>
+                            ))}
+                            <button type="button" onClick={resetFilters} className="cursor-pointer text-sm text-base-content/80 hover:text-base-content">
+                                Clear all
                             </button>
-                        );
-                    })}
-                </div>
-            </div>
+                        </div>
+                    )}
 
-            {/* ── Table ── */}
-            <div className="bg-base-200 rounded-xl overflow-hidden border border-white/6 shadow-sm">
-                <div className="overflow-x-auto scrollbar-none">
-                    <table className="table w-full text-sm min-w-225">
-                        <thead className="sticky top-0 z-10 bg-base-300/95 backdrop-blur-md border-b border-base-content/8">
-                            <tr className="text-[10px] font-bold uppercase tracking-widest text-white/40">
-                                <th className="pl-4 pr-2 py-3 w-8">#Sl</th>
-                                <th className="px-3 py-3">Title</th>
-                                <th className="px-3 py-3">Type</th>
-                                <th className="px-3 py-3 text-center">Quality</th>
-                                <th className="px-3 py-3 text-center">Codec</th>
-                                <th className="px-3 py-3 text-right">Size</th>
-                                <th className="px-3 py-3">Library</th>
-                                <th className="px-3 py-3">Added</th>
-                                <th className="px-3 py-3 text-center">Access</th>
-                                <th className="pl-3 pr-4 py-3 text-right">Actions</th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                            {isLoading ? (
-                                [...Array(8)].map((_, i) => <SkeletonRow key={i} />)
-                            ) : paginatedMedia.length === 0 ? (
-                                <tr>
-                                    <td colSpan={10} className="py-24">
-                                        <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-                                            <div className="w-14 h-14 rounded-2xl bg-base-200/60 flex items-center justify-center mb-4 border border-white/6">
-                                                <Search size={22} className="text-white/25" />
-                                            </div>
-                                            <p className="text-base font-bold text-white/80">{search ? "No results match your search" : "No media in library"}</p>
-                                            <p className="text-sm text-white/55 mt-1 max-w-xs">
-                                                {search ? `Nothing matches "${search}" — try different keywords.` : "Add folders to your library to get started."}
-                                            </p>
-                                            {search && (
-                                                <button
-                                                    onClick={() => {
-                                                        setSearch("");
-                                                        setPage(1);
-                                                    }}
-                                                    className="mt-4 px-4 py-2 rounded-md text-sm font-bold bg-primary text-primary-content hover:opacity-90 transition-opacity border-none cursor-pointer">
-                                                    Clear Search
-                                                </button>
-                                            )}
-                                        </div>
-                                    </td>
-                                </tr>
+                    {selectMode && (
+                        <div className="flex flex-wrap items-center gap-2 border-b border-base-300 bg-base-300 px-4 py-2.5 text-sm">
+                            <b className="mr-1 font-semibold">{selMedia.length} selected</b>
+                            {bulkConfirm ? (
+                                <>
+                                    <span className="text-base-content/80">Delete {selMedia.length} titles from the library?</span>
+                                    <ToolBtn tone="error" disabled={busy} onClick={() => bulk("delete")}>
+                                        Confirm
+                                    </ToolBtn>
+                                    <ToolBtn onClick={() => setBulkConfirm(false)}>Cancel</ToolBtn>
+                                </>
                             ) : (
-                                paginatedMedia.map((item, i) => {
-                                    const index = (currentPage - 1) * pageSize + i + 1;
-                                    const TypeIcon = item._icon;
-                                    const typeConfig = TYPE_CONFIG[item._type] || TYPE_CONFIG.movie;
+                                <>
+                                    <ToolBtn icon={RefreshCw} disabled={busy || !selMedia.some((m) => m._type === "movie")} onClick={() => bulk("refresh")} title="Movies only">
+                                        Refresh metadata
+                                    </ToolBtn>
+                                    <ToolBtn icon={ShieldOff} disabled={busy || !selMedia.length} onClick={() => bulk("restrict")}>
+                                        Restrict
+                                    </ToolBtn>
+                                    <ToolBtn icon={Shield} disabled={busy || !selMedia.length} onClick={() => bulk("allow")}>
+                                        Allow
+                                    </ToolBtn>
+                                    <ToolBtn icon={Trash2} tone="error" disabled={!DELETE_SUPPORTED || busy || !selMedia.length} title={DELETE_SUPPORTED ? undefined : "Deleting titles is not supported by the server yet"} onClick={() => setBulkConfirm(true)}>
+                                        Delete
+                                    </ToolBtn>
+                                </>
+                            )}
+                            <button type="button" onClick={exitSelect} className="ml-auto inline-flex cursor-pointer items-center gap-1 text-base-content/80 hover:text-base-content">
+                                <X size={14} /> Clear
+                            </button>
+                        </div>
+                    )}
 
+                    {filtered.length === 0 ? (
+                        <Empty icon={Database} text={allMedia.length === 0 ? "No media found. Add a library folder and run a scan." : "No titles match these filters."} />
+                    ) : (
+                        <table className="w-full table-fixed text-sm">
+                            <colgroup>
+                                <col style={{ width: "5%" }} />
+                                <col style={{ width: "22%" }} />
+                                <col style={{ width: "9%" }} />
+                                <col style={{ width: "8%" }} />
+                                <col className="hidden @2xl:table-column" style={{ width: "11%" }} />
+                                <col style={{ width: "8%" }} />
+                                <col className="hidden @3xl:table-column" style={{ width: "9%" }} />
+                                <col className="hidden @3xl:table-column" style={{ width: "8%" }} />
+                                <col style={{ width: "6%" }} />
+                                <col style={{ width: "14%" }} />
+                            </colgroup>
+                            <thead>
+                                <tr className="bg-base-300 text-left text-xs font-medium text-base-content/75">
+                                    <th className="px-3 py-2.5">Sl.</th>
+                                    <th className="px-2 py-2.5">Title</th>
+                                    <th className="px-2 py-2.5">Type</th>
+                                    <th className="px-2 py-2.5">Quality</th>
+                                    <th className="hidden px-2 py-2.5 @2xl:table-cell">Codec</th>
+                                    <th className="px-2 py-2.5 text-right">Size</th>
+                                    <th className="hidden px-2 py-2.5 @3xl:table-cell">Library</th>
+                                    <th className="hidden px-2 py-2.5 @3xl:table-cell">Added</th>
+                                    <th className="px-2 py-2.5">Access</th>
+                                    <th className="px-3 py-2.5 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {slice.map((m, i) => {
+                                    const meta = TYPE_META[m._type];
+                                    const seasonCount = m._type === "movie" ? 0 : Object.keys(m.seasons || {}).length;
+                                    const episodeCount = m._type === "movie" ? 0 : Object.values(m.seasons || {}).reduce((a, s) => a + (s.episodes?.length || 0), 0);
                                     return (
-                                        <tr key={item._id} className="group border-b border-white/4 last:border-0 hover:bg-white/3 transition-colors duration-150">
-                                            {/* # */}
-                                            <td className="pl-4 pr-2 py-3.5 text-white/55 font-mono text-[10px] tabular-nums">{String(index).padStart(2, "0")}</td>
-
-                                            {/* Title */}
-                                            <td className="px-3 py-3.5 min-w-0">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-8 h-11 rounded-lg bg-base-300 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-base-content/8">
-                                                        {item._poster ? (
-                                                            <img src={item._poster} alt="" className="w-full h-full object-cover" loading="lazy" />
+                                        <tr key={m._id} className="border-t border-base-300 align-middle">
+                                            <td className="px-3 py-2.5 text-sm tabular-nums text-base-content/75">{sl((cur - 1) * PAGE_SIZE + i + 1)}</td>
+                                            <td className="px-2 py-2.5">
+                                                <div className="flex min-w-0 items-center gap-2.5">
+                                                    <PosterTile src={m._poster} alt={m._title} selectMode={selectMode} checked={selected.has(m._id)} onToggle={() => toggleSel(m._id)} />
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium text-base-content" title={m._title}>
+                                                            {m._title}
+                                                            {m._year ? <span className="ml-1.5 font-normal text-base-content/70">{m._year}</span> : null}
+                                                        </p>
+                                                        {m._flags.noMeta || m._flags.noPoster || m._flags.dup ? (
+                                                            <div className="mt-0.5 flex flex-wrap gap-1">
+                                                                {m._flags.noMeta && <Badge tone="error">No metadata</Badge>}
+                                                                {!m._flags.noMeta && m._flags.noPoster && <Badge tone="warning">No poster</Badge>}
+                                                                {m._flags.dup && <Badge tone="warning">Duplicate ×{m._dupCount}</Badge>}
+                                                            </div>
                                                         ) : (
-                                                            <ImageIcon size={12} className="text-base-content/15" />
+                                                            <p className="truncate text-xs text-base-content/70" title={m._filename}>
+                                                                {m._type === "movie" ? m._filename : `${seasonCount} SE · ${episodeCount} EPI`}
+                                                            </p>
                                                         )}
                                                     </div>
-                                                    <div className="min-w-0">
-                                                        <p className="font-semibold text-white/90 text-sm truncate max-w-36 sm:max-w-56 md:max-w-[20rem] lg:max-w-104" title={item._title}>
-                                                            {item._title}
-                                                        </p>
-                                                        <div className="flex items-center gap-1.5 mt-0.5">
-                                                            {item._year && <span className="text-[10px] text-white/70 tabular-nums font-medium">{item._year}</span>}
-                                                            {item._year && <span className="text-white/20">·</span>}
-                                                            <span className="text-[10px] font-mono text-white/50 truncate max-w-32 sm:max-w-56">{item._filename}</span>
-                                                        </div>
-                                                    </div>
                                                 </div>
                                             </td>
-
-                                            {/* Type */}
-                                            <td className="px-3 py-3.5">
-                                                <div className="flex items-center gap-1.5">
-                                                    <TypeIcon size={11} className="text-white/60 shrink-0" />
-                                                    <Badge label={item._typeLabel} variant={item._type} />
-                                                </div>
+                                            <td className="px-2 py-2.5">
+                                                <Badge tone={meta.tone}>{meta.label}</Badge>
                                             </td>
-
-                                            {/* Quality */}
-                                            <td className="px-3 py-3.5">
-                                                <div className="flex flex-col items-center gap-0.5">
-                                                    {item.res ? <QualityChip label={item.res} /> : <span className="text-[10px] text-white/40">—</span>}
-                                                    {item._duration && <span className="text-[9px] text-white/55 tabular-nums">{fmtDuration(item._duration)}</span>}
-                                                </div>
-                                            </td>
-
-                                            {/* Codec */}
-                                            <td className="px-3 py-3.5">
-                                                <div className="flex items-center justify-center gap-1 flex-wrap">
-                                                    {item.vcodec && <CodecChip label={item.vcodec} />}
-                                                    {item.acodec && <CodecChip label={item.acodec} />}
-                                                    {!item.vcodec && !item.acodec && <span className="text-white/40 text-[10px]">—</span>}
-                                                </div>
-                                            </td>
-
-                                            {/* Size */}
-                                            <td className="px-3 py-3.5 text-right">
-                                                <span className="text-xs font-semibold text-white/85 tabular-nums">{fmtBytes(item._size)}</span>
-                                            </td>
-
-                                            {/* Library */}
-                                            <td className="px-3 py-3.5">
-                                                <div className="flex items-center gap-1.5 text-white/70">
-                                                    <FolderOpen size={10} className="shrink-0" />
-                                                    <span className="text-xs truncate max-w-20">{item._library}</span>
-                                                </div>
-                                            </td>
-
-                                            {/* Added */}
-                                            <td className="px-3 py-3.5">
-                                                <span className="text-xs text-white/70 whitespace-nowrap tabular-nums">{fmtDate(item._added)}</span>
-                                            </td>
-
-                                            {/* Permission */}
-                                            <td className="px-3 py-3.5 text-center">
-                                                {!item._permission ? (
-                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-error/15 border-error/30 text-error text-xs font-bold">
-                                                        <ShieldOff size={8} />
-                                                        Restricted
-                                                    </span>
+                                            <td className="px-2 py-2.5">
+                                                {m.res ? (
+                                                    <Badge tone={QUALITY_TONE[m.res] || "neutral"} outline>
+                                                        {m.res}
+                                                    </Badge>
                                                 ) : (
-                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border bg-success/15 border-success/30 text-success text-xs font-bold">
-                                                        <Shield size={8} />
-                                                        Normal
-                                                    </span>
+                                                    <span className="text-base-content/65">—</span>
                                                 )}
                                             </td>
-
-                                            {/* Actions — Details, Edit, Delete (delete always shown in error color) */}
-                                            <td className="pl-2 pr-4 py-3.5">
-                                                <div className="flex items-center justify-end gap-0.5">
-                                                    <button
-                                                        onClick={() => setDetailsMedia(item)}
-                                                        title="Details"
-                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/75 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
-                                                        <Info size={15} strokeWidth={1.8} />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setEditMedia(item)}
-                                                        title="Edit"
-                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-white/75 border-none hover:bg-white/8 hover:text-white transition-all duration-150 cursor-pointer">
-                                                        <SquarePen size={15} strokeWidth={1.8} />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setDeleteMedia(item)}
-                                                        title="Delete"
-                                                        className="w-8 h-8 rounded-md flex items-center justify-center text-error/85 border-none hover:bg-error/15 hover:text-error transition-all duration-150 cursor-pointer">
-                                                        <Trash2 size={15} strokeWidth={1.8} />
-                                                    </button>
+                                            <td className="hidden px-2 py-2.5 text-xs text-base-content/90 @2xl:table-cell">
+                                                <p className="truncate">{[m.vcodec, m.acodec].filter(Boolean).join(" · ") || "—"}</p>
+                                            </td>
+                                            <td className="whitespace-nowrap px-2 py-2.5 text-right text-sm tabular-nums text-base-content">{fmtBytes(m._size)}</td>
+                                            <td className="hidden truncate px-2 py-2.5 text-sm text-base-content @3xl:table-cell" title={m._library}>
+                                                {m._library}
+                                            </td>
+                                            <td className="hidden px-2 py-2.5 @3xl:table-cell">
+                                                <p className="text-sm text-base-content">{m._added ? fmtDay(m._added.toISOString()) : "—"}</p>
+                                                <p className="text-xs text-base-content/70">{m._added ? fmtYear(m._added.toISOString()) : ""}</p>
+                                            </td>
+                                            <td className="px-2 py-2.5">
+                                                <Toggle checked={m._permission} label={m._permission ? "Restrict access" : "Allow access"} onChange={(allow) => permissionMutation.mutate({ id: m._id, allow })} />
+                                            </td>
+                                            <td className="px-3 py-2.5">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    {m._flags.noMeta ? (
+                                                        <ActionBtn onClick={() => setEditMedia(m)}>Match</ActionBtn>
+                                                    ) : m._flags.dup ? (
+                                                        <ActionBtn
+                                                            onClick={() => {
+                                                                showFiltered({ tab: m._type });
+                                                                setSearch(m._title);
+                                                            }}>
+                                                            Review
+                                                        </ActionBtn>
+                                                    ) : (
+                                                        <>
+                                                            <IconBtn icon={Info} title="Details" onClick={() => setDetailsMedia(m)} />
+                                                            <IconBtn icon={SquarePen} title="Edit" onClick={() => setEditMedia(m)} />
+                                                        </>
+                                                    )}
+                                                    <IconBtn icon={Ellipsis} title="More actions" onClick={(e) => setMenu({ anchor: e.currentTarget, row: m })} />
                                                 </div>
                                             </td>
                                         </tr>
                                     );
-                                })
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+
+                    <Pagination page={cur} pages={pages} total={filtered.length} from={(cur - 1) * PAGE_SIZE + 1} to={Math.min(cur * PAGE_SIZE, filtered.length)} onPage={setPage} />
+                </Panel>
             </div>
 
-            {/* ── Pagination ── */}
-            <Pagination currentPage={currentPage} totalPages={totalPages} totalItems={sortedMedia.length} pageSize={pageSize} onPageChange={setPage} />
+            {/* ── Subtitles ── */}
+            <SectionLabel>Subtitles</SectionLabel>
+            <SubtitlesTable posterIndex={posterIndex} onToast={showToast} />
+
+            {/* ── File formats ── */}
+            <SectionLabel>File formats</SectionLabel>
+            <FormatsTable
+                formats={formats}
+                source={formatSource}
+                totalTitles={metrics.total}
+                onToast={showToast}
+                onShowTitles={(labels) => showFiltered({ containers: labels })}
+            />
+
+            {/* ── Analytics ── */}
+            <SectionLabel>Library analytics</SectionLabel>
+
+            <Panel title="Watch time by hour" hint="Hours watched, by hour of day">
+                {hasHours ? <HourBars hours={hours} quiet={quiet} /> : <Empty icon={Info} text={analyticsQuery.isLoading ? "Loading watch data…" : "No watch time recorded yet, so there is no hourly pattern to show."} />}
+                <Note action={onNavigate && hasHours ? "Open jobs →" : undefined} onAction={() => onNavigate?.("jobs")}>
+                    {hasHours ? `Quietest window ${pad2(quiet.start)}:00–${pad2(quiet.start + 4)}:00. Best time for scans and transcode jobs.` : "Needs a few days of playback history."}
+                </Note>
+            </Panel>
+
+            <div className="grid gap-4 @3xl:grid-cols-2">
+                <Panel title="Storage share vs watch time" right={<ShareLegend />} className="min-h-60">
+                    {mixTotal > 0 && metrics.size > 0 ? <ShareCompare rows={shareRows} /> : <Empty icon={Info} text="Needs watch history and indexed file sizes." />}
+                    <Note action={biggestGap ? "Review" : undefined} onAction={() => biggestGap && showFiltered({ tab: biggestGap.type })}>
+                        {biggestGap
+                            ? `${biggestGap.label}: ${biggestGap.storage}% of storage, ${biggestGap.watch}% of watch time.`
+                            : mixTotal > 0
+                              ? "Storage and watch time are in proportion."
+                              : "No comparison yet."}
+                    </Note>
+                </Panel>
+
+                <Panel title="Why titles need work to play" hint={causeTotal ? `${causeTotal} titles` : undefined} className="min-h-60">
+                    {stats.known > 0 && causeTotal > 0 ? <RankedBars rows={causes.filter((c) => c.count > 0)} /> : <Empty icon={Info} text={stats.known ? "Every indexed title plays directly." : "Media info has not been indexed yet."} />}
+                    <Note action={stats.transcode ? "Show titles" : undefined} onAction={() => showFiltered({ playback: "transcode" })}>
+                        {stats.remux > 0 ? `${stats.remux} titles need only a container remux, no re-encode.` : stats.transcode ? `${stats.transcode} titles need a full transcode.` : "Nothing to fix."}
+                    </Note>
+                </Panel>
+            </div>
+
+            <Panel title="Quality mix by library" right={<QualityLegend />}>
+                <QualityMix
+                    rows={qualityRows}
+                    onReview={(r) =>
+                        showFiltered({ tab: r.type, quality: "below1080" })
+                    }
+                />
+                <Note
+                    action={worstQuality && worstQuality.below > 0 ? `Review ${worstQuality.below}` : undefined}
+                    onAction={() => worstQuality && showFiltered({ tab: worstQuality.type, quality: "below1080" })}>
+                    {worstQuality && worstQuality.known > 0
+                        ? `${worstQuality.label} has the highest share below 1080p (${pct(worstQuality.below, worstQuality.known)}%). Best upgrade candidates.`
+                        : "Quality appears once media info is indexed."}
+                </Note>
+            </Panel>
         </div>
     );
 }

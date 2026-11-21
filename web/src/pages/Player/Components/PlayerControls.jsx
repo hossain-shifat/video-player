@@ -83,6 +83,7 @@ import VideoSidebar, {
 // their own file now; both files import from here directly.
 import { DECODER_LABELS, ALL_QUICK_ITEMS, QUICK_KEYS_WITH_SIDEBAR, formatTime } from "../Utils/PlayerConstants";
 import { SpeedSliderOverlay } from "./PlayerOverlays";
+import { routeId } from "../../../Utils/shortId.js";
 
 /**
  * PlayerControls.jsx — the button row/controls bar ONLY.
@@ -875,7 +876,7 @@ export default function PlayerControls({
     const goToMedia = useCallback(
         (id) => {
             if (!id) return;
-            navigate(`/player/${id}`, { replace: true });
+            navigate(`/player/${routeId(id)}`, { replace: true });
         },
         [navigate],
     );

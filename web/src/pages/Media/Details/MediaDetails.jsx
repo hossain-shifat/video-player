@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { useParams, useNavigate, useSearchParams, Link } from "react-router";
+import { useNavigate, useSearchParams, Link } from "react-router";
 import {
     Play,
     Star,
@@ -38,13 +38,15 @@ import { useHistory } from "../../../Hooks/Query/useHistory";
 import { getMediaById } from "../../../Api";
 import { api } from "../../../Api/client";
 import MediaDetailsSkeleton from "../../../Components/Media/MediaDetailsSkeleton";
-import MediaCard, { useCountdown } from "../../../Components/Media/MediaCard";
+import { useCountdown } from "../../../Components/Media/MediaCard";
 import RelatedSections from "../../../Components/Media/RelatedSections";
 import { assets } from "../../../Assets/assets";
 import CastAndCrew from "../../../Components/Media/CastAndCrew";
 import Reviews from "../../../Components/Media/Reviews";
 import FloatingActionMenu from "../../../Components/Layout/FloatingActionMenu";
 import { TrailerModal, NotInLibraryModal, RemindMe } from "../../../Components/Layout/Modal";
+import { routeId } from "../../../Utils/shortId.js";
+import { useMediaRouteId } from "../../../Hooks/Query/useMediaRouteId.js";
 
 // ─── Language lookup ──────────────────────────────────────────────────────────
 const LANG_NAMES = {
@@ -311,6 +313,265 @@ function SeasonsPanel({ seasons, onPlayEpisode }) {
     );
 }
 
+// ─── Watch-state helpers (history-driven) ─────────────────────────────────────
+// History is keyed by the episode FILE id (ep.id). `completed` is the server's
+// watched flag; position > 0 without it means partially watched. Episodes with
+// no ep.id exist on TMDB only → "missing" (not in library).
+function epState(ep, entry) {
+    if (!ep?.id) return "missing";
+    if (entry?.completed) return "watched";
+    if (entry && entry.position > 0) return "progress";
+    return "new";
+}
+
+function epProgressPct(entry) {
+    if (!entry || !entry.duration || !(entry.position > 0)) return 0;
+    return Math.max(2, Math.min(100, Math.round((entry.position / entry.duration) * 100)));
+}
+
+function seasonStats(season, historyById) {
+    const eps = season?.episodes || [];
+    const total = Math.max(season?.episodeCount || 0, eps.length);
+    const states = eps.map((ep) => epState(ep, historyById.get(ep.id)));
+    const watched = states.filter((s) => s === "watched").length;
+    while (states.length < total) states.push("missing");
+    return { total, watched, missing: states.filter((s) => s === "missing").length, states };
+}
+
+// Very long seasons (100+ eps) would overflow the tick strip — collapse into buckets.
+function bucketStates(states, max = 48) {
+    if (states.length <= max) return states;
+    const size = states.length / max;
+    return Array.from({ length: max }, (_, i) => {
+        const chunk = states.slice(Math.floor(i * size), Math.floor((i + 1) * size));
+        if (chunk.every((s) => s === "watched")) return "watched";
+        if (chunk.every((s) => s === "missing")) return "missing";
+        if (chunk.some((s) => s === "watched" || s === "progress")) return "progress";
+        return "new";
+    });
+}
+
+const TICK_CLASS = {
+    watched: "bg-primary",
+    progress: "bg-primary/55",
+    new: "bg-base-content/20",
+    missing: "bg-base-content/10",
+};
+
+function fmtShortDate(iso) {
+    if (!iso) return null;
+    try {
+        return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+        return iso;
+    }
+}
+
+// ─── Season tabs (single scrollable row — scales to 8–9+ seasons) ─────────────
+// Each tab: numeral, name, watched/total, and a tick strip (one segment per
+// episode). The dot next to the name marks the season holding the last-watched episode.
+function SeasonTabs({ seasonEntries, selectedNum, lastNum, historyById, seriesTitle, onSelect }) {
+    const stripRef = useRef(null);
+    const [edge, setEdge] = useState({ left: false, right: false });
+
+    const measure = () => {
+        const el = stripRef.current;
+        if (!el) return;
+        const next = { left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 };
+        setEdge((prev) => (prev.left === next.left && prev.right === next.right ? prev : next));
+    };
+
+    useEffect(() => {
+        measure();
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [seasonEntries.length]);
+
+    const overflowing = edge.left || edge.right;
+    const fade = overflowing ? `linear-gradient(90deg, transparent 0, #000 ${edge.left ? 40 : 0}px, #000 calc(100% - ${edge.right ? 40 : 0}px), transparent 100%)` : undefined;
+
+    return (
+        <div>
+            <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="[&>h2]:mb-0 min-w-0">
+                    <SectionHeading icon={Tv}>
+                        <span className="truncate">
+                            Seasons<span className="font-medium text-base-content/72"> - {seriesTitle}</span>
+                        </span>
+                        <span className="text-sm font-normal text-base-content/72">({seasonEntries.length})</span>
+                    </SectionHeading>
+                </div>
+                {overflowing && (
+                    <div className="flex gap-1.5 shrink-0">
+                        <button
+                            type="button"
+                            aria-label="Scroll seasons left"
+                            disabled={!edge.left}
+                            onClick={() => stripRef.current?.scrollBy({ left: -480, behavior: "smooth" })}
+                            className="w-7 h-7 rounded-md bg-base-300 text-base-content/85 flex items-center justify-center cursor-pointer hover:bg-base-300/70 disabled:opacity-40 disabled:cursor-default transition-colors">
+                            <ChevronLeft size={14} />
+                        </button>
+                        <button
+                            type="button"
+                            aria-label="Scroll seasons right"
+                            disabled={!edge.right}
+                            onClick={() => stripRef.current?.scrollBy({ left: 480, behavior: "smooth" })}
+                            className="w-7 h-7 rounded-md bg-base-300 text-base-content/85 flex items-center justify-center cursor-pointer hover:bg-base-300/70 disabled:opacity-40 disabled:cursor-default transition-colors">
+                            <ChevronRight size={14} />
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <div
+                ref={stripRef}
+                onScroll={measure}
+                className="flex gap-3 overflow-x-auto py-2 px-0.5"
+                style={{ scrollbarWidth: "none", msOverflowStyle: "none", WebkitMaskImage: fade, maskImage: fade }}>
+                {seasonEntries.map(([num, season]) => {
+                    const st = seasonStats(season, historyById);
+                    const active = String(selectedNum) === String(num);
+                    const isLast = String(lastNum) === String(num);
+                    const name = season.name || `Season ${num}`;
+                    return (
+                        <button
+                            key={num}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => onSelect(num)}
+                            className={`shrink-0 w-[232px] flex flex-col gap-3 p-3 text-left rounded-xl border cursor-pointer transition-colors ${
+                                active ? "bg-base-200 border-primary" : "bg-base-100 border-white/10 hover:bg-base-200/60"
+                            }`}>
+                            <div className="flex items-center gap-3 w-full">
+                                <span className={`text-2xl font-extrabold leading-none tracking-tight tabular-nums ${active ? "text-primary" : "text-base-content/35"}`}>
+                                    {String(num).padStart(2, "0")}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                    <span className="flex items-center gap-1.5 text-sm font-semibold text-base-content">
+                                        <span className="truncate">{name}</span>
+                                        {isLast && <span title="Last watched" className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
+                                    </span>
+                                    <span className="block text-xs text-base-content/70 truncate">
+                                        {st.total} episode{st.total !== 1 ? "s" : ""}
+                                        {st.missing > 0 ? ` · ${st.missing} missing` : ""}
+                                    </span>
+                                </div>
+                                <span className="text-xs font-semibold tabular-nums text-base-content/70 shrink-0">
+                                    {st.watched}/{st.total}
+                                </span>
+                            </div>
+                            <div className="flex gap-0.5 w-full">
+                                {bucketStates(st.states).map((s, i) => (
+                                    <span key={i} className={`flex-1 h-1.5 rounded-xs ${TICK_CLASS[s]}`} />
+                                ))}
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+// ─── Episode item (new design) ────────────────────────────────────────────────
+// Fixed right rail (rating · action · status ring) so every row aligns, whatever its state.
+function EpisodeItem({ ep, entry, isFirst, isLastWatched, onPlay }) {
+    const state = epState(ep, entry);
+    const present = state !== "missing";
+    const pct = state === "progress" ? epProgressPct(entry) : 0;
+    const timeLeft = state === "progress" && ep.runtime && pct ? Math.max(1, Math.round(ep.runtime * (1 - pct / 100))) : null;
+    const meta = [fmtShortDate(ep.airDate), ep.runtime ? fmtRuntime(ep.runtime) : null, timeLeft ? `${timeLeft} min left` : null].filter(Boolean).join(" · ");
+    const rating = typeof ep.rating === "number" ? ep.rating.toFixed(1) : ep.rating;
+
+    const action =
+        state === "progress"
+            ? { label: "Resume", cls: "bg-primary text-primary-content border-primary hover:brightness-110" }
+            : state === "watched"
+              ? { label: "Rewatch", cls: "bg-secondary/15 text-secondary border-secondary/40 hover:bg-secondary/25" }
+              : { label: "Play", cls: "bg-accent/15 text-accent border-accent/45 hover:bg-accent/25" };
+
+    const ringLabel = state === "watched" ? "Watched" : state === "progress" ? "In progress" : state === "new" ? "Unwatched" : "Not in library";
+    const ringCls =
+        state === "watched"
+            ? "bg-primary"
+            : state === "progress"
+              ? "border-[1.5px] border-primary"
+              : state === "new"
+                ? "border-[1.5px] border-base-content/20"
+                : "border-[1.5px] border-dashed border-base-content/20";
+
+    return (
+        <div
+            className={`flex items-center gap-3 sm:gap-4 px-3 sm:px-4 py-3 transition-colors ${isFirst ? "" : "border-t border-white/5"} ${
+                isLastWatched ? "bg-primary/5 shadow-[inset_3px_0_0_var(--color-primary)]" : ""
+            } ${present ? "cursor-pointer hover:bg-base-300/40" : ""}`}
+            onClick={() => present && onPlay(ep.id)}>
+            {/* Still */}
+            <div
+                className={`relative shrink-0 w-24 sm:w-32 h-[54px] sm:h-[72px] rounded-lg overflow-hidden flex items-center justify-center ${
+                    present ? "bg-base-300" : "border border-dashed border-base-content/20"
+                }`}
+                style={present && !ep.still ? { backgroundImage: "repeating-linear-gradient(135deg, rgba(255,255,255,0.035) 0 2px, transparent 2px 9px)" } : undefined}>
+                {!present && <Film size={22} className="text-base-content/40" />}
+                {present && ep.still && <img src={ep.still} alt={ep.title || ep.name || ""} className="absolute inset-0 w-full h-full object-cover" loading="lazy" />}
+                {state === "progress" && (
+                    <div className="absolute inset-x-0 bottom-0 h-[3px] bg-white/25">
+                        <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
+                    </div>
+                )}
+            </div>
+
+            {/* Text */}
+            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                <div className="flex items-center gap-2 min-w-0">
+                    <p className={`text-sm font-semibold truncate min-w-0 ${present ? "text-base-content" : "text-base-content/70"}`}>
+                        {ep.episode != null && <span className="text-primary mr-2 tabular-nums">E{String(ep.episode).padStart(2, "0")}</span>}
+                        {ep.title || ep.name}
+                    </p>
+                    {isLastWatched && <span className="shrink-0 px-2 py-0.5 rounded-md text-[11px] font-semibold leading-snug bg-primary text-primary-content">Last watched</span>}
+                    {state === "watched" && <span className="shrink-0 px-2 py-0.5 rounded-md text-[11px] font-semibold leading-snug bg-success/15 text-success">Watched</span>}
+                </div>
+                {meta && <p className="text-xs text-base-content/70 tabular-nums truncate">{meta}</p>}
+                <p className={`text-xs sm:text-[13px] truncate ${present ? "text-base-content/78" : "text-base-content/70"}`}>
+                    {present ? ep.overview : "Add the file to a scanned folder to make this episode playable."}
+                </p>
+            </div>
+
+            {/* Right rail */}
+            <div className="shrink-0 flex items-center justify-end gap-3.5 sm:w-[196px]">
+                {present ? (
+                    <>
+                        <span className="hidden sm:flex items-center gap-1 w-[42px] text-xs font-semibold tabular-nums text-base-content/85">
+                            {rating ? (
+                                <>
+                                    <Star size={12} className="fill-warning text-warning" />
+                                    {rating}
+                                </>
+                            ) : null}
+                        </span>
+                        <button type="button" className={`w-[84px] sm:w-[100px] h-[34px] rounded-md border text-[13px] font-semibold cursor-pointer transition-colors ${action.cls}`}>
+                            {action.label}
+                        </button>
+                    </>
+                ) : (
+                    <span className="inline-flex items-center justify-center h-[34px] px-3 rounded-md border border-dashed border-base-content/25 text-xs font-semibold text-base-content/70 whitespace-nowrap">
+                        Not in library
+                    </span>
+                )}
+                <span
+                    role="img"
+                    aria-label={ringLabel}
+                    title={ringLabel}
+                    className={`hidden sm:flex w-5 h-5 rounded-full shrink-0 box-border items-center justify-center ${ringCls}`}
+                    style={state === "progress" ? { background: `conic-gradient(var(--color-primary) ${pct}%, transparent 0)` } : undefined}>
+                    {state === "watched" && <Check size={11} strokeWidth={3.6} className="text-primary-content" />}
+                </span>
+            </div>
+        </div>
+    );
+}
+
 // ─── Release countdown (details page) ────────────────────────────────────────
 // Four equal tiles on their own row: fills the width on phones, stays compact on desktop.
 function ReleaseCountdown({ t }) {
@@ -529,50 +790,39 @@ function DetailCell({ label, value, icon: Icon, iconClass = "text-base-content/7
     );
 }
 
-// ─── Episodes accordion (old SeasonsPanel style, single season) ──────────────
-function EpisodesAccordion({ season, seasonNum, onPlay }) {
+// ─── Episodes panel (single season) ──────────────────────────────────────────
+function EpisodesAccordion({ season, onPlay, historyById, lastWatchedId }) {
     const [showAll, setShowAll] = useState(false);
-    const [collapsed, setCollapsed] = useState(false);
     const eps = season.episodes || [];
     const visibleEps = showAll ? eps : eps.slice(0, 5);
 
     return (
         <div className="bg-base-200 rounded-xl overflow-hidden border border-white/5">
-            <div className="flex items-center gap-3 p-4 border-b border-white/5">
-                {season.poster && <img src={season.poster} alt={season.name} className="w-10 h-14 object-cover rounded shrink-0" loading="lazy" />}
-                <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-base-content">{season.name || `Season ${seasonNum}`}</h3>
-                    <p className="text-xs text-base-content/80 mt-0.5">
-                        {eps.length} episode{eps.length !== 1 ? "s" : ""}
-                    </p>
-                    {season.overview && <p className="text-xs text-base-content/72 line-clamp-2 mt-0.5">{season.overview}</p>}
-                </div>
+            {visibleEps.map((ep, i) => (
+                <EpisodeItem
+                    key={ep.id || ep.episode}
+                    ep={ep}
+                    entry={ep.id ? historyById.get(ep.id) : undefined}
+                    isFirst={i === 0}
+                    isLastWatched={Boolean(ep.id) && ep.id === lastWatchedId}
+                    onPlay={onPlay}
+                />
+            ))}
+            {eps.length > 5 && (
                 <button
-                    onClick={() => setCollapsed((v) => !v)}
-                    className="shrink-0 w-7 h-7 rounded-full hover:bg-base-300 flex items-center justify-center transition-colors cursor-pointer"
-                    aria-label={collapsed ? "Expand" : "Collapse"}>
-                    {collapsed ? <ChevronDown size={16} className="text-base-content/72" /> : <ChevronUp size={16} className="text-base-content/72" />}
-                </button>
-            </div>
-            {!collapsed && (
-                <div className="px-2 pb-3 space-y-1 pt-1">
-                    {visibleEps.map((ep) => (
-                        <EpisodeRow key={ep.id || ep.episode} ep={ep} onPlay={onPlay} />
-                    ))}
-                    {eps.length > 5 && (
-                        <button className="w-full text-xs text-primary py-2 hover:underline flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowAll((v) => !v)}>
-                            {showAll ? (
-                                <>
-                                    <ChevronUp size={12} /> Show less
-                                </>
-                            ) : (
-                                <>
-                                    <ChevronDown size={12} /> Show all {eps.length} episodes
-                                </>
-                            )}
-                        </button>
+                    type="button"
+                    className="w-full h-11 flex items-center justify-center gap-1.5 border-t border-white/5 text-xs font-semibold text-primary hover:bg-base-300/50 transition-colors cursor-pointer"
+                    onClick={() => setShowAll((v) => !v)}>
+                    {showAll ? (
+                        <>
+                            <ChevronUp size={13} /> Show less
+                        </>
+                    ) : (
+                        <>
+                            <ChevronDown size={13} /> Show all {eps.length} episodes
+                        </>
                     )}
-                </div>
+                </button>
             )}
         </div>
     );
@@ -665,7 +915,7 @@ async function fetchTmdbItem(fullId) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function MediaDetails() {
-    const { id } = useParams();
+    const id = useMediaRouteId();
     const navigate = useNavigate();
     // Opened from a banner's "Remind me" button (?remind=1) → the reminder dialog opens by itself, once.
     const [searchParams, setSearchParams] = useSearchParams();
@@ -773,6 +1023,8 @@ export default function MediaDetails() {
     const isSeries = Boolean(item?.seasons);
     const isAnime = item?.type === "anime";
     const mediaType = isAnime ? "anime" : isSeries ? "series" : "movie";
+    // Real TMDB namespace for reviews: an anime FILM is "movie", an anime SHOW is "tv" (mediaType alone cannot tell them apart).
+    const reviewKind = isSeries ? "tv" : "movie";
 
     const m = item?.metadata;
 
@@ -786,7 +1038,30 @@ export default function MediaDetails() {
 
     // ── Selected season logic ──────────────────────────────────────────────────
     const seasonEntries = seasons ? Object.entries(seasons).sort(([a], [b]) => Number(a) - Number(b)) : [];
-    const baseActiveSeason = selectedSeasonNum != null && seasons ? seasons[selectedSeasonNum] : null;
+    // Season shown in the tabs + episode list. Defaults to the FIRST season so the
+    // episode section is never empty on open. The hero only switches to season
+    // mode once the user explicitly picks one (selectedSeasonNum).
+    const shownSeasonNum = selectedSeasonNum ?? seasonEntries[0]?.[0] ?? null;
+    const baseActiveSeason = shownSeasonNum != null && seasons ? seasons[shownSeasonNum] : null;
+
+    // ── Watch state per episode (history is keyed by episode file id) ───────────
+    // Live: same TanStack cache as Continue Watching, so ticks / badges / buttons
+    // update with no reload when progress changes on any device.
+    const historyById = useMemo(() => new Map(historyList.map((h) => [h.id, h])), [historyList]);
+    // Most recently watched episode of THIS series → "Last watched" marker.
+    const lastWatched = useMemo(() => {
+        if (!seasons) return null;
+        let best = null;
+        for (const [num, s] of Object.entries(seasons)) {
+            for (const ep of s.episodes || []) {
+                const h = ep.id ? historyById.get(ep.id) : null;
+                if (!h) continue;
+                const t = new Date(h.watchedAt).getTime() || 0;
+                if (!best || t > best.t) best = { t, id: ep.id, season: num };
+            }
+        }
+        return best;
+    }, [seasons, historyById]);
 
     // ── Lazy season refresh (metadata upgrade, feature 10) ──────────────────────
     // baseActiveSeason is whatever grouper.js cached at scan time (untouched —
@@ -800,7 +1075,7 @@ export default function MediaDetails() {
         data: freshSeasonData,
         refetch: refetchSeason,
         isFetching: seasonRefreshing,
-    } = useSeasonDetail(m?.tmdbId, selectedSeasonNum, { enabled: Boolean(m?.tmdbId && selectedSeasonNum != null && seasonNeedsAutoRefresh) });
+    } = useSeasonDetail(m?.tmdbId, shownSeasonNum, { enabled: Boolean(m?.tmdbId && shownSeasonNum != null && seasonNeedsAutoRefresh) });
 
     // Merge: file-backed episodes (id/streamUrl/size) always come from
     // baseActiveSeason and are NEVER overwritten — only TMDB-side fields
@@ -808,7 +1083,7 @@ export default function MediaDetails() {
     // number. If baseActiveSeason had no episodes at all, the fresh TMDB
     // episode list is shown as-is (informational — nothing to play yet, but
     // at least the season isn't a dead end).
-    const activeSeason = useMemo(() => {
+    const shownSeason = useMemo(() => {
         const fresh = freshSeasonData?.season;
         if (!fresh) return baseActiveSeason;
         if (!baseActiveSeason) return fresh;
@@ -829,6 +1104,9 @@ export default function MediaDetails() {
             episodes: mergedEpisodes,
         };
     }, [baseActiveSeason, freshSeasonData]);
+    // Hero-facing season: null until the user picks one, so the hero keeps showing the series.
+    const activeSeason = selectedSeasonNum != null ? shownSeason : null;
+    const activeStats = shownSeason ? seasonStats(shownSeason, historyById) : null;
 
     // Hero values — override with season data when a season is selected
     const title = activeSeason ? activeSeason.name || `Season ${selectedSeasonNum}` : m?.title || item?.title || item?.name || "Unknown";
@@ -864,7 +1142,6 @@ export default function MediaDetails() {
     // ── New: ratings / reviews / videos ───────────────────────────────────────
     const ratings = m?.ratings ?? null;
     const imdbId = m?.imdbId ?? null;
-    const reviews = Array.isArray(m?.reviews) ? m.reviews : [];
     const videos = Array.isArray(m?.videos) ? m.videos : [];
 
     // ── New (metadata upgrade, v18/v19): languages, origin, collection,
@@ -910,17 +1187,17 @@ export default function MediaDetails() {
      * encodeURIComponent so React Router gets a clean single-segment param.
      */
     const handlePlayMovie = () => {
-        navigate(`/player/${encodeURIComponent(decodedId)}`, {
+        navigate(`/player/${routeId(decodedId)}`, {
             state: resumePos != null ? { knownResumePosition: resumePos } : undefined,
         });
     };
 
     /**
      * handlePlayEpisode — navigates to the player with a specific episode file ID.
-     * Called from EpisodeRow inside the SeasonsPanel.
+     * Called from EpisodeItem inside the EpisodesAccordion.
      */
     const handlePlayEpisode = (epId) => {
-        navigate(`/player/${encodeURIComponent(epId)}`);
+        navigate(`/player/${routeId(epId)}`);
     };
 
     /**
@@ -969,9 +1246,9 @@ export default function MediaDetails() {
                 {/* Hero content — mobile: poster + title block side by side, everything else full width.
                     sm+: poster left (spans both rows), info stacked on the right. */}
                 <div className="relative px-4 sm:px-6 md:px-8 lg:px-12 pt-6 sm:pt-10 pb-8" style={{ zIndex: 1 }}>
-                    <div className="grid grid-cols-[8rem_1fr] sm:grid-cols-[11rem_1fr] md:grid-cols-[13rem_1fr] lg:grid-cols-[14rem_1fr] sm:grid-rows-[auto_1fr] gap-x-4 sm:gap-x-8 max-w-6xl">
+                    <div className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] md:grid-cols-[13rem_1fr] lg:grid-cols-[14rem_1fr] sm:grid-rows-[auto_1fr] sm:gap-x-8 max-w-6xl">
                         {/* ── Poster ──────────────────────────────────────── */}
-                        <div className="sm:row-span-2 min-w-0">
+                        <div className="w-44 mx-auto sm:w-auto sm:mx-0 sm:row-span-2 min-w-0">
                             <div className="aspect-2/3 rounded-2xl overflow-hidden shadow-2xl bg-base-300">
                                 {poster ? (
                                     <img src={poster} alt={title} className="w-full h-full object-cover" />
@@ -982,9 +1259,9 @@ export default function MediaDetails() {
                                 )}
                             </div>
 
-                            {/* Rating below poster (sm+ only — on phones it sits under the overview) */}
+                            {/* Rating below poster — all screen sizes, bar width matches poster */}
                             {rating != null && (
-                                <div className="hidden sm:block mt-3 px-0.5">
+                                <div className="mt-3 px-0.5">
                                     <div className="flex items-end justify-between mb-1.5">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-base font-bold text-base-content">{rating.toFixed(1)}</span>
@@ -998,7 +1275,7 @@ export default function MediaDetails() {
                         </div>
 
                         {/* ── Title block ─────────────────────────────────── */}
-                        <div className="min-w-0 self-start">
+                        <div className="min-w-0 self-start mt-5 sm:mt-0">
                             <div className="flex flex-wrap gap-1.5 mb-2.5">
                                 <Badge className={isAnime ? "bg-secondary text-secondary-content" : isSeries ? "bg-accent text-accent-content" : "bg-primary text-primary-content"}>
                                     {isAnime ? "Anime" : isSeries ? "Series" : "Movie"}
@@ -1050,7 +1327,7 @@ export default function MediaDetails() {
                         </div>
 
                         {/* ── Ratings, genres, actions, overview ──────────── */}
-                        <div className="col-span-2 sm:col-span-1 sm:col-start-2 min-w-0 mt-4 sm:mt-3 self-start">
+                        <div className="sm:col-start-2 min-w-0 mt-4 sm:mt-3 self-start">
                             {/* Inline rating badges — IMDb / RT / TMDB */}
                             {ratings && (ratings.tmdb != null || ratings.imdb != null || ratings.rottenTomatoes) && (
                                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3">
@@ -1190,20 +1467,6 @@ export default function MediaDetails() {
                                     )}
                                 </div>
                             )}
-
-                            {/* Rating — phones only (sm+ shows it under the poster) */}
-                            {rating != null && (
-                                <div className="sm:hidden mt-4">
-                                    <div className="flex items-end justify-between mb-1.5">
-                                        <div className="flex items-baseline gap-1">
-                                            <span className="text-lg font-bold text-base-content">{rating.toFixed(1)}</span>
-                                            <span className="text-xs text-base-content/60">/ 10</span>
-                                        </div>
-                                        {m?.votes ? <span className="text-[11px] text-base-content/60">{fmtVotes(m.votes)} votes</span> : null}
-                                    </div>
-                                    <RatingBar rating={rating} />
-                                </div>
-                            )}
                         </div>
                     </div>
                 </div>
@@ -1215,47 +1478,17 @@ export default function MediaDetails() {
                     <CastAndCrew metadata={item.notInLibrary ? m : undefined} />
                 </div>
 
-                {/* ── Seasons (card grid using MediaCard) ──────────────────── */}
+                {/* ── Seasons (scrollable tab row) ─────────────────────────── */}
                 {isSeries && seasonEntries.length > 0 && (
                     <section className="w-full">
-                        <SectionHeading icon={Tv}>
-                            Seasons
-                            <span className="ml-1 text-sm font-normal text-base-content/72">({seasonEntries.length})</span>
-                        </SectionHeading>
-                        <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
-                            {seasonEntries.map(([num, season]) => {
-                                const seriesTitle = m?.title || item?.title || item?.name || "Unknown";
-                                const seasonName = season.name || `Season ${num}`;
-                                // Shape season into a fake item MediaCard can normalise
-                                const fakeItem = {
-                                    id: `season-${num}`,
-                                    type: "series",
-                                    title: `${seriesTitle} (${seasonName})`,
-                                    metadata: {
-                                        title: `${seriesTitle} (${seasonName})`,
-                                        poster: season.poster || m?.poster || null,
-                                        year: m?.year ?? null,
-                                        rating: null,
-                                    },
-                                    seasons: true, // triggers series branch in normalise
-                                };
-                                return (
-                                    <div
-                                        key={num}
-                                        className="shrink-0 relative cursor-pointer"
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            handleSeasonSelect(num);
-                                        }}>
-                                        {/* Capture all child clicks to prevent MediaCard navigation */}
-                                        <div className="pointer-events-none">
-                                            <MediaCard item={fakeItem} />
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        <SeasonTabs
+                            seasonEntries={seasonEntries}
+                            selectedNum={shownSeasonNum}
+                            lastNum={lastWatched?.season ?? null}
+                            historyById={historyById}
+                            seriesTitle={m?.title || item?.title || item?.name || "Unknown"}
+                            onSelect={handleSeasonSelect}
+                        />
                     </section>
                 )}
 
@@ -1284,34 +1517,38 @@ export default function MediaDetails() {
                     </section>
                 )}
 
-                {/* ── Episodes accordion (shown only after a season is selected) */}
-                {isSeries && activeSeason && (
+                {/* ── Episodes (shown only after a season is selected) */}
+                {isSeries && shownSeason && (
                     <section ref={episodesRef} className="w-full scroll-mt-20">
                         <div className="flex items-center justify-between gap-3 mb-3">
-                            <SectionHeading icon={Clapperboard}>
-                                {m?.title || item?.title || item?.name} <span className="font-normal text-primary">[{activeSeason.name || `Season ${selectedSeasonNum}`}]</span>
-                                <span className="ml-1 text-sm font-normal text-base-content/72">· {(activeSeason.episodes || []).length} ep</span>
-                            </SectionHeading>
+                            <div className="[&>h2]:mb-0 min-w-0">
+                                <SectionHeading icon={Clapperboard}>
+                                    Episodes
+                                    <span className="ml-1 text-sm font-normal text-base-content/72">
+                                        {shownSeason.name || `Season ${shownSeasonNum}`} · {activeStats?.watched ?? 0} of {activeStats?.total ?? 0} watched
+                                    </span>
+                                </SectionHeading>
+                            </div>
                             {m?.tmdbId && (
                                 <button
                                     onClick={() => refetchSeason()}
                                     disabled={seasonRefreshing}
                                     title="Re-fetch this season's TMDB data"
-                                    className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-base-content/60 hover:text-primary disabled:opacity-50 transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-white/5">
+                                    className="shrink-0 flex items-center gap-1.5 text-xs font-medium text-base-content/60 hover:text-primary disabled:opacity-50 transition-colors cursor-pointer px-2 py-1 rounded-md hover:bg-white/5">
                                     <RefreshCw size={13} className={seasonRefreshing ? "animate-spin" : ""} />
                                     {seasonRefreshing ? "Refreshing…" : "Refresh"}
                                 </button>
                             )}
                         </div>
-                        <EpisodesAccordion season={activeSeason} seasonNum={selectedSeasonNum} onPlay={handlePlayEpisode} />
+                        <EpisodesAccordion key={shownSeasonNum} season={shownSeason} onPlay={handlePlayEpisode} historyById={historyById} lastWatchedId={lastWatched?.id ?? null} />
                     </section>
                 )}
 
-                {/* ── Reviews ──────────────────────────────────────────────── */}
-                {reviews.length > 0 && (
+                {/* ── Reviews ── own review system (reviews · reactions · discussions), data in reviews.json — see Reviews.jsx ── */}
+                {m?.tmdbId && (
                     <>
                         <Divider />
-                        <Reviews reviews={reviews} tmdbId={m?.tmdbId} mediaType={mediaType} />
+                        <Reviews key={`${reviewKind}:${m.tmdbId}`} tmdbId={m.tmdbId} mediaType={mediaType} kind={reviewKind} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
                     </>
                 )}
 
