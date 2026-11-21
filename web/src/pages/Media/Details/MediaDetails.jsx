@@ -1548,7 +1548,7 @@ export default function MediaDetails() {
                 {m?.tmdbId && (
                     <>
                         <Divider />
-                        <Reviews tmdbId={m.tmdbId} mediaType={mediaType} kind={reviewKind} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
+                        <Reviews key={`${reviewKind}:${m.tmdbId}`} tmdbId={m.tmdbId} mediaType={mediaType} kind={reviewKind} title={m?.title || item?.title || item?.name} poster={m?.poster} backdrop={m?.backdrop} />
                     </>
                 )}
 

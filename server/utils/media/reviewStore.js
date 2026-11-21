@@ -33,6 +33,7 @@ const REACTION_TYPES = ["like", "love", "funny", "wow", "sad", "dislike"];
 
 let data = { version: 1, titles: {}, reviews: {}, replies: {} };
 let loaded = false;
+let frozen = false; // shutdown: after freeze() no mutation can happen, so the final snapshot is complete
 let loadPromise = null;
 
 // in-memory indexes (rebuilt on load, kept in sync by every write below)
@@ -63,6 +64,19 @@ function install(d) {
     byKey = nextByKey;
     repliesByReview = nextReplies;
     loaded = true; // only after validation AND both indexes succeeded
+}
+
+function assertWritable() {
+    if (frozen) {
+        const e = new Error("Review store is closed (server shutting down)");
+        e.code = "SHUTTING_DOWN";
+        throw e;
+    }
+}
+
+/** Refuse every further mutation (shutdown). Reads keep working. */
+function freeze() {
+    frozen = true;
 }
 
 function emptyData() {
@@ -217,6 +231,7 @@ async function getTitle(key) {
 
 async function upsertTitle(key, patch) {
     await loadStore();
+    assertWritable();
     data.titles[key] = { ...(data.titles[key] || {}), ...patch };
     scheduleSave();
     return data.titles[key];
@@ -225,6 +240,43 @@ async function upsertTitle(key, patch) {
 async function allTitles() {
     await loadStore();
     return data.titles;
+}
+
+/**
+ * Move a title's USER content from one namespace key to another (e.g. anime film stored as "tv:ID" → "movie:ID").
+ * Local reviews move with their replies/reactions. Imported TMDB reviews of the old key belong to a DIFFERENT TMDB
+ * record, so they are dropped when nobody interacted with them, and left (unpublished) under the old key otherwise.
+ */
+async function migrateTitleKey(from, to) {
+    await loadStore();
+    assertWritable();
+    if (from === to) return { moved: 0, dropped: 0 };
+    let moved = 0;
+    let dropped = 0;
+    for (const id of [...(byKey.get(from) || [])]) {
+        const r = data.reviews[id];
+        if (!r) continue;
+        if (r.source === "local") {
+            const dup = r.userId && [...(byKey.get(to) || [])].some((x) => data.reviews[x]?.userId === r.userId);
+            if (dup) continue; // user already reviewed the new key — keep the old one untouched
+            r.key = to;
+            byKey.get(from).delete(id);
+            if (!byKey.has(to)) byKey.set(to, new Set());
+            byKey.get(to).add(id);
+            moved++;
+        } else if (!Object.keys(r.reactions || {}).length && !(repliesByReview.get(id)?.size)) {
+            byKey.get(from).delete(id);
+            delete data.reviews[id];
+            dropped++;
+        }
+    }
+    const old = data.titles[from];
+    if (old) {
+        if (!data.titles[to]) data.titles[to] = { ...old, syncedAt: null, logo: null, logoChecked: false };
+        data.titles[from] = { ...old, inLibrary: false, fileId: null };
+    }
+    scheduleSave();
+    return { moved, dropped };
 }
 
 // ─── reviews ──────────────────────────────────────────────────────────────────
@@ -255,6 +307,7 @@ async function findUserReview(key, userId) {
 
 async function addReview({ key, userId, author, rating, content }) {
     await loadStore();
+    assertWritable();
     // Uniqueness is enforced HERE, after the load and with no await before the insert, so two concurrent
     // requests from one user cannot both pass (the controller's earlier check is only a fast path).
     if (userId) {
@@ -279,6 +332,7 @@ async function addReview({ key, userId, author, rating, content }) {
 
 async function updateReview(id, patch) {
     await loadStore();
+    assertWritable();
     const r = data.reviews[id];
     if (!r) return null;
     if (patch.rating !== undefined) r.rating = patch.rating;
@@ -292,6 +346,7 @@ async function updateReview(id, patch) {
 /** Deletes the review and every reply under it. */
 async function removeReview(id) {
     await loadStore();
+    assertWritable();
     const r = data.reviews[id];
     if (!r) return false;
     for (const rid of repliesByReview.get(id) || []) delete data.replies[rid];
@@ -309,6 +364,7 @@ async function removeReview(id) {
  */
 async function importReviews(key, items) {
     await loadStore();
+    assertWritable();
     let added = 0;
     let updated = 0;
     for (const it of items) {
@@ -366,6 +422,7 @@ async function replyCount(reviewId) {
 
 async function addReply({ reviewId, parentId, replyToId, userId, author, content }) {
     await loadStore();
+    assertWritable();
     const t = nowIso();
     const reply = { id: newId("rp"), reviewId, parentId: parentId || null, replyToId: replyToId || null, userId, author, content, createdAt: t, updatedAt: t, edited: false, reactions: {} };
     data.replies[reply.id] = reply;
@@ -377,6 +434,7 @@ async function addReply({ reviewId, parentId, replyToId, userId, author, content
 
 async function updateReply(id, content) {
     await loadStore();
+    assertWritable();
     const rp = data.replies[id];
     if (!rp) return null;
     rp.content = content;
@@ -389,6 +447,7 @@ async function updateReply(id, content) {
 /** Deleting a top-level comment deletes the replies under it as well. */
 async function removeReply(id) {
     await loadStore();
+    assertWritable();
     const rp = data.replies[id];
     if (!rp) return false;
     const set = repliesByReview.get(rp.reviewId);
@@ -407,6 +466,7 @@ async function removeReply(id) {
 /** type = one of REACTION_TYPES, or null to remove the user's reaction. Returns the updated item. */
 async function setReaction(kind, id, userId, type) {
     await loadStore();
+    assertWritable();
     const item = kind === "review" ? data.reviews[id] : data.replies[id];
     if (!item) return null;
     if (!item.reactions) item.reactions = {};
@@ -418,6 +478,8 @@ async function setReaction(kind, id, userId, type) {
 
 module.exports = {
     REACTION_TYPES,
+    freeze,
+    migrateTitleKey,
     loadStore,
     flush,
     summarizeReactions,

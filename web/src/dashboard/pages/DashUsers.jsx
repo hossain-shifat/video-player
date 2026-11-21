@@ -264,7 +264,8 @@ function exportCsv(list) {
     // Neutralise spreadsheet formulas (=, +, -, @, tab, CR) so an account name like "=1+1" cannot execute when opened in Excel.
     const esc = (v) => {
         let t = String(v ?? "");
-        if (/^[=+\-@\t\r\uFF1D\uFF0B\uFF0D\uFF20]/.test(t)) t = `'${t}`; // ASCII + full-width = + - @
+        // also when whitespace / control / zero-width characters precede the trigger (spreadsheets skip them)
+        if (/^[\s\u0000-\u001f\u200B-\u200D\uFEFF]*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/.test(t) || /^[\t\r]/.test(t)) t = `'${t}`; // ASCII + full-width = + - @
         return `"${t.replace(/"/g, '""')}"`;
     };
     const day = (iso) => (iso ? new Date(iso).toISOString().slice(0, 10) : "");

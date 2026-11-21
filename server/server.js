@@ -41,7 +41,7 @@ const trailersRouter = require("./routes/trailers/trailers");
 const notificationsRouter = require("./routes/user/notifications");
 const reviewsRouter = require("./routes/media/reviews");
 const { startTrailerScheduler, stopTrailerScheduler } = require("./utils/trailers/trailerScheduler");
-const { startReviewScheduler, stopReviewScheduler, flushReviews } = require("./controllers/media/reviewController");
+const { startReviewScheduler, stopReviewScheduler, flushReviews, freezeReviews } = require("./controllers/media/reviewController");
 const { startStorageMonitor, stopStorageMonitor } = require("./utils/system/storageMonitor");
 const notificationService = require("./services/notificationService");
 const { startAccountPurgeScheduler, stopAccountPurgeScheduler } = require("./utils/user/userStore");
@@ -293,7 +293,7 @@ let _shuttingDown = false;
 async function shutdown(signal) {
     if (_shuttingDown) return;
     _shuttingDown = true;
-    setTimeout(() => process.exit(0), 8000).unref(); // never hang on a stuck cleanup
+    setTimeout(() => process.exit(0), 10000).unref(); // never hang on a stuck cleanup
     console.log(`\n[Server] Received ${signal} — shutting down gracefully...`);
     stopDaemon();
     stopTrailerScheduler();
@@ -318,9 +318,10 @@ async function shutdown(signal) {
     });
     // 3) deadline passed → whatever is still running can no longer acknowledge its write
     reviewState.sealed = true;
+    freezeReviews(); // no review writer can mutate the store from here on → the snapshot below is final
     // 4) final snapshot (retries failed saves until its own deadline)
     try {
-        const ok = await flushReviews();
+        const ok = await flushReviews(4000);
         if (!ok) console.error("[Server] WARNING: some review changes could not be saved before exit");
     } catch (err) {
         console.error("[Server] Review flush failed:", err?.message || err);
@@ -330,11 +331,6 @@ async function shutdown(signal) {
     notificationService.stopMaintenance();
     subtitleWorker.stop();
     await transcoderService.killAllSessions();
-    try {
-        await flushReviews(); // last chance: anything a still-running writer committed while sessions were closing
-    } catch (err) {
-        console.error("[Server] Final review flush failed:", err?.message || err);
-    }
     console.log("[Server] All transcoding sessions terminated. Bye.");
     process.exit(0);
 }

@@ -1026,6 +1026,7 @@ async function auditOne() {
     const item = store.nextUnvalidated(_auditSkip);
     if (!item) return false;
     const key = `${item.mediaId}:${item.lang}`;
+    const epoch0 = subEpoch(item.mediaId, item.lang); // an admin delete / re-download during the audit makes this result stale
     _refCache = null;
     try {
         assertIdle();
@@ -1045,8 +1046,10 @@ async function auditOne() {
 
         if (ev.tier !== "reject") {
             // good — or the nearest usable thing (kept as "fallback" and re-checked later for a better one)
-            if (ev.shift || parsed.removedPromo) await commitText(path.dirname(item.path), ext, ev.shift ? shiftTimestamps(parsed.text, ev.shift) : parsed.text);
-            await store.markValidated(item.mediaId, item.lang, {
+            const applied = await withSlot(item.mediaId, item.lang, async () => {
+                if (subEpoch(item.mediaId, item.lang) !== epoch0) return false; // admin changed this slot meanwhile
+                if (ev.shift || parsed.removedPromo) await commitText(path.dirname(item.path), ext, ev.shift ? shiftTimestamps(parsed.text, ev.shift) : parsed.text);
+                await store.markValidated(item.mediaId, item.lang, {
                 score: +ev.score.toFixed(3),
                 validation: ev.mode,
                 quality: ev.tier,
@@ -1055,18 +1058,26 @@ async function auditOne() {
                 shiftApplied: ev.shift ? +ev.shift.toFixed(3) : 0,
                 removedPromo: parsed.removedPromo || 0,
                 ...(ev.tier === "fallback" ? { nextUpgradeAt: new Date(Date.now() + UPGRADE_RECHECK_DAYS * 86_400_000).toISOString() } : {}),
+                });
+                return true;
             });
+            if (!applied) return true; // stale result — nothing written
             _analysisCache.delete(item.path);
             console.log(`[SubtitleWorker] audit ${ev.tier === "good" ? "✓" : "≈ fallback"} ${item.lang.toUpperCase()} ${path.basename(path.dirname(path.dirname(item.path)))} score=${ev.score.toFixed(2)}`);
             return true;
         }
 
         // Fails → move aside (never delete), forget it, and queue a validated re-download
-        const rejDir = path.join(path.dirname(item.path), "_rejected");
-        await fsp.mkdir(rejDir, { recursive: true });
-        await fsp.rename(item.path, path.join(rejDir, `${Date.now()}-${path.basename(item.path)}`));
-        await store.removeDownloaded(item.mediaId, item.lang);
-        store.requeueForRedownload(item.mediaId);
+        const moved = await withSlot(item.mediaId, item.lang, async () => {
+            if (subEpoch(item.mediaId, item.lang) !== epoch0) return false;
+            const rejDir = path.join(path.dirname(item.path), "_rejected");
+            await fsp.mkdir(rejDir, { recursive: true });
+            await fsp.rename(item.path, path.join(rejDir, `${Date.now()}-${path.basename(item.path)}`));
+            await store.removeDownloaded(item.mediaId, item.lang);
+            store.requeueForRedownload(item.mediaId);
+            return true;
+        });
+        if (!moved) return true;
         _stats.auditRejected++;
         console.log(`[SubtitleWorker] audit ✗ ${item.lang.toUpperCase()} ${path.basename(path.dirname(path.dirname(item.path)))} → moved to _rejected (${ev.reasons.join(",")}), re-queued`);
         return true;

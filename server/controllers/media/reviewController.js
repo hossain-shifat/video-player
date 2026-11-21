@@ -25,6 +25,7 @@
 // ============================================================================
 
 const fs = require("fs");
+const path = require("path");
 const { readFolders } = require("./libraryController");
 const { decodeFileId } = require("../../utils/media/fileHelpers");
 const { getAllCached } = require("../../utils/media/mediaCache");
@@ -307,23 +308,32 @@ async function libraryTitles() {
     return out;
 }
 
-async function libraryRootsReadable() {
+// → array of library root paths when EVERY root is readable right now, else null (unknown / offline → never delist)
+async function readableLibraryRoots() {
     try {
         const folders = await readFolders();
-        if (!folders.length) return false;
+        if (!folders.length) return null;
         for (const f of folders) await fs.promises.access(f.path, fs.constants.R_OK);
-        return true;
+        return folders.map((f) => f.path);
     } catch {
-        return false;
+        return null;
     }
 }
 
+const normPath = (p) => {
+    const x = path.resolve(String(p)).replace(/\\/g, "/").replace(/\/+$/, "");
+    return process.platform === "win32" || process.platform === "darwin" ? x.toLowerCase() : x;
+};
+const underRoots = (file, roots) => roots.some((r) => normPath(file).startsWith(normPath(r) + "/"));
+
 // true only when the file is verifiably absent — any other error (EACCES, EIO, …) means "do not know" → keep it listed
-async function fileIsGone(fileId) {
+// A file that still exists but sits outside every current library root is no longer "in the library" either.
+async function fileIsGone(fileId, roots) {
     if (!fileId) return true;
     try {
-        await fs.promises.access(decodeFileId(fileId));
-        return false;
+        const file = decodeFileId(fileId);
+        await fs.promises.access(file);
+        return !underRoots(file, roots);
     } catch (err) {
         return err?.code === "ENOENT" || err?.code === "ENOTDIR";
     }
@@ -335,6 +345,18 @@ async function runSweep(label) {
     try {
         const titles = await libraryTitles();
         const known = await store.allTitles();
+        // Anime FILMS used to be stored under the tv namespace. Move their user content to movie:<id>, which is the
+        // namespace MediaDetails reads. Only an old record that was an anime title and has no real TV title behind it.
+        for (const t of titles.values()) {
+            if (t.kind !== "movie" || t.info.type !== "anime") continue;
+            const oldKey = `tv:${t.tmdbId}`;
+            const old = known[oldKey];
+            if (old && old.type === "anime" && old.inLibrary && !titles.has(oldKey)) {
+                const r = await store.migrateTitleKey(oldKey, t.key);
+                console.log(`[Reviews] anime film ${oldKey} → ${t.key} (moved ${r.moved}, dropped ${r.dropped})`);
+                invalidateFeeds();
+            }
+        }
         const now = Date.now();
         const due = [];
         for (const t of titles.values()) {
@@ -351,9 +373,10 @@ async function runSweep(label) {
         // still exists (e.g. its metadata lookup merely failed) or a drive that is offline never causes a delisting.
         let delisted = 0;
         const absent = Object.entries(known).filter(([key, k]) => k?.inLibrary && !titles.has(key));
-        if (absent.length && (await libraryRootsReadable())) {
+        const roots = absent.length ? await readableLibraryRoots() : null;
+        if (absent.length && roots) {
             for (const [key, k] of absent) {
-                if (await fileIsGone(k.fileId)) {
+                if (await fileIsGone(k.fileId, roots)) {
                     await store.upsertTitle(key, { inLibrary: false, fileId: null });
                     delisted++;
                 }
@@ -403,7 +426,8 @@ function stopReviewScheduler() {
     timer = null;
 }
 
-const flushReviews = () => store.flush();
+const flushReviews = (deadlineMs) => store.flush(deadlineMs);
+const freezeReviews = () => store.freeze();
 
 // ─── Home feeds (memoised for 60 s, dropped on every write) ───────────────────
 
@@ -821,4 +845,5 @@ module.exports = {
     startReviewScheduler,
     stopReviewScheduler,
     flushReviews,
+    freezeReviews,
 };
